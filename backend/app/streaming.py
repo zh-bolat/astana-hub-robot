@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 
+_CATEGORY = re.compile(r'"category"\s*:\s*"(kb|small_talk|general|out_of_scope)"')
 _FOUND = re.compile(r'"found"\s*:\s*(true|false)')
 _LANG = re.compile(r'"lang"\s*:\s*"(ru|kk|en)"')
 _ANSWER = re.compile(r'"answer"\s*:\s*"')
@@ -24,6 +25,7 @@ class AnswerStreamParser:
     def __init__(self) -> None:
         self.buffer = ""
         self.found: bool | None = None
+        self.category: str | None = None
         self.lang: str | None = None
         self.answer = ""  # раскодированная часть answer
         self.answer_closed = False
@@ -34,6 +36,8 @@ class AnswerStreamParser:
     def feed(self, chunk: str) -> list[str]:
         """Добавляет кусок; возвращает новые законченные предложения ответа."""
         self.buffer += chunk
+        if self.category is None and (m := _CATEGORY.search(self.buffer)):
+            self.category = m.group(1)
         if self.found is None and (m := _FOUND.search(self.buffer)):
             self.found = m.group(1) == "true"
         if self.lang is None and (m := _LANG.search(self.buffer)):

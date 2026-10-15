@@ -18,6 +18,8 @@ class LLMAnswer(BaseModel):
     """Структурированный ответ модели (JSON-режим)."""
 
     found: bool
+    # kb | small_talk | out_of_scope (None — модель/провайдер категорию не вернули)
+    category: str | None = None
     answer: str = ""
     lang: str | None = None
     sources: list[str] = Field(default_factory=list)

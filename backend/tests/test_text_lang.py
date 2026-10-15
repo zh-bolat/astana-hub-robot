@@ -29,10 +29,42 @@ def test_detect_lang(text, lang):
 
 
 def test_resolve_lang_priority():
-    assert resolve_lang("en", "ru", "Где кафе?") == "en"
+    # кириллица — никогда en, даже если робот или LLM сказали en
+    assert resolve_lang("en", "ru", "Где кафе?") == "ru"
+    assert resolve_lang(None, "en", "Ты слышишь?") == "ru"
+    assert resolve_lang("en", "en", "Меня слышно?") == "ru"
+    # кириллица без казахских букв: kk, если так сказали робот/LLM
     assert resolve_lang(None, "kk", "Кофе бар?") == "kk"
+    assert resolve_lang("kk", None, "Кафе где?") == "kk"
+    # казахские буквы/частицы — kk независимо от подсказок
+    assert resolve_lang("ru", "ru", "Қайда?") == "kk"
+    assert resolve_lang(None, "en", "Сен мені естисің бе?") == "kk"
+    # латиница — en; kk только явно
+    assert resolve_lang(None, "ru", "Can you hear me?") == "en"
+    assert resolve_lang("kk", None, "Salem, qalaisyz?") == "kk"
+    # нет букв / только бренды — робот, затем LLM, затем ru
     assert resolve_lang(None, "xx", "Where?") == "en"
-    assert resolve_lang(None, None, "Қайда?") == "kk"
+    assert resolve_lang(None, "kk", "Astana Hub?") == "kk"
+    assert resolve_lang(None, None, "?!") == "ru"
+
+
+@pytest.mark.parametrize(
+    ("text", "lang"),
+    [
+        ("Ты слышишь?", "ru"),
+        ("Меня слышно?", "ru"),
+        ("Привет", "ru"),
+        ("Как дела?", "ru"),
+        ("Сәлем", "kk"),
+        ("Қалайсың?", "kk"),
+        ("Hello", "en"),
+        ("Can you hear me?", "en"),
+        ("Привет, Astana Hub!", "ru"),
+    ],
+)
+def test_short_phrases_lang(text, lang):
+    assert detect_lang(text) == lang
+    assert resolve_lang(None, "en" if lang != "en" else "ru", text) == lang
 
 
 def test_split_sentences():

@@ -67,16 +67,26 @@ class FakeProvider:
         kb = req.kb or KnowledgeBase()
         fact = best_fact(kb, req.question)
         if fact is None:
-            return LLMAnswer(found=False, answer="", lang=lang, sources=[])
+            return LLMAnswer(found=False, category="out_of_scope", answer="", lang=lang, sources=[])
         return LLMAnswer(
-            found=True, answer=fact.answer.get(lang), lang=lang, sources=[fact.source_id]
+            found=True,
+            category="kb",
+            answer=fact.answer.get(lang),
+            lang=lang,
+            sources=[fact.source_id],
         )
 
     async def answer_stream(self, req: LLMRequest) -> AsyncIterator[str]:
         """Тот же ответ, но JSON-ом по кускам — как стрим реальной модели."""
         res = await self.answer(req)
         payload = json.dumps(
-            {"found": res.found, "lang": res.lang, "answer": res.answer, "sources": res.sources},
+            {
+                "category": res.category,
+                "found": res.found,
+                "lang": res.lang,
+                "answer": res.answer,
+                "sources": res.sources,
+            },
             ensure_ascii=False,
         )
         for i in range(0, len(payload), self.chunk_size):

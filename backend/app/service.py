@@ -1,4 +1,11 @@
-"""Логика /ask и /look: база → промпт → LLM → постобработка → лог."""
+"""Логика /ask и /look: база → промпт → LLM → постобработка → лог.
+
+Категории ответа (поле category у модели и в логе вопросов):
+- kb          — ответ по базе знаний (found=true, sources заполнены);
+- small_talk  — приветствие, «ты меня слышишь?», «что умеешь?» и т.п. (found=true, sources=[]);
+- general     — только ANSWER_MODE=open: в базе ответа нет, модель ответила из общих знаний (found=false);
+- out_of_scope — ответа нет: стандартный отказ «обратитесь на ресепшен» (found=false).
+"""
 
 from __future__ import annotations
 
@@ -12,7 +19,7 @@ from app.config import Settings
 from app.db import QuestionLogRepo
 from app.errors import ApiError, error_body, llm_timeout, llm_unavailable
 from app.knowledge.source import KnowledgeStore
-from app.lang import Lang, detect_lang, resolve_lang
+from app.lang import Lang, resolve_lang
 from app.llm.base import LLMAnswer, LLMError, LLMProvider, LLMRequest
 from app.logging_setup import logger
 from app.prompts import (
@@ -24,6 +31,7 @@ from app.prompts import (
     look_user_prompt,
 )
 from app.schemas import AnswerResponse, AskRequest, LookMeta
+from app.smalltalk import quick_reply
 from app.streaming import AnswerStreamParser
 from app.text import clean_for_tts, split_phrases
 
@@ -32,6 +40,21 @@ DEFAULT_LOOK_QUESTION: dict[str, str] = {
     "kk": "Бұл не? Мен қайдамын?",
     "en": "What is this? Where am I?",
 }
+
+ANSWERED = ("kb", "small_talk")
+
+
+def decide_category(category: str | None, found: bool | None, mode: str) -> str | None:
+    """Категория с учётом режима. None — ещё неизвестно (стрим), "out_of_scope" — отказ."""
+    if category is None:
+        if found is None:
+            return None
+        return "kb" if found else "out_of_scope"
+    if category in ANSWERED:
+        return category
+    if category == "general":
+        return "general" if mode == "open" else "out_of_scope"
+    return "out_of_scope"
 
 
 class AnswerService:
@@ -48,6 +71,10 @@ class AnswerService:
         self.text_llm = text_llm
         self.vision_llm = vision_llm
         self.log_repo = log_repo
+
+    @property
+    def mode(self) -> str:
+        return self.settings.answer_mode
 
     async def _call(self, coro, timeout_s: float) -> LLMAnswer:
         try:
@@ -67,22 +94,27 @@ class AnswerService:
         refusals: dict[str, str],
         valid_sources: set[str],
         request_id: str,
-    ) -> AnswerResponse:
+        mode: str,
+    ) -> tuple[AnswerResponse, str]:
         lang: Lang = resolve_lang(requested_lang, res.lang, question)
         answer = clean_for_tts(res.answer)
-        found = bool(res.found and answer)
-        if found:
+        category = decide_category(res.category, res.found, mode) or "out_of_scope"
+        if not answer:
+            category = "out_of_scope"
+        sources: list[str] = []
+        if category == "kb":
             sources = list(dict.fromkeys(s for s in res.sources if s in valid_sources))
-        else:
-            answer, sources = refusals[lang], []
-        return AnswerResponse(
+        elif category == "out_of_scope":
+            answer = refusals[lang]
+        resp = AnswerResponse(
             request_id=request_id,
             answer=answer,
             phrases=split_phrases(answer),
             lang=lang,
-            found=found,
+            found=category in ANSWERED,
             sources=sources,
         )
+        return resp, category
 
     async def _log(
         self,
@@ -93,12 +125,11 @@ class AnswerService:
         question: str,
         place_id: str | None,
         resp: AnswerResponse,
-        provider: LLMProvider,
+        category: str,
+        provider_id: str,
         started: float,
-        model: str | None = None,
     ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        provider_id = f"{provider.name}:{model or provider.model}"
         logger.info(
             f"{endpoint}_answered",
             extra={
@@ -107,6 +138,7 @@ class AnswerService:
                 "lang": resp.lang,
                 "place_id": place_id,
                 "found": resp.found,
+                "category": category,
                 "sources": resp.sources,
                 "provider": provider_id,
                 "latency_ms": latency_ms,
@@ -122,6 +154,7 @@ class AnswerService:
                 lang=resp.lang,
                 place_id=place_id,
                 found=resp.found,
+                category=category,
                 answer=resp.answer,
                 sources=resp.sources,
                 provider=provider_id,
@@ -130,12 +163,29 @@ class AnswerService:
         except Exception as exc:  # лог не должен ломать ответ роботу
             logger.error("question_log_failed", extra={"error": str(exc)})
 
-    async def ask(self, req: AskRequest, request_id: str) -> AnswerResponse:
-        started = time.perf_counter()
+    @staticmethod
+    def _provider_id(provider: LLMProvider, model: str | None) -> str:
+        return f"{provider.name}:{model or provider.model}"
+
+    def _quick(self, req: AskRequest, request_id: str) -> AnswerResponse | None:
+        lang = resolve_lang(req.lang, None, req.question)
+        text = quick_reply(req.question, lang)
+        if text is None:
+            return None
+        return AnswerResponse(
+            request_id=request_id,
+            answer=text,
+            phrases=split_phrases(text),
+            lang=lang,
+            found=True,
+            sources=[],
+        )
+
+    def _ask_request(self, req: AskRequest) -> LLMRequest:
         kb = self.store.get()
         place = kb.place(req.place_id)
-        llm_req = LLMRequest(
-            system=ask_system_prompt(kb),
+        return LLMRequest(
+            system=ask_system_prompt(kb, self.mode),
             user=ask_user_prompt(req.question, req.lang, place, req.place_id),
             question=req.question,
             lang=req.lang,
@@ -143,24 +193,57 @@ class AnswerService:
             kb=kb,
             deadline_s=self.settings.ask_timeout_s,
         )
+
+    async def ask(self, req: AskRequest, request_id: str) -> AnswerResponse:
+        started = time.perf_counter()
+        quick = self._quick(req, request_id)
+        if quick is not None:
+            await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
+            return quick
+        llm_req = self._ask_request(req)
         res = await self._call(self.text_llm.answer(llm_req), self.settings.ask_timeout_s)
-        resp = self._finalize(res, req.lang, req.question, REFUSALS, kb.source_ids(), request_id)
+        assert llm_req.kb is not None
+        resp, category = self._finalize(
+            res,
+            req.lang,
+            req.question,
+            REFUSALS,
+            llm_req.kb.source_ids(),
+            request_id,
+            self.mode,
+        )
+        await self._log_ask(
+            req, resp, category, self._provider_id(self.text_llm, res.model), started
+        )
+        return resp
+
+    async def _log_ask(
+        self, req: AskRequest, resp: AnswerResponse, category: str, provider_id: str, started
+    ) -> None:
         await self._log(
             endpoint="ask",
-            request_id=request_id,
+            request_id=resp.request_id,
             session_id=req.session_id,
             question=req.question,
             place_id=req.place_id,
             resp=resp,
-            provider=self.text_llm,
+            category=category,
+            provider_id=provider_id,
             started=started,
-            model=res.model,
         )
-        return resp
 
     async def ask_stream(self, req: AskRequest, request_id: str) -> AsyncIterator[tuple[str, dict]]:
         """SSE-версия /ask: события ("phrase", {text}) по мере готовности предложений,
         затем ("done", {...}) или ("error", {...}). Формат — docs/api-contract.md."""
+        started = time.perf_counter()
+        quick = self._quick(req, request_id)
+        if quick is not None:
+            for phrase in quick.phrases:
+                yield "phrase", {"text": phrase}
+            yield "done", _done(quick)
+            await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
+            return
+
         if not hasattr(self.text_llm, "answer_stream"):
             try:
                 resp = await self.ask(req, request_id)
@@ -172,26 +255,18 @@ class AnswerService:
             yield "done", _done(resp)
             return
 
-        started = time.perf_counter()
-        kb = self.store.get()
-        place = kb.place(req.place_id)
-        llm_req = LLMRequest(
-            system=ask_system_prompt(kb),
-            user=ask_user_prompt(req.question, req.lang, place, req.place_id),
-            question=req.question,
-            lang=req.lang,
-            place_id=req.place_id,
-            kb=kb,
-            deadline_s=self.settings.ask_timeout_s,
-        )
+        llm_req = self._ask_request(req)
+        kb = llm_req.kb
+        assert kb is not None
         loop = asyncio.get_running_loop()
         end = loop.time() + self.settings.ask_stream_total_s
         parser = AnswerStreamParser()
         emitted: list[str] = []
-        held: list[str] = []  # предложения, пришедшие раньше поля found
+        held: list[str] = []  # предложения, пришедшие раньше категории/found
         stream = self.text_llm.answer_stream(llm_req).__aiter__()  # type: ignore[attr-defined]
         first = True
         error: ApiError | None = None
+        category: str | None = None
 
         def to_phrases(sentences: list[str]) -> list[str]:
             return [p for s in sentences for p in split_phrases(clean_for_tts(s))]
@@ -205,16 +280,17 @@ class AnswerService:
                     break
                 first = False
                 sentences = parser.feed(chunk)
-                if parser.found is False:
+                category = decide_category(parser.category, parser.found, self.mode)
+                if category == "out_of_scope":
                     break  # отказ — дальше модель не слушаем
-                if parser.found is None:
+                if category is None:
                     held.extend(sentences)
                     continue
                 for phrase in to_phrases([*held, *sentences]):
                     emitted.append(phrase)
                     yield "phrase", {"text": phrase}
                 held.clear()
-            if parser.found:
+            if category not in (None, "out_of_scope"):
                 for phrase in to_phrases([*held, *parser.finish()]):
                     emitted.append(phrase)
                     yield "phrase", {"text": phrase}
@@ -231,36 +307,35 @@ class AnswerService:
             return
 
         lang: Lang = resolve_lang(req.lang, parser.lang, req.question)
-        found = bool(parser.found and emitted)
-        if found:
+        if not emitted or category is None:
+            category = "out_of_scope"
+        sources: list[str] = []
+        if category == "kb":
             raw_sources = parser.full_json().get("sources") or []
             valid = kb.source_ids()
             sources = list(dict.fromkeys(s for s in raw_sources if s in valid))
-            answer = " ".join(emitted)
-        else:
-            answer, sources = REFUSALS[lang], []
+        if category == "out_of_scope":
+            answer = REFUSALS[lang]
             for phrase in split_phrases(answer):
                 emitted.append(phrase)
                 yield "phrase", {"text": phrase}
+        else:
+            answer = " ".join(emitted)
         resp = AnswerResponse(
             request_id=request_id,
             answer=answer,
             phrases=emitted,
             lang=lang,
-            found=found,
+            found=category in ANSWERED,
             sources=sources,
         )
         yield "done", _done(resp)
-        await self._log(
-            endpoint="ask",
-            request_id=request_id,
-            session_id=req.session_id,
-            question=req.question,
-            place_id=req.place_id,
-            resp=resp,
-            provider=self.text_llm,
-            started=started,
-            model=llm_req.info.get("model"),
+        await self._log_ask(
+            req,
+            resp,
+            category,
+            self._provider_id(self.text_llm, llm_req.info.get("model")),
+            started,
         )
 
     async def look(self, meta: LookMeta, image: bytes, request_id: str) -> AnswerResponse:
@@ -284,8 +359,12 @@ class AnswerService:
             )
         finally:
             llm_req.image = None  # кадр живёт только в памяти и только на время запроса
-        lang_hint = meta.lang or (detect_lang(meta.question) if meta.question else None)
-        resp = self._finalize(res, lang_hint, question, LOOK_REFUSALS, kb.source_ids(), request_id)
+        # /look: любое описание кадра — ответ; отказ — только если модель не смогла описать
+        if res.category in ("general", "small_talk"):
+            res.category = "kb"
+        resp, category = self._finalize(
+            res, meta.lang, question, LOOK_REFUSALS, kb.source_ids(), request_id, "strict"
+        )
         await self._log(
             endpoint="look",
             request_id=request_id,
@@ -293,9 +372,9 @@ class AnswerService:
             question=question,
             place_id=meta.place_id,
             resp=resp,
-            provider=self.vision_llm,
+            category=category,
+            provider_id=self._provider_id(self.vision_llm, res.model),
             started=started,
-            model=res.model,
         )
         return resp
 

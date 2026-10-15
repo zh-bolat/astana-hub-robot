@@ -24,13 +24,14 @@ from app.llm.fallback import RetryableError, run_with_fallback
 ANSWER_SCHEMA = {
     "type": "OBJECT",
     "properties": {
+        "category": {"type": "STRING", "enum": ["kb", "small_talk", "general", "out_of_scope"]},
         "found": {"type": "BOOLEAN"},
         "answer": {"type": "STRING"},
         "lang": {"type": "STRING", "enum": ["ru", "kk", "en"]},
         "sources": {"type": "ARRAY", "items": {"type": "STRING"}},
     },
-    "required": ["found", "answer", "lang", "sources"],
-    "propertyOrdering": ["found", "lang", "answer", "sources"],
+    "required": ["category", "found", "answer", "lang", "sources"],
+    "propertyOrdering": ["category", "found", "lang", "answer", "sources"],
 }
 
 _RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
 
+    # open — база, а если в ней нет ответа — модель отвечает из общих знаний (category=general);
+    # strict — только база + small talk, иначе отказ «обратитесь на ресепшен»
+    answer_mode: Literal["open", "strict"] = "open"
+
     # Таймауты вызова LLM на стороне сервера (робот ждёт 8 / 12 с)
     ask_timeout_s: float = 6.5
     look_timeout_s: float = 11.0

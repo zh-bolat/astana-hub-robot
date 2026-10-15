@@ -11,7 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine, select
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -34,6 +44,8 @@ class QuestionLog(Base):
     lang: Mapped[str] = mapped_column(String(8))
     place_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     found: Mapped[bool] = mapped_column(Boolean, index=True)
+    # kb | small_talk | general | out_of_scope
+    category: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     answer: Mapped[str] = mapped_column(Text)
     sources: Mapped[str] = mapped_column(Text, default="[]")  # JSON-массив
     provider: Mapped[str] = mapped_column(String(64))
@@ -50,6 +62,7 @@ CSV_FIELDS = [
     "lang",
     "place_id",
     "found",
+    "category",
     "answer",
     "sources",
     "provider",
@@ -66,7 +79,16 @@ def make_engine(url: str) -> Engine:
     else:
         engine = create_engine(url, pool_pre_ping=True)
     Base.metadata.create_all(engine)
+    _migrate(engine)
     return engine
+
+
+def _migrate(engine: Engine) -> None:
+    """Мини-миграции для уже созданных таблиц (без Alembic на MVP)."""
+    columns = {c["name"] for c in inspect(engine).get_columns("question_log")}
+    if "category" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE question_log ADD COLUMN category VARCHAR(16)"))
 
 
 class QuestionLogRepo:
