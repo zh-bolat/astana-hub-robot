@@ -1,0 +1,30 @@
+# HTTPS-сертификат Let's Encrypt выпускается автоматически для $DOMAIN.
+# Условия: A-запись домена указывает на VPS, порты 80/443 открыты.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# /v1/look принимает кадр камеры (base64 JPEG) — запас по размеру тела.
+	request_body {
+		max_size 10MB
+	}
+
+	reverse_proxy api:8000 {
+		health_uri /v1/health
+		health_interval 30s
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

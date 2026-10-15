@@ -1,0 +1,39 @@
+# Набор eval-вопросов (шаг 3.8). ЗАГОТОВКА: вопросы подобраны под базу-пример.
+# Финальные 50 вопросов даёт Astana Hub; формат тот же.
+#
+#   id            — уникальный id
+#   lang          — язык вопроса (ru/kk/en); робот передаёт его как lang, если задан pass_lang: true
+#   question      — текст вопроса
+#   expect_found  — должен ли быть ответ из базы (false = ожидаем отказ «обратитесь на ресепшен»)
+#   expect_source — (опц.) id факта/места, который должен быть в sources
+#   expect_contains — (опц.) подстроки, которые должны быть в ответе (без учёта регистра)
+questions:
+  # --- ru: в базе ---
+  - {id: ru-wifi, lang: ru, question: "Какой пароль от вайфая?", expect_found: true, expect_source: "fact:wifi"}
+  - {id: ru-hours, lang: ru, question: "До скольки работает хаб?", expect_found: true, expect_source: "fact:hours"}
+  - {id: ru-cafe, lang: ru, question: "Где тут можно выпить кофе?", expect_found: true, expect_source: "fact:cafe"}
+  - {id: ru-coworking, lang: ru, question: "Есть ли коворкинг?", expect_found: true, expect_source: "fact:coworking"}
+  - {id: ru-residency, lang: ru, question: "Как стать резидентом хаба?", expect_found: true, expect_source: "fact:residency"}
+  - {id: ru-parking, lang: ru, question: "Где оставить машину?", expect_found: true, expect_source: "fact:parking"}
+  - {id: ru-toilet, lang: ru, question: "Подскажите, где туалет", expect_found: true, expect_source: "fact:toilet"}
+  # --- ru: вне базы ---
+  - {id: ru-oob-weather, lang: ru, question: "Какая завтра погода в Астане?", expect_found: false}
+  - {id: ru-oob-football, lang: ru, question: "Кто выиграл чемпионат мира по футболу?", expect_found: false}
+  - {id: ru-oob-ceo, lang: ru, question: "Как зовут жену директора хаба?", expect_found: false}
+  # --- kk: в базе ---
+  - {id: kk-wifi, lang: kk, question: "Wi-Fi құпиясөзі қандай?", expect_found: true, expect_source: "fact:wifi"}
+  - {id: kk-cafe, lang: kk, question: "Кафе қайда?", expect_found: true, expect_source: "fact:cafe"}
+  - {id: kk-hours, lang: kk, question: "Хаб қашан жұмыс істейді?", expect_found: true, expect_source: "fact:hours"}
+  - {id: kk-parking, lang: kk, question: "Көлікті қайда қоюға болады?", expect_found: true, expect_source: "fact:parking"}
+  # --- kk: вне базы ---
+  - {id: kk-oob-weather, lang: kk, question: "Ертең ауа райы қандай болады?", expect_found: false}
+  - {id: kk-oob-capital, lang: kk, question: "Францияның астанасы қай қала?", expect_found: false}
+  # --- en: в базе ---
+  - {id: en-wifi, lang: en, question: "What's the wifi password?", expect_found: true, expect_source: "fact:wifi"}
+  - {id: en-hours, lang: en, question: "When is the hub open?", expect_found: true, expect_source: "fact:hours"}
+  - {id: en-lunch, lang: en, question: "Where can I have lunch?", expect_found: true, expect_source: "fact:cafe"}
+  - {id: en-meeting, lang: en, question: "How do I book a meeting room?", expect_found: true, expect_source: "fact:meeting_rooms"}
+  - {id: en-accel, lang: en, question: "Do you run accelerator programs?", expect_found: true, expect_source: "fact:accelerator"}
+  # --- en: вне базы ---
+  - {id: en-oob-bitcoin, lang: en, question: "What is the price of bitcoin today?", expect_found: false}
+  - {id: en-oob-joke, lang: en, question: "Tell me a joke about cats", expect_found: false}

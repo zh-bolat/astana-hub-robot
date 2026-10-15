@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Экран диагностики голоса — служебный, только по-русски. -->
+<resources>
+    <string name="diag_title" translatable="false">Диагностика голоса</string>
+    <string name="diag_mode" translatable="false">Голос: источник распознавания и синтеза (сохраняется)</string>
+    <string name="diag_stt_hint" translatable="false">Язык для серверного STT</string>
+    <string name="diag_auto" translatable="false">авто</string>
+    <string name="diag_builtin_tts" translatable="false">Встроенный TTS (AgentOS / RobotOS SkillApi)</string>
+    <string name="diag_server_tts" translatable="false">Серверный TTS (/v1/tts)</string>
+    <string name="diag_mic" translatable="false">Микрофон</string>
+    <string name="diag_record" translatable="false">Записать фразу → /v1/stt</string>
+    <string name="diag_monitor" translatable="false">Уровень микрофона</string>
+    <string name="diag_builtin_mic" translatable="false">Встроенный ASR слушает (AgentOS / SkillApi)</string>
+    <string name="diag_log" translatable="false">Лог</string>
+    <string name="diag_clear" translatable="false">Очистить</string>
+    <string name="diag_close" translatable="false">Закрыть</string>
+    <string name="diag_test_ru" translatable="false">Здравствуйте! Я робот-помощник Astana Hub. Чем могу помочь?</string>
+    <string name="diag_test_kk" translatable="false">Сәлеметсіз бе! Мен Astana Hub көмекші роботымын. Сізге қалай көмектесе аламын?</string>
+    <string name="diag_test_en" translatable="false">Hello! I am the Astana Hub assistant robot. How can I help you?</string>
+    <string name="diag_android_tts" translatable="false">Android TextToSpeech (запасной голос)</string>
+    <string name="diag_tts_info" translatable="false">Движки и языки</string>
+    <string name="diag_scale" translatable="false">Масштаб интерфейса: %1$d%% (сохраняется, применяется сразу)</string>
+    <string name="diag_screen" translatable="false">Экран (сфотографируйте и пришлите)</string>
+    <string name="diag_robot" translatable="false">Робот: RobotApi, карта, места</string>
+    <string name="diag_dump_places" translatable="false">getPlaceList</string>
+    <string name="diag_dump_pose" translatable="false">getPosition</string>
+    <string name="diag_refresh_places" translatable="false">/v1/places</string>
+    <string name="diag_server" translatable="false">Адрес сервера (применяется сразу, сохраняется)</string>
+    <string name="diag_server_check" translatable="false">Проверить</string>
+    <string name="diag_server_save" translatable="false">Сохранить</string>
+    <string name="diag_server_reset" translatable="false">По умолчанию</string>
+</resources>

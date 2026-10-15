@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import io
+import time
+
+from app.db import QuestionLogRepo, make_engine
+from tests.conftest import AUTH, ask_body
+
+
+def test_places_and_etag(client):
+    r = client.get("/v1/places", headers=AUTH)
+    assert r.status_code == 200
+    etag = r.headers["etag"]
+    places = r.json()["places"]
+    cafe = next(p for p in places if p["id"] == "cafe")
+    assert cafe["map_name"] == "Кафе"
+    assert set(cafe["names"]) == {"ru", "kk", "en"}
+    assert "кафешка" in cafe["synonyms"]
+    assert set(places[0]) == {"id", "map_name", "names", "synonyms", "description"}
+
+    r2 = client.get("/v1/places", headers={**AUTH, "If-None-Match": etag})
+    assert r2.status_code == 304
+    assert r2.headers["etag"] == etag
+    assert r2.content == b""
+
+    r3 = client.get("/v1/places", headers={**AUTH, "If-None-Match": '"stale"'})
+    assert r3.status_code == 200
+
+
+def test_quick_questions(client):
+    ru = client.get("/v1/quick-questions", headers=AUTH).json()["items"]
+    assert {"id": "wifi", "text": "Какой пароль от Wi-Fi?"} in ru
+    kk = client.get("/v1/quick-questions?lang=kk", headers=AUTH).json()["items"]
+    assert {"id": "wifi", "text": "Wi-Fi құпиясөзі қандай?"} in kk
+    r = client.get("/v1/quick-questions?lang=de", headers=AUTH)
+    assert r.status_code == 400
+
+
+def _touch_write(path, text):
+    path.write_text(text, encoding="utf-8")
+    # гарантируем новый mtime даже на ФС с грубым разрешением
+    t = time.time() + 2
+    import os
+
+    os.utime(path, (t, t))
+
+
+def test_knowledge_hot_reload(client, knowledge_dir):
+    q = ask_body("Есть ли у вас спортзал?")
+    assert client.post("/v1/ask", json=q, headers=AUTH).json()["found"] is False
+    etag_before = client.get("/v1/places", headers=AUTH).headers["etag"]
+
+    facts = knowledge_dir / "facts.yaml"
+    _touch_write(
+        facts,
+        facts.read_text(encoding="utf-8")
+        + """
+  - id: gym
+    keywords: [спортзал, тренажер, gym]
+    answer:
+      ru: Спортзал находится на третьем этаже.
+      en: The gym is on the third floor.
+""",
+    )
+    body = client.post("/v1/ask", json=q, headers=AUTH).json()
+    assert body["found"] is True
+    assert body["sources"] == ["fact:gym"]
+
+    places = knowledge_dir / "places.yaml"
+    _touch_write(places, places.read_text(encoding="utf-8").replace("кафешка", "кофейка"))
+    assert client.get("/v1/places", headers=AUTH).headers["etag"] != etag_before
+
+
+def test_broken_knowledge_keeps_previous_version(client, knowledge_dir):
+    _touch_write(knowledge_dir / "facts.yaml", "facts: [ {broken")
+    body = client.post("/v1/ask", json=ask_body("Где кафе?"), headers=AUTH).json()
+    assert body["found"] is True
+
+
+def test_export_csv(client, settings):
+    client.post("/v1/ask", json=ask_body("Где кафе?"), headers=AUTH)
+    client.post("/v1/ask", json=ask_body("Кто выиграл чемпионат мира?"), headers=AUTH)
+    repo = QuestionLogRepo(make_engine(settings.database_url))
+    buf = io.StringIO()
+    assert repo.export_csv(buf) == 2
+    lines = buf.getvalue().strip().splitlines()
+    assert lines[0].startswith("id,created_at,request_id")
+    buf = io.StringIO()
+    assert repo.export_csv(buf, only_unanswered=True) == 1
+    assert "чемпионат" in buf.getvalue()
+
+
+def test_openapi_matches_contract_paths(client):
+    spec = client.get("/openapi.json").json()
+    assert set(spec["paths"]) == {
+        "/v1/health",
+        "/v1/ask",
+        "/v1/look",
+        "/v1/places",
+        "/v1/quick-questions",
+        "/v1/stt",
+        "/v1/tts",
+    }
+    assert "multipart/form-data" in spec["paths"]["/v1/look"]["post"]["requestBody"]["content"]

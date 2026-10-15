@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Экран 14" 1920×1080, посетитель стоит в ~1 м: крупный текст. -->
+    <dimen name="screen_padding">32dp</dimen>
+    <dimen name="text_brand">40sp</dimen>
+    <dimen name="text_status">30sp</dimen>
+    <dimen name="text_question">30sp</dimen>
+    <dimen name="text_answer">40sp</dimen>
+    <dimen name="text_button">24sp</dimen>
+    <dimen name="text_label">20sp</dimen>
+    <dimen name="avatar_size">220dp</dimen>
+    <dimen name="button_height">72dp</dimen>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Только для flavor robot: разрешения RobotAPI (docs/vendor/RobotAPI_en.md, «Permission Configuration»). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="com.ainirobot.coreservice.robotSettingProvider" />
+</manifest>

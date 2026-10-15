@@ -1,0 +1,155 @@
+"""Настройки сервиса. Всё — из переменных окружения (или backend/.env), секретов в коде нет."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # Авторизация робота
+    robot_token: SecretStr = Field(default=SecretStr(""))
+    rate_limit_per_min: int = 30
+
+    # LLM: auto = gemini, если задан GEMINI_API_KEY, иначе fake
+    llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = "auto"
+    # Vision (/look): auto = gemini при наличии ключа, иначе fake (у DeepSeek нет vision)
+    vision_provider: Literal["auto", "gemini", "fake"] = "auto"
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3.1-flash-lite"
+    # Резервные модели через запятую: при 503/429/таймауте/обрыве — повтор основной (если есть время), затем они
+    gemini_fallback_models: str = "gemini-3.5-flash"
+    # Если основная модель молчит дольше — параллельно запускается резервная (хедж), побеждает первый ответ
+    gemini_hedge_after_s: float = 3.0
+    gemini_vision_model: str | None = None  # по умолчанию = gemini_model
+    # Gemini 3.x: minimal | low | medium | high; пусто — дефолт модели (или thinking_budget для 2.5)
+    gemini_thinking_level: str | None = "minimal"
+    gemini_thinking_budget: int | None = None  # только для Gemini 2.5: 0 — выключить
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+
+    # Таймауты вызова LLM на стороне сервера (робот ждёт 8 / 12 с)
+    ask_timeout_s: float = 6.5
+    look_timeout_s: float = 11.0
+    # SSE /ask: до первого куска — ask_timeout_s (с повтором/fallback), весь стрим — не дольше этого
+    ask_stream_total_s: float = 12.0
+
+    # База знаний: локальная папка с YAML (позже — синк из Google Sheets)
+    knowledge_dir: Path = BACKEND_DIR / "knowledge"
+    knowledge_reload_interval_s: float = 5.0
+    # Google-таблица (шаг 3.3): если задан ID — база берётся из неё (вкладки доступны по ссылке),
+    # иначе — из YAML в knowledge_dir. Снимок последней удачной синхронизации — на диске.
+    knowledge_sheet_id: str | None = None
+    knowledge_sheet_facts: str = "Факты"
+    knowledge_sheet_places: str = "Места"
+    knowledge_sheet_buttons: str = "Кнопки"
+    knowledge_sync_interval_s: float = 300.0
+    knowledge_snapshot_path: Path = BACKEND_DIR / "data" / "knowledge_snapshot.json"
+
+    # Лог вопросов: SQLite на MVP, Postgres — сменой URL
+    database_url: str = f"sqlite:///{BACKEND_DIR / 'data' / 'questions.db'}"
+
+    # /look
+    max_image_bytes: int = 1024 * 1024
+
+    # Голос через сервер (/v1/stt, /v1/tts) — провайдеры раздельно.
+    # STT auto: elevenlabs (ELEVENLABS_API_KEY) → gemini (GEMINI_API_KEY) → fake
+    # TTS auto: elevenlabs (ELEVENLABS_API_KEY) → yandex (YANDEX_API_KEY) → fake
+    stt_provider: Literal["auto", "gemini", "elevenlabs", "yandex", "fake"] = "auto"
+    tts_provider: Literal["auto", "elevenlabs", "yandex", "fake"] = "auto"
+    # Gemini STT: модель + резервные (через запятую)
+    gemini_stt_model: str = "gemini-3.1-flash-lite"
+    gemini_stt_fallback_models: str = "gemini-3.5-flash"
+    # ElevenLabs
+    elevenlabs_api_key: SecretStr | None = None
+    elevenlabs_base_url: str = "https://api.elevenlabs.io"
+    elevenlabs_tts_model_kk: str = "eleven_v3"  # казахский умеет только v3
+    elevenlabs_tts_model_default: str = "eleven_flash_v2_5"  # ru/en, минимальная задержка
+    # Голос по умолчанию — премиальный «George» из стандартной библиотеки (мультиязычные модели)
+    elevenlabs_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
+    elevenlabs_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
+    elevenlabs_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
+    elevenlabs_output_format: str = "mp3_44100_128"
+    elevenlabs_stt_model: str = "scribe_v2"
+    # Тишина: пиковая амплитуда ниже порога → пустой текст без вызова провайдера
+    stt_silence_peak: int = 500
+    yandex_api_key: SecretStr | None = None
+    yandex_folder_id: str | None = (
+        None  # нужен только для ключа пользователя, не сервисного аккаунта
+    )
+    yandex_stt_url: str = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+    yandex_tts_url: str = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+    yandex_voice_ru: str = "jane"
+    yandex_voice_kk: str = "amira"
+    yandex_voice_en: str = "john"
+    stt_timeout_s: float = 5.0  # робот ждёт /stt 6 с
+    tts_timeout_s: float = 4.0  # робот ждёт /tts 5 с
+    max_audio_bytes: int = 600 * 1024
+    max_audio_seconds: float = 15.0
+    # Отдельный бакет для /stt и /tts: на один вопрос робот делает 1 stt + N tts
+    speech_rate_limit_per_min: int = 120
+    tts_cache_memory_mb: int = 32
+    tts_cache_dir: Path | None = BACKEND_DIR / "data" / "tts_cache"  # пусто/None — без диска
+    tts_cache_disk_mb: int = 100
+
+    log_level: str = "INFO"
+
+    @field_validator(
+        "tts_cache_dir",
+        "yandex_folder_id",
+        "gemini_thinking_level",
+        "gemini_thinking_budget",
+        "gemini_vision_model",
+        "knowledge_sheet_id",
+        "elevenlabs_api_key",
+        "yandex_api_key",
+        "gemini_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_to_none(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
+
+    def gemini_fallback_list(self) -> list[str]:
+        return _split(self.gemini_fallback_models)
+
+    def gemini_stt_fallback_list(self) -> list[str]:
+        return _split(self.gemini_stt_fallback_models)
+
+    def resolved_text_provider(self) -> str:
+        if self.llm_provider != "auto":
+            return self.llm_provider
+        return "gemini" if self.gemini_api_key else "fake"
+
+    def resolved_stt_provider(self) -> str:
+        if self.stt_provider != "auto":
+            return self.stt_provider
+        if self.elevenlabs_api_key:
+            return "elevenlabs"
+        return "gemini" if self.gemini_api_key else "fake"
+
+    def resolved_tts_provider(self) -> str:
+        if self.tts_provider != "auto":
+            return self.tts_provider
+        if self.elevenlabs_api_key:
+            return "elevenlabs"
+        return "yandex" if self.yandex_api_key else "fake"
+
+    def resolved_vision_provider(self) -> str:
+        if self.vision_provider != "auto":
+            return self.vision_provider
+        return "gemini" if self.gemini_api_key else "fake"
+
+
+def _split(value: str) -> list[str]:
+    return [m.strip() for m in value.split(",") if m.strip()]

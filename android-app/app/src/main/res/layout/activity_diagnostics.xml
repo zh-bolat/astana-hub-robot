@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Инструмент спайков 2.3–2.5: сравнение встроенного и серверного голоса на роботе. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/hub_background"
+    android:orientation="horizontal"
+    android:padding="24dp">
+
+    <ScrollView
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/diag_title"
+                android:textColor="@color/hub_primary"
+                android:textSize="32sp"
+                android:textStyle="bold" />
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_mode" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="160dp"
+                    android:layout_height="wrap_content"
+                    android:text="ASR (все)"
+                    android:textSize="20sp" />
+
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/asrGroup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <Button android:id="@+id/asrGroupBuiltin" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="builtin" />
+                    <Button android:id="@+id/asrGroupServer" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="server" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="160dp"
+                    android:layout_height="wrap_content"
+                    android:text="TTS ru"
+                    android:textSize="20sp" />
+
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/ttsRuGroup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <Button android:id="@+id/ttsRuGroupBuiltin" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="builtin" />
+                    <Button android:id="@+id/ttsRuGroupServer" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="server" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="160dp"
+                    android:layout_height="wrap_content"
+                    android:text="TTS kk"
+                    android:textSize="20sp" />
+
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/ttsKkGroup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <Button android:id="@+id/ttsKkGroupBuiltin" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="builtin" />
+                    <Button android:id="@+id/ttsKkGroupServer" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="server" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="160dp"
+                    android:layout_height="wrap_content"
+                    android:text="TTS en"
+                    android:textSize="20sp" />
+
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/ttsEnGroup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <Button android:id="@+id/ttsEnGroupBuiltin" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="builtin" />
+                    <Button android:id="@+id/ttsEnGroupServer" style="@style/Widget.Hub.LangButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="server" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </LinearLayout>
+
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_server" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/serverUrl"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="http://10.54.180.166:8000/v1"
+                    android:imeOptions="actionDone"
+                    android:inputType="textUri"
+                    android:textSize="20sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/serverCheck" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_server_check" />
+                <Button android:id="@+id/serverSave" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_server_save" />
+                <Button android:id="@+id/serverReset" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_server_reset" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/serverStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="18sp" />
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_robot" />
+
+            <TextView
+                android:id="@+id/robotStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="20sp" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/dumpPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_dump_places" />
+                <Button android:id="@+id/dumpPose" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_dump_pose" />
+                <Button android:id="@+id/refreshPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_refresh_places" />
+            </LinearLayout>
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_builtin_tts" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/builtinRu" style="@style/Widget.Hub.DiagButton" android:text="RU" />
+                <Button android:id="@+id/builtinKk" style="@style/Widget.Hub.DiagButton" android:text="KZ" />
+                <Button android:id="@+id/builtinEn" style="@style/Widget.Hub.DiagButton" android:text="EN" />
+            </LinearLayout>
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_server_tts" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/serverRu" style="@style/Widget.Hub.DiagButton" android:text="RU" />
+                <Button android:id="@+id/serverKk" style="@style/Widget.Hub.DiagButton" android:text="KZ" />
+                <Button android:id="@+id/serverEn" style="@style/Widget.Hub.DiagButton" android:text="EN" />
+                <Button android:id="@+id/stopTts" style="@style/Widget.Hub.DiagButton" android:text="@string/action_stop" />
+            </LinearLayout>
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_android_tts" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/androidRu" style="@style/Widget.Hub.DiagButton" android:text="RU" />
+                <Button android:id="@+id/androidKk" style="@style/Widget.Hub.DiagButton" android:text="KZ" />
+                <Button android:id="@+id/androidEn" style="@style/Widget.Hub.DiagButton" android:text="EN" />
+                <Button android:id="@+id/androidInfo" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_tts_info" />
+            </LinearLayout>
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_stt_hint" />
+
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/hintGroup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <Button android:id="@+id/hintAuto" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/diag_auto" />
+                <Button android:id="@+id/hintRu" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RU" />
+                <Button android:id="@+id/hintKk" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="KZ" />
+                <Button android:id="@+id/hintEn" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="EN" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_mic" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical">
+
+                <Button android:id="@+id/recordButton" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_record" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/monitorSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:text="@string/diag_monitor"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/levelBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:max="100"
+                app:trackThickness="16dp" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/builtinMicSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/diag_builtin_mic"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/scaleLabel"
+                style="@style/Widget.Hub.DiagLabel" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/scaleSlider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="10"
+                android:valueFrom="60"
+                android:valueTo="150" />
+
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_screen" />
+
+            <TextView
+                android:id="@+id/screenInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textIsSelectable="true"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/closeButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="64dp"
+                android:layout_marginTop="24dp"
+                android:text="@string/diag_close"
+                android:textSize="20sp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="24dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/diag_log"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <Button android:id="@+id/clearButton" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_clear" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/logScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="@drawable/card_bg"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/logText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textIsSelectable="true"
+                android:textSize="16sp" />
+        </ScrollView>
+    </LinearLayout>
+</LinearLayout>

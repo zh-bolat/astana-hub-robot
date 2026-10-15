@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Astana Hub</string>
+    <string name="title" translatable="false">Astana Hub</string>
+    <string name="screensaver_title" translatable="false">Здравствуйте! · Сәлеметсіз бе! · Hello!</string>
+    <string name="screensaver_hint" translatable="false">Я помощник Astana Hub. Задайте вопрос или коснитесь экрана.\nМен Astana Hub көмекшісімін. Сұрақ қойыңыз немесе экранды түртіңіз.\nI\'m the Astana Hub assistant. Ask me or touch the screen.</string>
+    <string name="build_label" translatable="false">%1$s · %2$s · v%3$s</string>
+
+    <string name="hint_idle">Задайте вопрос голосом или нажмите кнопку</string>
+    <string name="status_idle">Готов помочь</string>
+    <string name="status_listening">Слушаю…</string>
+    <string name="status_thinking">Думаю…</string>
+    <string name="status_looking">Смотрю…</string>
+    <string name="status_navigating">Веду…</string>
+    <string name="action_guide">Проводить: %1$s</string>
+    <string name="status_speaking">Говорю…</string>
+    <string name="offline_badge">Нет связи с сервером</string>
+    <string name="input_hint">Введите вопрос (вместо голоса)</string>
+    <string name="action_send">Спросить</string>
+    <string name="action_look">Что это?</string>
+    <string name="action_mic">Микрофон</string>
+    <string name="action_stop">Стоп</string>
+    <string name="quick_questions_title">Частые вопросы</string>
+    <string name="label_question">Вопрос</string>
+    <string name="label_answer">Ответ</string>
+
+    <!-- Фразы робота без сервера (docs/api-contract.md, «Ошибки») -->
+    <string name="phrase_no_connection">Извините, сейчас нет связи с сервером. Спросите, где что находится, — это я подскажу и без интернета.</string>
+    <string name="phrase_not_heard">Извините, я не расслышал. Повторите, пожалуйста.</string>
+    <string name="phrase_one_moment">Секунду…</string>
+    <string name="phrase_camera_unavailable">Извините, камера сейчас недоступна.</string>
+</resources>

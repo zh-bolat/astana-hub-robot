@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AstanaHubRobot" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/hub_primary</item>
+        <item name="colorOnPrimary">@color/hub_on_primary</item>
+        <item name="android:colorBackground">@color/hub_background</item>
+        <item name="colorOnBackground">@color/hub_on_background</item>
+        <item name="colorSurface">@color/hub_surface</item>
+        <item name="android:windowBackground">@color/hub_background</item>
+    </style>
+
+    <style name="Widget.Hub.QuickButton" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:minHeight">@dimen/button_height</item>
+        <item name="android:paddingStart">28dp</item>
+        <item name="android:paddingEnd">28dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
+    </style>
+
+    <style name="Widget.Hub.LangButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="android:minWidth">96dp</item>
+    </style>
+
+    <style name="Widget.Hub.DiagLabel" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">20dp</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:textColor">@color/hub_muted</item>
+    </style>
+
+    <style name="Widget.Hub.DiagButton" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">64dp</item>
+        <item name="android:layout_marginEnd">12dp</item>
+        <item name="android:textSize">20sp</item>
+    </style>
+</resources>

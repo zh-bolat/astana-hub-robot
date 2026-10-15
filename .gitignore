@@ -21,10 +21,17 @@ service-account*.json
 android-app/.gradle/
 android-app/**/build/
 android-app/local.properties
+android-app/secrets.properties
+android-app/.kotlin/
 android-app/.idea/
 android-app/captures/
 android-app/.externalNativeBuild/
 android-app/.cxx/
+# общие (на случай файлов вне android-app/)
+local.properties
+secrets.properties
+.gradle/
+build/
 *.apk
 *.aab
 *.iml
@@ -38,6 +45,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+dist/
 
 # --- Node ---
 node_modules/

@@ -1,0 +1,78 @@
+# ==========================================================================
+# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ. Реальный список точек — после построения карты
+# робота (шаги 5.1–5.2). `map_name` должен совпадать с getPlaceList робота.
+#
+#   id           — идентификатор точки (place_id в API)
+#   map_name     — имя точки ровно как на карте робота
+#   names        — название ru/kk/en
+#   synonyms     — как посетители называют это место
+#   description  — описание ru/kk/en (используется в ответах /ask и /look)
+#   visual_hints — как помещение выглядит (подсказка vision-модели для /look)
+#   photos       — эталонные фото (пока не используются, шаг 6.3)
+# ==========================================================================
+places:
+  - id: reception
+    map_name: Ресепшен
+    names: {ru: Ресепшен, kk: Ресепшен, en: Reception}
+    synonyms: [ресепшн, стойка, администратор, reception, front desk, қабылдау]
+    description:
+      ru: Ресепшен у главного входа на первом этаже. Здесь регистрируют гостей и выдают пропуска.
+      kk: Ресепшен бірінші қабатта, басты кіреберіс жанында. Мұнда қонақтарды тіркеп, рұқсат қағаздарын береді.
+      en: The reception is by the main entrance on the first floor. Guests register and get passes here.
+    visual_hints: Длинная белая стойка с логотипом Astana Hub, за ней администраторы, рядом турникеты.
+    photos: []
+
+  - id: cafe
+    map_name: Кафе
+    names: {ru: Кафе, kk: Кафе, en: Cafe}
+    synonyms: [кафешка, асхана, столовая, кофейня, coffee, буфет]
+    description:
+      ru: Кафе на первом этаже справа от входа. Кофе, выпечка и бизнес-ланчи.
+      kk: Кафе бірінші қабатта, кіреберістің оң жағында. Кофе, тоқаштар және бизнес-ланчтар.
+      en: The cafe is on the first floor to the right of the entrance. Coffee, pastries and business lunches.
+    visual_hints: Барная стойка с кофемашиной, витрина с выпечкой, деревянные столики и высокие стулья.
+    photos: []
+
+  - id: coworking_2f
+    map_name: Коворкинг 2 этаж
+    names: {ru: Коворкинг, kk: Коворкинг, en: Coworking}
+    synonyms: [коворкинг, опенспейс, open space, рабочая зона, workspace]
+    description:
+      ru: Открытый коворкинг на втором этаже с длинными столами, розетками и тихими зонами.
+      kk: "Екінші қабаттағы ашық коворкинг: ұзын үстелдер, розеткалар және тыныш аймақтар."
+      en: Open coworking on the second floor with long desks, power outlets and quiet zones.
+    visual_hints: Большое светлое пространство с длинными общими столами, люди с ноутбуками, зелёные растения.
+    photos: []
+
+  - id: main_hall
+    map_name: Главный зал
+    names: {ru: Главный зал, kk: Басты зал, en: Main hall}
+    synonyms: [конференц-зал, сцена, зал, аудитория, event hall, conference hall]
+    description:
+      ru: Главный зал для конференций и митапов на первом этаже, вмещает до 300 человек.
+      kk: Бірінші қабаттағы конференциялар мен митаптарға арналған басты зал, 300 адамға дейін сыяды.
+      en: The main hall for conferences and meetups on the first floor, seats up to 300 people.
+    visual_hints: Сцена с большим LED-экраном, ряды стульев, прожекторы на потолке.
+    photos: []
+
+  - id: meeting_room_a
+    map_name: Переговорная A
+    names: {ru: Переговорная A, kk: А келіссөз бөлмесі, en: Meeting room A}
+    synonyms: [переговорка, переговорная, meeting room, келіссөз бөлмесі]
+    description:
+      ru: Переговорная A на втором этаже на 8 человек, с экраном для презентаций.
+      kk: Екінші қабаттағы 8 адамға арналған А келіссөз бөлмесі, презентация экраны бар.
+      en: Meeting room A on the second floor seats 8 people and has a presentation screen.
+    visual_hints: Небольшая комната со стеклянной стеной, овальный стол, телевизор на стене.
+    photos: []
+
+  - id: elevators
+    map_name: Лифты
+    names: {ru: Лифты, kk: Лифтілер, en: Elevators}
+    synonyms: [лифт, elevator, lift, туалет, toilet, дәретхана]
+    description:
+      ru: Лифтовый холл в центре здания. Рядом туалеты.
+      kk: Ғимарат ортасындағы лифт холлы. Жанында дәретханалар бар.
+      en: The elevator hall is in the center of the building. Restrooms are nearby.
+    visual_hints: Холл с тремя металлическими дверями лифтов и указателями этажей.
+    photos: []

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Қазақша мәтін: носитель языка должен вычитать. -->
+<resources>
+    <string name="hint_idle">Сұрағыңызды дауыспен қойыңыз немесе батырманы басыңыз</string>
+    <string name="status_idle">Көмектесуге дайынмын</string>
+    <string name="status_listening">Тыңдап тұрмын…</string>
+    <string name="status_thinking">Ойланып жатырмын…</string>
+    <string name="status_looking">Қарап жатырмын…</string>
+    <string name="status_navigating">Апарып жатырмын…</string>
+    <string name="action_guide">Апарып салу: %1$s</string>
+    <string name="status_speaking">Сөйлеп тұрмын…</string>
+    <string name="offline_badge">Сервермен байланыс жоқ</string>
+    <string name="input_hint">Сұрақты жазыңыз (дауыстың орнына)</string>
+    <string name="action_send">Сұрау</string>
+    <string name="action_look">Бұл не?</string>
+    <string name="action_mic">Микрофон</string>
+    <string name="action_stop">Тоқтату</string>
+    <string name="quick_questions_title">Жиі қойылатын сұрақтар</string>
+    <string name="label_question">Сұрақ</string>
+    <string name="label_answer">Жауап</string>
+
+    <string name="phrase_no_connection">Кешіріңіз, қазір сервермен байланыс жоқ. Бірдеңенің қайда екенін сұрасаңыз, интернетсіз де айтып бере аламын.</string>
+    <string name="phrase_not_heard">Кешіріңіз, естімей қалдым. Қайталап айтыңызшы.</string>
+    <string name="phrase_one_moment">Бір сәт…</string>
+    <string name="phrase_camera_unavailable">Кешіріңіз, камера қазір қолжетімсіз.</string>
+</resources>
