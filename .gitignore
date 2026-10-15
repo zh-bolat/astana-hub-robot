@@ -1,0 +1,54 @@
+# --- Claude Code ---
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# --- Секреты и ключи ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+secrets/
+**/actionRegistry.json
+google-services.json
+service-account*.json
+
+# --- Android / Gradle ---
+android-app/.gradle/
+android-app/**/build/
+android-app/local.properties
+android-app/.idea/
+android-app/captures/
+android-app/.externalNativeBuild/
+android-app/.cxx/
+*.apk
+*.aab
+*.iml
+
+# --- Python / backend ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Node ---
+node_modules/
+
+# --- Данные и логи ---
+*.log
+*.sqlite
+*.db
+
+# --- IDE / ОС ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
