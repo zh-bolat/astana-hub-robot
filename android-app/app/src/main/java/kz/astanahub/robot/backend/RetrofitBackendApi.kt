@@ -1,0 +1,240 @@
+package kz.astanahub.robot.backend
+
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kz.astanahub.robot.core.Lang
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import timber.log.Timber
+
+/** Таймауты клиента из раздела «Таймауты и лимиты» контракта. Ретраев нет. */
+data class BackendTimeouts(
+    val askMillis: Long = 8_000,
+    val lookMillis: Long = 12_000,
+    val referenceMillis: Long = 5_000,
+    val sttMillis: Long = 6_000,
+    val ttsMillis: Long = 5_000,
+)
+
+/**
+ * HTTP-реализация [BackendApi]: Retrofit + OkHttp + kotlinx.serialization.
+ * Стриминг SSE (`Accept: text/event-stream`) — шаг 4.4, здесь только JSON.
+ */
+class RetrofitBackendApi(
+    baseUrl: String,
+    private val token: String,
+    private val timeouts: BackendTimeouts = BackendTimeouts(),
+    client: OkHttpClient = defaultClient(),
+) : BackendApi {
+
+    private val service: HubService = Retrofit.Builder()
+        .baseUrl(normalizeBaseUrl(baseUrl))
+        .client(client.newBuilder().addInterceptor(authInterceptor()).build())
+        .addConverterFactory(json.asConverterFactory(JSON_MEDIA_TYPE))
+        .build()
+        .create(HubService::class.java)
+
+    override suspend fun health(): ApiResult<String> =
+        call(timeouts.referenceMillis) { service.health() }.map { "${it.status} ${it.version.orEmpty()}".trim() }
+
+    override suspend fun ask(question: String, context: AskContext): ApiResult<Answer> =
+        call(timeouts.askMillis) {
+            service.ask(
+                AskRequestDto(
+                    question = question,
+                    lang = context.lang?.code,
+                    sessionId = context.sessionId,
+                    placeId = context.placeId,
+                ),
+            )
+        }.map { it.toDomain() }
+
+    override suspend fun look(jpeg: ByteArray, question: String?, context: AskContext): ApiResult<Answer> {
+        val meta = json.encodeToString(
+            LookMetaDto.serializer(),
+            LookMetaDto(question, context.lang?.code, context.sessionId, context.placeId),
+        )
+        val image = MultipartBody.Part.createFormData(
+            "image",
+            "frame.jpg",
+            jpeg.toRequestBody(JPEG_MEDIA_TYPE),
+        )
+        return call(timeouts.lookMillis) {
+            service.look(image, meta.toRequestBody(JSON_MEDIA_TYPE))
+        }.map { it.toDomain() }
+    }
+
+    override suspend fun places(etag: String?): ApiResult<PlacesResult> = guard(timeouts.referenceMillis) {
+        val response = service.places(etag)
+        val body = response.body()
+        when {
+            response.code() == 304 -> ApiResult.Success(PlacesResult(null, etag, notModified = true))
+            response.isSuccessful && body != null -> ApiResult.Success(
+                PlacesResult(
+                    places = body.places.map { it.toDomain() },
+                    etag = response.headers()["ETag"],
+                    notModified = false,
+                ),
+            )
+            else -> ApiResult.Failure(parseError(response))
+        }
+    }
+
+    override suspend fun quickQuestions(lang: Lang): ApiResult<List<QuickQuestion>> =
+        call(timeouts.referenceMillis) { service.quickQuestions(lang.code) }
+            .map { dto -> dto.items.map { QuickQuestion(it.id, it.text) } }
+
+    override suspend fun stt(wav: ByteArray, lang: Lang?, sessionId: String): ApiResult<SttResult> {
+        val meta = json.encodeToString(SttMetaDto.serializer(), SttMetaDto(lang?.code, sessionId))
+        val audio = MultipartBody.Part.createFormData("audio", "speech.wav", wav.toRequestBody(WAV_MEDIA_TYPE))
+        return call(timeouts.sttMillis) { service.stt(audio, meta.toRequestBody(JSON_MEDIA_TYPE)) }
+            .map { SttResult(it.requestId, it.text.trim(), Lang.fromCode(it.lang), it.confidence) }
+    }
+
+    override suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray> =
+        call(timeouts.ttsMillis, check = ::rejectFakeSpeech) { service.tts(TtsRequestDto(text, lang.code)) }
+            .map { body -> body.use { it.bytes() } }
+
+    /** Сервер с FakeSpeechProvider отдаёт тишину и `X-Speech-Provider: fake` — считаем TTS недоступным. */
+    private fun rejectFakeSpeech(response: Response<*>): BackendError? =
+        if (response.headers()[SPEECH_PROVIDER_HEADER].equals("fake", ignoreCase = true)) {
+            BackendError(
+                ErrorKind.SPEECH_UNAVAILABLE,
+                httpStatus = response.code(),
+                message = "speech provider is fake",
+                requestId = response.headers()["X-Request-Id"],
+            )
+        } else null
+
+    private suspend fun <T : Any> call(
+        timeoutMillis: Long,
+        check: (Response<T>) -> BackendError? = { null },
+        block: suspend () -> Response<T>,
+    ): ApiResult<T> = guard(timeoutMillis) {
+        val response = block()
+        val body = response.body()
+        val rejected = if (response.isSuccessful) check(response) else null
+        if (rejected != null) {
+            (body as? java.io.Closeable)?.close()
+            ApiResult.Failure(rejected)
+        } else if (response.isSuccessful && body != null) {
+            ApiResult.Success(body)
+        } else {
+            ApiResult.Failure(parseError(response))
+        }
+    }
+
+    /** Таймаут клиента + перевод исключений сети/разбора в [BackendError]. */
+    private suspend fun <R> guard(timeoutMillis: Long, block: suspend () -> ApiResult<R>): ApiResult<R> =
+        try {
+            withTimeout(timeoutMillis) { block() }
+        } catch (e: TimeoutCancellationException) {
+            ApiResult.Failure(BackendError(ErrorKind.TIMEOUT, message = "client timeout ${timeoutMillis}ms"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: InterruptedIOException) {
+            ApiResult.Failure(BackendError(ErrorKind.TIMEOUT, message = e.message))
+        } catch (e: IOException) {
+            Timber.w(e, "backend network error")
+            ApiResult.Failure(BackendError(ErrorKind.NETWORK, message = e.message))
+        } catch (e: SerializationException) {
+            Timber.e(e, "backend bad response")
+            ApiResult.Failure(BackendError(ErrorKind.UNKNOWN, message = e.message))
+        } catch (e: IllegalArgumentException) {
+            // kotlinx.serialization бросает IllegalArgumentException на кривом JSON.
+            Timber.e(e, "backend bad response")
+            ApiResult.Failure(BackendError(ErrorKind.UNKNOWN, message = e.message))
+        }
+
+    private fun authInterceptor() = Interceptor { chain ->
+        val request = chain.request().newBuilder().apply {
+            if (token.isNotEmpty()) header("Authorization", "Bearer $token")
+        }.build()
+        chain.proceed(request)
+    }
+
+    companion object {
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val JPEG_MEDIA_TYPE = "image/jpeg".toMediaType()
+        private val WAV_MEDIA_TYPE = "audio/wav".toMediaType()
+        const val SPEECH_PROVIDER_HEADER = "X-Speech-Provider"
+
+        internal val json = Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+            coerceInputValues = true
+        }
+
+        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            // Верхняя граница; точные лимиты по эндпоинтам — withTimeout в call().
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        /** `http://host:8000/v1` → `http://host:8000/v1/` (Retrofit требует слеш в конце). */
+        fun normalizeBaseUrl(url: String): String = url.trim().let { if (it.endsWith("/")) it else "$it/" }
+
+        internal fun parseError(response: Response<*>): BackendError {
+            val status = response.code()
+            val raw = runCatching { response.errorBody()?.string() }.getOrNull()
+            val envelope = raw?.takeIf { it.isNotBlank() }?.let {
+                runCatching { json.decodeFromString(ErrorEnvelopeDto.serializer(), it) }.getOrNull()
+            }
+            val code = envelope?.error?.code
+            return BackendError(
+                kind = kindFor(code, status),
+                httpStatus = status,
+                serverCode = code,
+                message = envelope?.error?.message,
+                requestId = envelope?.requestId ?: response.headers()["X-Request-Id"],
+                retryAfterSeconds = response.headers()["Retry-After"]?.trim()?.toLongOrNull(),
+            )
+        }
+
+        internal fun kindFor(code: String?, status: Int): ErrorKind = when (code) {
+            "bad_request" -> ErrorKind.BAD_REQUEST
+            "unauthorized" -> ErrorKind.UNAUTHORIZED
+            "payload_too_large" -> ErrorKind.PAYLOAD_TOO_LARGE
+            "rate_limited" -> ErrorKind.RATE_LIMITED
+            "llm_unavailable" -> ErrorKind.LLM_UNAVAILABLE
+            "speech_unavailable" -> ErrorKind.SPEECH_UNAVAILABLE
+            "timeout" -> ErrorKind.TIMEOUT
+            else -> when (status) {
+                400, 422 -> ErrorKind.BAD_REQUEST
+                401, 403 -> ErrorKind.UNAUTHORIZED
+                413 -> ErrorKind.PAYLOAD_TOO_LARGE
+                429 -> ErrorKind.RATE_LIMITED
+                503 -> ErrorKind.LLM_UNAVAILABLE
+                504 -> ErrorKind.TIMEOUT
+                else -> ErrorKind.UNKNOWN
+            }
+        }
+    }
+}
+
+internal fun PlaceDto.toDomain() = Place(id, mapName, names, synonyms, description)
+
+internal fun AnswerDto.toDomain() = Answer(
+    requestId = requestId,
+    text = answer,
+    phrases = phrases.ifEmpty { listOf(answer) },
+    lang = Lang.fromCode(lang),
+    found = found,
+)
+
+internal inline fun <T, R> ApiResult<T>.map(transform: (T) -> R): ApiResult<R> = when (this) {
+    is ApiResult.Success -> ApiResult.Success(transform(value))
+    is ApiResult.Failure -> this
+}

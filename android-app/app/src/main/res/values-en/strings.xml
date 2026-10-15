@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hint_idle">Ask a question by voice or tap a button</string>
+    <string name="status_idle">Ready to help</string>
+    <string name="status_listening">Listening…</string>
+    <string name="status_thinking">Thinking…</string>
+    <string name="status_looking">Looking…</string>
+    <string name="status_navigating">Guiding…</string>
+    <string name="action_guide">Take me there: %1$s</string>
+    <string name="status_speaking">Speaking…</string>
+    <string name="offline_badge">No connection to the server</string>
+    <string name="input_hint">Type a question (instead of voice)</string>
+    <string name="action_send">Ask</string>
+    <string name="action_look">What is this?</string>
+    <string name="action_mic">Mic</string>
+    <string name="action_stop">Stop</string>
+    <string name="quick_questions_title">Popular questions</string>
+    <string name="label_question">Question</string>
+    <string name="label_answer">Answer</string>
+
+    <string name="phrase_no_connection">Sorry, there is no connection to the server right now. I can still tell you where things are without the internet.</string>
+    <string name="phrase_not_heard">Sorry, I didn\'t catch that. Please say it again.</string>
+    <string name="phrase_one_moment">One moment…</string>
+    <string name="phrase_camera_unavailable">Sorry, the camera is not available right now.</string>
+</resources>

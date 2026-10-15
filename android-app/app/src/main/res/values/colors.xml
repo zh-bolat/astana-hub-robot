@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Временная палитра до брендбука Astana Hub (шаг 7.5) -->
+    <color name="hub_primary">#1F4FFF</color>
+    <color name="hub_on_primary">#FFFFFF</color>
+    <color name="hub_background">#F5F7FB</color>
+    <color name="hub_surface">#FFFFFF</color>
+    <color name="hub_on_background">#111827</color>
+    <color name="hub_muted">#6B7280</color>
+    <color name="hub_listening">#16A34A</color>
+    <color name="hub_thinking">#F59E0B</color>
+    <color name="hub_speaking">#1F4FFF</color>
+    <color name="hub_idle">#9CA3AF</color>
+    <color name="hub_offline">#DC2626</color>
+    <color name="ic_launcher_background">#1F4FFF</color>
+</resources>

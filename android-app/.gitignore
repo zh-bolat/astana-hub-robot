@@ -1,0 +1,9 @@
+# Секреты (шаблон — secrets.properties.example)
+secrets.properties
+local.properties
+.gradle/
+build/
+.idea/
+.kotlin/
+captures/
+*.iml
