@@ -1,0 +1,200 @@
+# Astana Hub Robot — backend
+
+FastAPI-сервер для робота: `/v1/ask` (вопросы о хабе по базе знаний, JSON или SSE-стриминг), `/v1/look`
+(кадр с камеры → vision LLM), `/v1/stt` и `/v1/tts` (голос через сервер), `/v1/places`, `/v1/quick-questions`,
+`/v1/health`. Контракт — [`docs/api-contract.md`](../docs/api-contract.md) (истина), OpenAPI — `openapi.json`
+(генерируется, см. ниже) или `http://localhost:8000/docs`.
+
+## Быстрый старт
+
+```bash
+cd backend
+uv sync
+cp .env.example .env          # задайте ROBOT_TOKEN; GEMINI_API_KEY — по желанию
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+Без `GEMINI_API_KEY` сервер работает на **FakeProvider** (детерминированные ответы по ключевым словам базы, без сети)
+и **FakeSpeechProvider**. Так же работают тесты и CI.
+
+```bash
+# вопрос
+curl -s localhost:8000/v1/ask -H "Authorization: Bearer $ROBOT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question":"Где можно поесть?","session_id":"6f1c2a9e-0000-0000-0000-000000000000"}'
+
+# то же со стримингом (SSE): фразы приходят по мере генерации
+curl -sN localhost:8000/v1/ask -H "Authorization: Bearer $ROBOT_TOKEN" -H 'Accept: text/event-stream' \
+  -H 'Content-Type: application/json' -d '{"question":"Wi-Fi құпиясөзі қандай?","session_id":"s1"}'
+
+# «что это?»
+curl -s localhost:8000/v1/look -H "Authorization: Bearer $ROBOT_TOKEN" \
+  -F 'image=@frame.jpg;type=image/jpeg' -F 'meta={"session_id":"s1","place_id":"cafe","lang":"ru"}'
+
+# голос: WAV 16 кГц mono 16-bit → текст; фраза → MP3 (заголовок X-Speech-Provider)
+curl -s localhost:8000/v1/stt -H "Authorization: Bearer $ROBOT_TOKEN" \
+  -F 'audio=@q.wav;type=audio/wav' -F 'meta={"lang":null,"session_id":"s1"}'
+curl -si localhost:8000/v1/tts -H "Authorization: Bearer $ROBOT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"text":"Асхана бірінші қабатта.","lang":"kk"}' -o phrase.mp3
+
+curl -si localhost:8000/v1/places -H "Authorization: Bearer $ROBOT_TOKEN"            # ETag / If-None-Match → 304
+curl -s 'localhost:8000/v1/quick-questions?lang=kk' -H "Authorization: Bearer $ROBOT_TOKEN"
+```
+
+С эмулятора Android сервер доступен по `http://10.0.2.2:8000/v1` (с других устройств — `--host 0.0.0.0`).
+
+## Проверки
+
+```bash
+uv run pytest                 # тесты (на Fake-провайдерах, без ключей и сети)
+uv run ruff check && uv run ruff format --check
+uv run python -m eval.run_eval [--min-accuracy 0.9] [--no-lang] [--json report.json]   # eval, шаг 3.8
+LLM_PROVIDER=fake uv run python -m eval.run_eval --min-accuracy 0.9                     # eval без ключа (CI)
+```
+
+Eval использует провайдер из `.env`: без ключа — fake (проверяет пайплайн), с `GEMINI_API_KEY` — реальную модель
+(тратит запросы).
+
+## Конфигурация (env / `backend/.env`)
+
+Полный список с комментариями — `.env.example`. Главное:
+
+| Переменная | По умолчанию | |
+|---|---|---|
+| `ROBOT_TOKEN` | — (обязательно) | Bearer-токен робота; без него сервер не стартует |
+| `LLM_PROVIDER` | `auto` | `gemini` / `deepseek` / `fake`; `auto` = gemini при наличии ключа, иначе fake |
+| `VISION_PROVIDER` | `auto` | `gemini` / `fake` (у DeepSeek нет vision) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | —, `gemini-3.1-flash-lite` | основная модель /ask и /look (быстрее, больший лимит бесплатного ключа) |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | резервные модели через запятую |
+| `GEMINI_THINKING_LEVEL` | `minimal` | размышления Gemini 3.x; `GEMINI_THINKING_BUDGET` — только для 2.5 |
+| `ASK_TIMEOUT_S`, `LOOK_TIMEOUT_S` | 6.5, 11 | бюджет сервера на ответ LLM, включая повтор и резерв; иначе `504 timeout` |
+| `ASK_STREAM_TOTAL_S` | 12 | SSE /ask: предел на весь стрим |
+| `RATE_LIMIT_PER_MIN` | 30 | на токен, in-memory (один процесс) |
+| `KNOWLEDGE_DIR` | `./knowledge` | YAML-база (источник по умолчанию) |
+| `KNOWLEDGE_SHEET_ID`, `KNOWLEDGE_SYNC_INTERVAL_S` | —, 300 | база из Google-таблицы (см. ниже) |
+| `STT_PROVIDER`, `TTS_PROVIDER` | `auto`, `auto` | голос через сервер (см. ниже) |
+| `ELEVENLABS_API_KEY`, `YANDEX_API_KEY` | — | ключи провайдеров речи |
+| `SPEECH_RATE_LIMIT_PER_MIN` | 120 | отдельный лимит для /stt и /tts |
+| `DATABASE_URL` | `sqlite:///backend/data/questions.db` | лог вопросов; Postgres — `postgresql+psycopg://user:pass@host:5432/db` (psycopg в зависимостях) |
+
+## LLM: повтор, резерв, стриминг
+
+- 503/429/таймаут/обрыв соединения у основной модели → 1 быстрый повтор, если после него ещё остаётся время на
+  резерв; затем модели из `GEMINI_FALLBACK_MODELS`. Если основная молчит дольше `GEMINI_HEDGE_AFTER_S` (3 с),
+  резервная запускается параллельно — побеждает первый ответ. Всё укладывается в `ASK_TIMEOUT_S` / `LOOK_TIMEOUT_S`
+  (робот ждёт 8 / 12 с). Какая модель ответила — в логе (`ask_answered.provider`, `llm_fallback_used`) и в колонке
+  `provider` лога вопросов. Реализация — `app/llm/fallback.py`.
+- Размышления: для Gemini 3.x передаётся `thinking_level=minimal` (в замерах — 0 thought-токенов);
+  внутренние ретраи SDK выключены.
+- SSE (`Accept: text/event-stream`): ответ модели стримится, событие `phrase` уходит, как только модель дописала
+  предложение (`app/streaming.py` разбирает JSON на лету). `found=false` → стандартный отказ на языке вопроса.
+  Повтор/резерв работают до первого куска ответа.
+
+## Голос через сервер (/v1/stt, /v1/tts)
+
+STT и TTS выбираются раздельно (`app/speech/`):
+
+| | `auto` выбирает | Реализации |
+|---|---|---|
+| STT (`STT_PROVIDER`) | elevenlabs → gemini → fake | `GeminiSttProvider`, `ElevenLabsProvider` (Scribe), `YandexSpeechKitProvider`, `FakeSpeechProvider` |
+| TTS (`TTS_PROVIDER`) | elevenlabs → yandex → fake | `ElevenLabsProvider`, `YandexSpeechKitProvider`, `FakeSpeechProvider` |
+
+Сейчас (есть только ключ Gemini): **STT = gemini, TTS = fake**. Все ответы `/v1/tts` несут заголовок
+`X-Speech-Provider: <имя>`; при `fake` тело — беззвучный MP3, и робот озвучивает фразу встроенным синтезом.
+
+Общее для STT: WAV проверяется (не PCM 16-bit mono 16 кГц → 400; > 600 КБ или > 15 с → 413); тишина
+(пик < `STT_SILENCE_PEAK`) → пустой текст без вызова провайдера; «транскрипты» без букв (`00:00`, `[music]`) →
+пустой текст. Аудио посетителей не сохраняется и не логируется: в лог идут длительность, язык, задержка.
+
+- **Gemini STT**: `gemini-3.1-flash-lite` (резерв `gemini-3.5-flash`), JSON `{lang, text}` — транскрипт и язык
+  одним запросом, ~2–3 с на фразу 2–3 с. `gemini-3.5-transcribe` не используем: нет JSON-режима и языка в ответе,
+  в замерах часто 503 и до 18 с.
+- **ElevenLabs**: TTS `POST /v1/text-to-speech/{voice_id}` (`xi-api-key`, mp3): kk → `eleven_v3` (единственная
+  модель с казахским), ru/en → `eleven_flash_v2_5`, `language_code` передаётся. STT — Scribe `scribe_v2`, сырой PCM
+  (`file_format=pcm_s16le_16`), `language_code` при известном языке, иначе автоопределение; `confidence` =
+  `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs).
+- **Yandex SpeechKit** (API v1): STT `stt:recognize` (`lpcm`, 16 кГц; без `lang` — параллельно ru/kk/en и выбор
+  гипотезы, втрое дороже), TTS `tts:synthesize` (`mp3`, голоса jane / amira / john). Ключ сервисного аккаунта
+  (`Api-Key`); API v1 доступен в регионе Россия Yandex Cloud.
+- Кеш TTS по (провайдер, голос+модель, язык, текст): LRU в памяти + `data/tts_cache` с лимитом размера;
+  заголовок `X-Cache: hit|miss`.
+
+## База знаний
+
+Источник по умолчанию — YAML-файлы в `knowledge/` (**сейчас там примеры-заглушки**, не реальные данные хаба):
+
+- `facts.yaml` — факты: `id`, `keywords`, `question`/`answer` на ru/kk/en;
+- `places.yaml` — точки карты робота (`map_name` = имя в `getPlaceList`), синонимы, описания, `visual_hints` для `/look`;
+- `quick_questions.yaml` — кнопки частых вопросов.
+
+Файлы можно править на работающем сервере — изменения подхватываются за ~5 с (`KNOWLEDGE_RELOAD_INTERVAL_S`).
+Сломанный файл не роняет сервис: остаётся предыдущая версия, в логе `knowledge_reload_failed`.
+Проверка: `uv run python -m app.cli check-kb`.
+
+### Google-таблица (шаг 3.3)
+
+1. Создайте таблицу с тремя вкладками: **Факты**, **Места**, **Кнопки** (имена меняются через
+   `KNOWLEDGE_SHEET_FACTS/PLACES/BUTTONS`). Первая строка — заголовки колонок, как в шаблонах
+   `knowledge/sheet_template/{facts,places,buttons}.csv` (их можно импортировать: Файл → Импорт → вставить в текущий лист).
+2. Доступ: «Все, у кого есть ссылка — Читатель» (OAuth не нужен, сервер читает CSV-экспорт
+   `…/gviz/tq?tqx=out:csv&sheet=<вкладка>`).
+3. В `.env`: `KNOWLEDGE_SHEET_ID=<часть ссылки между /d/ и /edit>`. Проверить: `uv run python -m app.cli sync-kb`.
+
+| Вкладка | Колонки (обязательные — **жирным**) |
+|---|---|
+| Факты | **id**, active, tags, keywords, question_ru, question_kk, question_en, **answer_ru / answer_kk / answer_en** (хотя бы один) |
+| Места | **id**, active, **map_name**, name_ru, name_kk, name_en, synonyms, description_ru, description_kk, description_en, visual_hints, photos |
+| Кнопки | **id**, active, **text_ru / text_kk / text_en** (хотя бы один) |
+
+- `active`: `нет` / `no` / `0` / `false` — строка не используется (удобно временно выключить факт).
+- Списки (`tags`, `keywords`, `synonyms`, `photos`) — через запятую или `;`.
+- Ответы — 1–3 коротких предложения, без markdown, ссылок, эмодзи (их озвучивает робот).
+- Строки без обязательных полей пропускаются (`sheet_row_skipped` в логе); дубликаты `id` и пустая вкладка
+  фактов — ошибка синхронизации.
+
+Поведение: при старте база читается из таблицы, затем синхронизируется раз в `KNOWLEDGE_SYNC_INTERVAL_S`
+(по умолчанию 5 мин). При ошибке (нет сети, таблица закрыта, битые данные) сервер остаётся на последней удачной
+версии. Удачная синхронизация сохраняет снимок в `data/knowledge_snapshot.json`; если при старте таблица
+недоступна — база берётся из снимка, а если нет и его — из YAML.
+
+Поиск на MVP — «вся база в контексте» LLM: база идёт в system instruction стабильным префиксом
+(Gemini кеширует его неявно). Источник скрыт за интерфейсом `KnowledgeSource` (`app/knowledge/source.py`).
+
+## Лог вопросов
+
+Каждый `/ask` и `/look` пишется в таблицу `question_log` (только текст: вопрос, ответ, язык, место, `found`,
+источники, задержка, провайдер и модель). Кадры камеры и аудио не сохраняются.
+
+```bash
+uv run python -m app.cli export-csv --out questions.csv               # всё
+uv run python -m app.cli export-csv --out unanswered.csv --unanswered # только «без ответа»
+```
+
+## Прочее
+
+```bash
+uv run python -m app.cli openapi --out openapi.json   # обновить OpenAPI-схему
+docker build -t astana-hub-backend .                   # образ: uv, non-root, порт 8000, healthcheck /v1/health
+docker run --rm -p 8000:8000 --env-file .env -v hub-data:/app/data astana-hub-backend
+```
+
+## Структура
+
+```
+app/
+  main.py          create_app(), выбор источника базы, фоновый синк таблицы, X-Request-Id + access-лог
+  api.py           эндпоинты v1, авторизация, rate limit, SSE, multipart
+  service.py       логика /ask (JSON и стрим) и /look: база → промпт → LLM → очистка → фразы → лог
+  streaming.py     разбор JSON-ответа модели на лету (фразы по готовности)
+  prompts.py       промпты и тексты отказов
+  lang.py          определение языка ru/kk/en
+  text.py          очистка для TTS, разбиение на фразы ≤ 300 символов
+  llm/             LLMProvider: gemini.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
+  speech/          STT/TTS: gemini_stt.py, elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
+  speech_api.py    эндпоинты /v1/stt, /v1/tts
+  knowledge/       модель базы, YAML-источник, Google-таблица (sheets.py), горячая перезагрузка
+  db.py            лог вопросов (SQLAlchemy), экспорт CSV
+  cli.py           export-csv, openapi, check-kb, sync-kb
+knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
+eval/              questions.yaml + run_eval.py (шаг 3.8)
+tests/             pytest
+```

@@ -1,0 +1,169 @@
+# ==========================================================================
+# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ, НЕ ПРОВЕРЕННЫЕ ДАННЫЕ ASTANA HUB.
+# Нужны только для разработки и тестов. Перед пилотом заменить на реальную
+# базу (Google-таблица, шаг 3.2–3.3).
+#
+# Формат факта:
+#   id        — уникальный идентификатор (в ответе API: "fact:<id>")
+#   tags      — темы (для фильтров/аналитики)
+#   keywords  — ключевые слова и синонимы на всех языках (помогают поиску)
+#   question  — типичная формулировка вопроса ru/kk/en (необязательно)
+#   answer    — ответ ru/kk/en: 1–3 коротких предложения, без markdown, ссылок, эмодзи
+# Файл можно править на лету: сервер перечитает его без перезапуска (≈5 с).
+# ==========================================================================
+facts:
+  - id: wifi
+    tags: [infrastructure]
+    keywords: [wifi, wi-fi, вайфай, интернет, пароль, сеть, internet, password, құпиясөз]
+    question:
+      ru: Какой пароль от Wi-Fi?
+      kk: Wi-Fi құпиясөзі қандай?
+      en: What is the Wi-Fi password?
+    answer:
+      ru: Гостевая сеть называется AstanaHub-Guest. Пароль указан на табличке у ресепшена.
+      kk: Қонақтарға арналған желі AstanaHub-Guest деп аталады. Құпиясөз ресепшен жанындағы тақтайшада жазылған.
+      en: The guest network is called AstanaHub-Guest. The password is on the sign at the reception desk.
+
+  - id: hours
+    tags: [general]
+    keywords: [часы, график, работает, открыт, время, режим, hours, open, schedule, жұмыс, уақыт, ашық]
+    question:
+      ru: Во сколько открывается хаб?
+      kk: Хаб қашан ашылады?
+      en: What are the opening hours?
+    answer:
+      ru: Хаб открыт по будням с 9 до 21 часа, в субботу с 10 до 18 часов. В воскресенье выходной.
+      kk: Хаб жұмыс күндері сағат 9-дан 21-ге дейін, сенбіде 10-нан 18-ге дейін ашық. Жексенбі демалыс күні.
+      en: The hub is open on weekdays from 9 am to 9 pm and on Saturday from 10 am to 6 pm. It is closed on Sunday.
+
+  - id: address
+    tags: [general]
+    keywords: [адрес, находится, address, located, мекенжай, расположен]
+    question:
+      ru: Какой адрес у Astana Hub?
+      kk: Astana Hub мекенжайы қандай?
+      en: What is the address of Astana Hub?
+    answer:
+      ru: Astana Hub находится в Астане, проспект Мангилик Ел, 55/8, павильон C4.6.
+      kk: Astana Hub Астана қаласында, Мәңгілік Ел даңғылы, 55/8, C4.6 павильонында орналасқан.
+      en: Astana Hub is located in Astana at 55/8 Mangilik El Avenue, pavilion C4.6.
+
+  - id: about
+    tags: [general]
+    keywords: [astana hub, что такое, технопарк, technopark, деген не]
+    question:
+      ru: Что такое Astana Hub?
+      kk: Astana Hub деген не?
+      en: What is Astana Hub?
+    answer:
+      ru: Astana Hub это международный технопарк IT-стартапов. Здесь работают стартапы, проходят акселерации и мероприятия.
+      kk: Astana Hub IT-стартаптардың халықаралық технопаркі. Мұнда стартаптар жұмыс істейді, акселерациялар мен іс-шаралар өтеді.
+      en: Astana Hub is an international technology park for IT startups. Startups work here and accelerator programs and events take place.
+
+  - id: coworking
+    tags: [spaces]
+    keywords: [коворкинг, рабочее место, поработать, coworking, workspace, desk, жұмыс орны]
+    question:
+      ru: Где можно поработать с ноутбуком?
+      kk: Ноутбукпен қай жерде жұмыс істеуге болады?
+      en: Where can I work with my laptop?
+    answer:
+      ru: Открытый коворкинг находится на втором этаже. Для гостей он бесплатный, нужно зарегистрироваться на ресепшене.
+      kk: Ашық коворкинг екінші қабатта орналасқан. Қонақтар үшін тегін, ресепшенде тіркелу керек.
+      en: The open coworking area is on the second floor. It is free for guests, just register at the reception.
+
+  - id: cafe
+    tags: [food]
+    keywords: [кафе, кофе, поесть, еда, столовая, обед, cafe, coffee, food, lunch, асхана, тамақ]
+    question:
+      ru: Где здесь можно поесть?
+      kk: Мұнда қай жерде тамақтануға болады?
+      en: Where can I get something to eat?
+    answer:
+      ru: Кафе находится на первом этаже справа от главного входа. Оно работает с 9 до 19 часов.
+      kk: Кафе бірінші қабатта, басты кіреберістің оң жағында. Сағат 9-дан 19-ға дейін жұмыс істейді.
+      en: The cafe is on the first floor to the right of the main entrance. It is open from 9 am to 7 pm.
+
+  - id: toilet
+    tags: [infrastructure]
+    keywords: [туалет, уборная, санузел, toilet, restroom, bathroom, wc, дәретхана]
+    question:
+      ru: Где туалет?
+      kk: Дәретхана қайда?
+      en: Where is the restroom?
+    answer:
+      ru: Туалеты есть на каждом этаже рядом с лифтами.
+      kk: Дәретханалар әр қабатта лифтілердің жанында орналасқан.
+      en: Restrooms are on every floor next to the elevators.
+
+  - id: meeting_rooms
+    tags: [spaces]
+    keywords: [переговорн, забронировать, бронь, meeting room, book, booking, келіссөз, брондау]
+    question:
+      ru: Как забронировать переговорную?
+      kk: Келіссөз бөлмесін қалай брондауға болады?
+      en: How can I book a meeting room?
+    answer:
+      ru: Переговорные бронируются на ресепшене или через администратора этажа. Резиденты хаба бронируют их бесплатно.
+      kk: Келіссөз бөлмелерін ресепшенде немесе қабат әкімшісі арқылы брондауға болады. Хаб резиденттері үшін тегін.
+      en: Meeting rooms can be booked at the reception or through the floor administrator. Booking is free for hub residents.
+
+  - id: residency
+    tags: [programs]
+    keywords: [резидент, резидентство, статус, льготы, resident, residency, резиденттік]
+    question:
+      ru: Как стать резидентом Astana Hub?
+      kk: Astana Hub резиденті қалай болуға болады?
+      en: How do I become an Astana Hub resident?
+    answer:
+      ru: Чтобы стать резидентом, нужно подать онлайн-заявку на сайте Astana Hub. Резиденты получают налоговые льготы и доступ к программам хаба.
+      kk: Резидент болу үшін Astana Hub сайтында онлайн-өтінім беру керек. Резиденттер салықтық жеңілдіктер мен хаб бағдарламаларына қол жеткізеді.
+      en: To become a resident, submit an online application on the Astana Hub website. Residents get tax benefits and access to hub programs.
+
+  - id: accelerator
+    tags: [programs]
+    keywords: [акселерат, инкубат, программа, accelerator, incubator, program, акселерация, бағдарлама]
+    question:
+      ru: Есть ли у вас акселерационные программы?
+      kk: Сіздерде акселерациялық бағдарламалар бар ма?
+      en: Do you have accelerator programs?
+    answer:
+      ru: Да, хаб регулярно проводит акселерационные программы для стартапов на разных стадиях. Расписание наборов можно узнать на ресепшене.
+      kk: Иә, хаб әр кезеңдегі стартаптарға арналған акселерациялық бағдарламаларды жүйелі түрде өткізеді. Қабылдау кестесін ресепшеннен білуге болады.
+      en: Yes, the hub regularly runs accelerator programs for startups at different stages. You can ask at the reception about upcoming intakes.
+
+  - id: events_registration
+    tags: [events]
+    keywords: [регистрац, хакатон, мероприят, ивент, event, hackathon, registration, тіркеу, іс-шара]
+    question:
+      ru: Где проходит регистрация на мероприятие?
+      kk: Іс-шараға тіркеу қай жерде өтеді?
+      en: Where is the event registration?
+    answer:
+      ru: Регистрация на мероприятия проходит у стойки ресепшена на первом этаже. Возьмите с собой удостоверение личности.
+      kk: Іс-шараларға тіркеу бірінші қабаттағы ресепшен үстелінде өтеді. Жеке куәлігіңізді алыңыз.
+      en: Event registration is at the reception desk on the first floor. Please bring your ID.
+
+  - id: parking
+    tags: [infrastructure]
+    keywords: [парковк, машин, автомобиль, parking, car, park, көлік, тұрақ]
+    question:
+      ru: Где можно припарковаться?
+      kk: Көлікті қай жерге қоюға болады?
+      en: Where can I park?
+    answer:
+      ru: Бесплатная парковка для гостей находится перед главным входом в павильон.
+      kk: Қонақтарға арналған тегін көлік тұрағы павильонның басты кіреберісінің алдында.
+      en: Free guest parking is in front of the main entrance of the pavilion.
+
+  - id: lost_found
+    tags: [infrastructure]
+    keywords: [потерял, забыл, находк, lost, found, forgot, жоғалт, ұмыт]
+    question:
+      ru: Я потерял вещь, куда обратиться?
+      kk: Мен затымды жоғалттым, қайда хабарласуға болады?
+      en: I lost something, where should I go?
+    answer:
+      ru: Потерянные вещи хранятся на ресепшене на первом этаже. Обратитесь к администратору.
+      kk: Жоғалған заттар бірінші қабаттағы ресепшенде сақталады. Әкімшіге хабарласыңыз.
+      en: Lost items are kept at the reception on the first floor. Please ask the administrator.

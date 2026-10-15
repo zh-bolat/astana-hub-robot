@@ -1,0 +1,40 @@
+[project]
+name = "astana-hub-backend"
+version = "0.1.0"
+description = "Astana Hub Robot backend: /v1/ask, /v1/look, knowledge base, LLM"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143.1",
+    "google-genai>=2.31.0",
+    "openai>=3.31.0",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.4",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# E501: длину строк держит ruff format; длинные строки промптов — норма
+# RUF001-003: кириллица в строках/комментариях — норма
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]

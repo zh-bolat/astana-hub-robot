@@ -1,0 +1,28 @@
+# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ. Кнопки частых вопросов на экране робота (шаг 7.3).
+# Нажатие кнопки = POST /v1/ask с текстом кнопки на текущем языке.
+items:
+  - id: wifi
+    text:
+      ru: Какой пароль от Wi-Fi?
+      kk: Wi-Fi құпиясөзі қандай?
+      en: What is the Wi-Fi password?
+  - id: hours
+    text:
+      ru: Во сколько работает хаб?
+      kk: Хаб қашан жұмыс істейді?
+      en: What are the opening hours?
+  - id: cafe
+    text:
+      ru: Где можно поесть?
+      kk: Қай жерде тамақтануға болады?
+      en: Where can I eat?
+  - id: coworking
+    text:
+      ru: Где можно поработать?
+      kk: Қай жерде жұмыс істеуге болады?
+      en: Where can I work?
+  - id: residency
+    text:
+      ru: Как стать резидентом?
+      kk: Резидент қалай болуға болады?
+      en: How to become a resident?
