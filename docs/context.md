@@ -45,6 +45,16 @@
 - Стек утверждён 2026-10-15 (`docs/stack.md`): Android — Kotlin + XML Views; backend — Python/FastAPI + Gemini (текст и vision), DeepSeek как альтернатива для текста; база знаний — Google-таблица → Postgres; хостинг — зарубежный VPS. План работ — `docs/roadmap.md`.
 - При отсутствии RU/KZ в ASR/TTS робота — сторонние сервисы (Yandex SpeechKit / Google / Azure), если удастся получить сырой звук.
 
+## Факты с первого визита к роботу (2026-10-15)
+- Прошивка робота: **OrionStar OS 10.4 OS-R-SG** (RobotOS), не AgentOS V12.6 → AgentOS SDK не работает. Используем flavor `robotos` с `robotservice.jar` из официального примера [OrionStarGIT/RobotSample](https://github.com/OrionStarGIT/RobotSample) (RobotOS-Version 5.2.2026051505): RobotApi, SkillApi, SurfaceShareApi. Версию jar под 10.4 подтвердить у OrionStar.
+- У робота есть встроенный синтез речи на русском → RU/EN озвучивает робот, KZ — сервер (ElevenLabs `eleven_v3`, единственная их модель с казахским).
+- Распознавание речи — на сервере через Gemini (`gemini-3.1-flash-lite`, JSON `{lang, text}`), проверено на RU/KZ/EN.
+- Gemini: доступны `gemini-3.1-flash-lite` (основная, ~2 с) и `gemini-3.5-flash` (резерв, часто 503); `gemini-2.5-flash` недоступна новым пользователям. Бесплатный ключ упирается в 429 при серии запросов → для пилота нужен платный.
+- В одной из сетей API Gemini (`generativelanguage.googleapis.com`) обрывался на TLS-рукопожатии, в сети хаба — работает. В эксплуатации — сервер на VPS в Европе.
+- ADB по Wi-Fi на роботе изначально закрыт (порт 5555 refused); открытые порты робота 6670/6671/7890/9191 — не ADB. APK удалось поставить через браузер робота с HTTP-сервера на ноутбуке.
+- Интерфейс по умолчанию был слишком крупным на 14" → масштаб считается от ширины экрана (1600 dp на 1920 px) + ползунок на экране диагностики.
+- Подробно: `docs/robot-setup.md`, `docs/architecture.md`.
+
 ## Ссылки
 - ТЗ: https://claude.ai/code/artifact/8fa31ed9-94b4-4d7e-8909-f90be8e07ab1
 - SDK репозиторий: https://github.com/orionagent/agentos-sdk
