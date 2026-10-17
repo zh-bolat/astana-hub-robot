@@ -32,7 +32,7 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/hub.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/questions.db}
     volumes:
       - api-data:/data
     # Публикуется только на localhost: снаружи доступ лишь через caddy.
