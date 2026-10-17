@@ -77,6 +77,17 @@
             android:visibility="gone"
             tools:visibility="visible" />
 
+        <TextView
+            android:id="@+id/micOffBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/mic_off_badge"
+            android:textColor="@color/hub_offline"
+            android:textSize="@dimen/text_label"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
         <Space
             android:layout_width="match_parent"
             android:layout_height="0dp"

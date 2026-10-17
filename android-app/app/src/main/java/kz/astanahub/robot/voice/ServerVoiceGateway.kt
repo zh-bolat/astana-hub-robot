@@ -7,8 +7,12 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.audio.Mp3Player
 import kz.astanahub.robot.audio.VadConfig
@@ -72,12 +77,18 @@ class ServerVoiceGateway(
     private val _micLevel = MutableStateFlow(0f)
     val micLevel: StateFlow<Float> = _micLevel
 
-    private val sessionId = UUID.randomUUID().toString()
+    /** session_id для /v1/stt: тот же, что у экрана (RoutingVoiceGateway.setSessionId). */
+    @Volatile var sttSessionId: String = UUID.randomUUID().toString()
 
     /** Подсказка языка для STT; null — автоопределение на сервере. */
     @Volatile var sttLangHint: Lang? = null
 
-    private val speaking = MutableStateFlow(false)
+    /** Своя озвучка (speakDetailed). */
+    private val ownSpeaking = MutableStateFlow(false)
+    /** Любая озвучка робота + хвост тишины — от RoutingVoiceGateway. */
+    private val externalSpeech = MutableStateFlow(false)
+    private val muted = combine(ownSpeaking, externalSpeech) { own, ext -> own || ext }
+    private fun isMuted() = ownSpeaking.value || externalSpeech.value
     @Volatile private var stopRequested = false
 
     private var listenJob: Job? = null
@@ -85,10 +96,22 @@ class ServerVoiceGateway(
 
     fun hasMicPermission() = recorder.hasPermission()
 
+    /**
+     * Робот говорит (любой голос) или только что закончил: не пишем, текущую запись отменяем —
+     * иначе распознаем собственную речь и перебьём сами себя.
+     */
+    fun setSpeechActive(active: Boolean) {
+        externalSpeech.value = active
+    }
+
     /** Одна фраза по кнопке микрофона (эмулятор, диагностика). */
     fun listenOnce() {
         if (listenJob?.isActive == true) return
-        listenJob = scope.launch { listenUtterance() }
+        listenJob = scope.launch {
+            // Кнопку нажали сразу после «Стоп»: дождаться тишины (хвост ~300 мс), но не вечно.
+            withTimeoutOrNull(PTT_WAIT_FOR_SILENCE_MS) { muted.first { !it } }
+            listenUtterance()
+        }
     }
 
     /** Постоянное прослушивание (робот в режиме server/hybrid): пауза на время озвучки — без эха. */
@@ -98,7 +121,7 @@ class ServerVoiceGateway(
         listenJob?.cancel()
         listenJob = if (enabled) scope.launch {
             while (isActive && continuous) {
-                speaking.first { !it }
+                muted.first { !it }
                 if (!listenUtterance()) delay(ERROR_BACKOFF_MS)
             }
         } else null
@@ -122,9 +145,14 @@ class ServerVoiceGateway(
         }
         _activity.value = VoiceActivity.LISTENING
         val result = try {
-            recorder.recordUtterance(vadConfig) { _micLevel.value = it }
+            cancelOnSpeech { recorder.recordUtterance(vadConfig) { _micLevel.value = it } }
         } finally {
+            _micLevel.value = 0f
             if (_activity.value == VoiceActivity.LISTENING) _activity.value = VoiceActivity.IDLE
+        }
+        if (result == null) {
+            Timber.d("recording cancelled: robot is speaking")
+            return true
         }
         return when (result) {
             is MicRecorder.Result.NoSpeech -> true
@@ -137,7 +165,7 @@ class ServerVoiceGateway(
                 val audioMillis = result.pcm.size * 1000L / vadConfig.sampleRate
                 _transcripts.tryEmit(Transcript("…", isFinal = false))
                 val started = SystemClock.elapsedRealtime()
-                val stt = backend.stt(WavEncoder.encode(result.pcm, vadConfig.sampleRate), sttLangHint, sessionId)
+                val stt = backend.stt(WavEncoder.encode(result.pcm, vadConfig.sampleRate), sttLangHint, sttSessionId)
                 val latency = SystemClock.elapsedRealtime() - started
                 when (stt) {
                     is ApiResult.Success -> {
@@ -158,6 +186,21 @@ class ServerVoiceGateway(
         }
     }
 
+    /** [block] отменяется, как только робот заговорит; null — отменено (или уже говорит). */
+    private suspend fun <T> cancelOnSpeech(block: suspend () -> T): T? = coroutineScope {
+        if (isMuted()) return@coroutineScope null
+        val work = async { block() }
+        val watcher = launch { muted.first { it }; work.cancel() }
+        try {
+            work.await()
+        } catch (e: CancellationException) {
+            ensureActive() // отменили нас самих — пробрасываем
+            null
+        } finally {
+            watcher.cancel()
+        }
+    }
+
     override suspend fun speak(phrases: List<String>, lang: Lang): Boolean =
         speakDetailed(phrases, lang) == ServerSpeakResult.Done
 
@@ -165,7 +208,7 @@ class ServerVoiceGateway(
     suspend fun speakDetailed(phrases: List<String>, lang: Lang): ServerSpeakResult {
         if (phrases.isEmpty()) return ServerSpeakResult.Done
         stopRequested = false
-        speaking.value = true
+        ownSpeaking.value = true
         _activity.value = VoiceActivity.SPEAKING
         var next: Deferred<ApiResult<ByteArray>> = scope.async { backend.tts(phrases[0], lang) }
         try {
@@ -186,7 +229,7 @@ class ServerVoiceGateway(
             return ServerSpeakResult.Done
         } finally {
             next.cancel()
-            speaking.value = false
+            ownSpeaking.value = false
             _activity.value = VoiceActivity.IDLE
         }
     }
@@ -200,7 +243,12 @@ class ServerVoiceGateway(
         sttLangHint = lang
     }
 
+    override fun setSessionId(id: String) {
+        sttSessionId = id
+    }
+
     private companion object {
         const val ERROR_BACKOFF_MS = 2_000L
+        const val PTT_WAIT_FOR_SILENCE_MS = 2_000L
     }
 }

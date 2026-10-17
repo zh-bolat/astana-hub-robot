@@ -32,16 +32,17 @@ object FlavorGateways {
             override fun onSuspend() = robot.setControlAvailable(false)
             override fun onRecovery() = robot.setControlAvailable(true)
         }
-        robot = RobotApiGateway(app) {
+        robot = RobotApiGateway(app, onConnected = {
             RobotApi.getInstance().setCallback(moduleCallback)
             RobotApi.getInstance().setResponseThread(callbackThread)
             voice.connect(app)
-        }
+        })
         return Gateways(
             builtinVoice = voice,
             builtinMic = voice,
             robot = robot,
             camera = SurfaceShareCameraGateway(),
+            builtinAsrAvailable = true,
         )
     }
 }

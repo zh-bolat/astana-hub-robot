@@ -5,6 +5,7 @@ import android.os.Bundle
 import com.ainirobot.agent.AgentCore
 import com.ainirobot.agent.AppAgent
 import com.ainirobot.agent.action.Action
+import kz.astanahub.robot.core.sdkCall
 import timber.log.Timber
 
 /**
@@ -25,8 +26,13 @@ object HubAppAgent {
 
     @Volatile private var agent: AppAgent? = null
 
+    /** Ошибка SDK (не та прошивка, нет AgentOS) не должна ронять Application.onCreate. */
     fun install(app: Application, voice: AgentVoiceGateway) {
         if (agent != null) return
+        sdkCall("AppAgent install") { create(app, voice) }
+    }
+
+    private fun create(app: Application, voice: AgentVoiceGateway) {
         agent = object : AppAgent(app) {
             override fun onCreate() {
                 setPersona(PERSONA)

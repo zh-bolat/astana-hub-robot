@@ -7,14 +7,21 @@ import com.ainirobot.coreservice.client.speech.SkillApi
 import com.ainirobot.coreservice.client.speech.SkillCallback
 import com.ainirobot.coreservice.client.speech.entity.TTSEntity
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import kz.astanahub.robot.core.EchoGate
 import kz.astanahub.robot.core.Lang
+import kz.astanahub.robot.core.Reconnector
+import kz.astanahub.robot.core.sdkCall
 import kz.astanahub.robot.voice.BuiltinMicControl
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
@@ -27,11 +34,20 @@ import timber.log.Timber
  * TTS — playText(TTSEntity, TextListener), ASR — SkillCallback.onSpeechParResult / onQueryAsrResult.
  * Запрос, который система разобрала сама, приходит в ModuleCallbackApi.onSendRequest — его перехватываем
  * (return true) и тоже отдаём сюда как фразу, чтобы системный помощник не отвечал вместо нас.
+ * Все вызовы SkillApi — через [sdkCall]: исключение SDK не роняет приложение.
+ * Пока робот говорит сам (и ~300 мс после) результаты ASR игнорируются — это эхо своей речи.
  * ВСЁ — ПРОВЕРИТЬ НА РОБОТЕ: какие колбэки реально приходят, язык ASR/TTS.
  */
-class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
+class SkillVoiceGateway(
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    skillApiFactory: () -> SkillApi = { SkillApi() },
+    private val echo: EchoGate = EchoGate(),
+) : VoiceGateway, BuiltinMicControl {
 
-    private val skillApi = SkillApi()
+    private val skillApi: SkillApi? = sdkCall("new SkillApi") { skillApiFactory() }
+    private val listenerAdded = AtomicBoolean(false)
+    @Volatile private var appContext: Context? = null
+    private val reconnector = Reconnector(scope, "SkillApi", isConnected = { skillConnected }, connect = ::connectApi)
     @Volatile var skillConnected: Boolean = false
         private set
 
@@ -46,7 +62,8 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
 
     private val callback = object : SkillCallback() {
         override fun onSpeechParResult(s: String?) {
-            if (!s.isNullOrBlank()) _transcripts.tryEmit(Transcript(s, isFinal = false))
+            if (s.isNullOrBlank() || echo.suppressed()) return
+            _transcripts.tryEmit(Transcript(s, isFinal = false))
         }
 
         override fun onStart() {
@@ -75,25 +92,50 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
         }
     }
 
-    /** Подключение SkillApi — после RobotApi.handleApiConnected (как в RobotSample). */
+    private val apiListener = object : ApiListener {
+        override fun handleApiDisabled() {
+            Timber.w("SkillApi disabled"); skillConnected = false
+        }
+
+        override fun handleApiConnected() {
+            Timber.i("SkillApi connected")
+            skillConnected = true
+            reconnector.reset()
+            val api = skillApi ?: return
+            // Повторное подключение не должно давать второй экземпляр колбэка.
+            sdkCall("SkillApi.unregisterCallBack") { api.unregisterCallBack(callback) }
+            sdkCall("SkillApi.registerCallBack") { api.registerCallBack(callback) }
+            applyRecognizable()
+        }
+
+        override fun handleApiDisconnected() {
+            Timber.w("SkillApi disconnected"); skillConnected = false
+            reconnector.schedule()
+        }
+    }
+
+    /**
+     * Подключение SkillApi — после RobotApi.handleApiConnected (как в RobotSample).
+     * Идемпотентно: при каждом переподключении RobotApi вызывается снова, listener регистрируется один раз,
+     * уже подключённый SkillApi не трогаем.
+     */
     fun connect(context: Context) {
-        skillApi.addApiEventListener(object : ApiListener {
-            override fun handleApiDisabled() {
-                Timber.w("SkillApi disabled"); skillConnected = false
-            }
+        appContext = context.applicationContext
+        val api = skillApi ?: return
+        if (listenerAdded.compareAndSet(false, true)) {
+            sdkCall("SkillApi.addApiEventListener") { api.addApiEventListener(apiListener) }
+        }
+        if (skillConnected) {
+            Timber.d("SkillApi already connected")
+            return
+        }
+        connectApi()
+    }
 
-            override fun handleApiConnected() {
-                Timber.i("SkillApi connected")
-                skillConnected = true
-                skillApi.registerCallBack(callback)
-                applyRecognizable()
-            }
-
-            override fun handleApiDisconnected() {
-                Timber.w("SkillApi disconnected"); skillConnected = false
-            }
-        })
-        skillApi.connectApi(context.applicationContext)
+    private fun connectApi() {
+        val api = skillApi ?: return
+        val ctx = appContext ?: return
+        sdkCall("SkillApi.connectApi") { api.connectApi(ctx) }
     }
 
     /** Из ModuleCallbackApi.onSendRequest: текст запроса, который система распознала. */
@@ -106,6 +148,10 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
     private fun emitFinal(text: String?, source: String) {
         val t = text?.trim().orEmpty()
         if (t.isEmpty() || !recognizable) return
+        if (echo.suppressed()) {
+            Timber.d("builtin ASR [%s] ignored: robot is speaking (len=%d)", source, t.length)
+            return
+        }
         val now = System.currentTimeMillis()
         val last = lastFinal
         if (last != null && last.first == t && now - last.second < DEDUP_WINDOW_MS) return
@@ -115,11 +161,13 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
     }
 
     override suspend fun speak(phrases: List<String>, lang: Lang): Boolean {
-        if (!skillConnected) {
+        val api = skillApi
+        if (!skillConnected || api == null) {
             Timber.w("SkillApi not connected, TTS skipped")
             return false
         }
         _activity.value = VoiceActivity.SPEAKING
+        echo.begin()
         try {
             for (phrase in phrases) {
                 val ok = withTimeoutOrNull(TTS_BASE_TIMEOUT_MS + phrase.length * TTS_MS_PER_CHAR) {
@@ -129,21 +177,24 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
                             override fun onStop() { if (cont.isActive) cont.resume(false) }
                             override fun onError() { if (cont.isActive) cont.resume(false) }
                         }
-                        cont.invokeOnCancellation { runCatching { skillApi.stopTTS() } }
+                        cont.invokeOnCancellation { sdkCall("SkillApi.stopTTS") { api.stopTTS() } }
                         // TODO ПРОВЕРИТЬ НА РОБОТЕ: язык/голос TTS (setTTSParams / getSpokemanListByLanguage).
-                        skillApi.playText(TTSEntity("sid-" + UUID.randomUUID(), phrase), listener)
+                        sdkCall("SkillApi.playText") { api.playText(TTSEntity("sid-" + UUID.randomUUID(), phrase), listener) }
+                            ?: run { if (cont.isActive) cont.resume(false) }
                     }
                 } ?: false
                 if (!ok) return false
             }
             return true
         } finally {
+            echo.end()
             _activity.value = VoiceActivity.IDLE
         }
     }
 
     override fun stopSpeaking() {
-        if (skillConnected) runCatching { skillApi.stopTTS() }
+        val api = skillApi ?: return
+        if (skillConnected) sdkCall("SkillApi.stopTTS") { api.stopTTS() }
     }
 
     override fun setLanguage(lang: Lang) {
@@ -158,10 +209,10 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
     }
 
     private fun applyRecognizable() {
+        val api = skillApi ?: return
         if (!skillConnected) return
-        runCatching { skillApi.setRecognizable(recognizable) }
-            .onSuccess { Timber.i("SkillApi.setRecognizable(%s)", recognizable) }
-            .onFailure { Timber.e(it, "setRecognizable") }
+        sdkCall("SkillApi.setRecognizable") { api.setRecognizable(recognizable) }
+            ?.let { Timber.i("SkillApi.setRecognizable(%s)", recognizable) }
     }
 
     private companion object {

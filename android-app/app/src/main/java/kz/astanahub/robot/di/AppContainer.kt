@@ -4,7 +4,10 @@ import android.app.Application
 import kz.astanahub.robot.BuildConfig
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.audio.Mp3Player
+import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.BackendSettings
+import kz.astanahub.robot.backend.FileQuickQuestionCache
+import okhttp3.OkHttpClient
 import kz.astanahub.robot.backend.BackendUrlPolicy
 import kz.astanahub.robot.security.DiagAccess
 import kz.astanahub.robot.security.DiagPinGuard
@@ -37,6 +40,8 @@ class Gateways(
     val builtinMic: BuiltinMicControl,
     val robot: RobotGateway,
     val camera: CameraGateway,
+    /** Есть настоящее встроенное распознавание (robot/robotos) — на него откат без связи. */
+    val builtinAsrAvailable: Boolean = false,
 )
 
 /** Ручной DI: один экземпляр на приложение, создаётся в [kz.astanahub.robot.AstanaHubApp]. */
@@ -65,16 +70,22 @@ class AppContainer(app: Application) {
         session = DiagSession(android.os.SystemClock::elapsedRealtime),
     )
 
+    /** Один OkHttpClient на приложение: пул соединений и потоки общие; клиенты — через newBuilder() от него. */
+    val httpClient: OkHttpClient = RetrofitBackendApi.defaultClient()
+
     /** Адрес сервера меняется на экране диагностики без пересборки; токен — из BuildConfig. */
     val backend: SwitchableBackendApi = SwitchableBackendApi(
         initialUrl = backendSettings.current(),
-        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN) },
+        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient) },
         // Без адреса: эмулятор — заглушка, робот — честное «нет связи».
         fallback = { if (BuildConfig.IS_ROBOT) UnconfiguredBackendApi() else FakeBackendApi() },
     )
 
     val places = PlaceRepository(backend, gateways.robot, java.io.File(app.filesDir, "places.json"))
     val wayFinder = WayFinder(places, gateways.robot)
+
+    /** Кнопки частых вопросов с сервера — на диске, чтобы показать их без сети. */
+    val quickQuestionCache = FileQuickQuestionCache(app.filesDir)
 
     val voiceSettings = VoiceSettings(
         app,
@@ -91,8 +102,13 @@ class AppContainer(app: Application) {
     val micRecorder = MicRecorder(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
     val serverVoice = ServerVoiceGateway(backend, micRecorder, Mp3Player())
 
-    /** Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики. */
-    val androidTts = AndroidTtsVoiceGateway(app)
+    /**
+     * Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики.
+     * Лениво: на роботе движок поднимается, только если его открыли в диагностике.
+     */
+    private val androidTtsLazy = lazy { AndroidTtsVoiceGateway(app) }
+    val androidTts: AndroidTtsVoiceGateway by androidTtsLazy
+    val androidTtsCreated: Boolean get() = androidTtsLazy.isInitialized()
 
     /** Голос для экрана: распознавание и синтез по [voiceSettings]. */
     val voice: RoutingVoiceGateway = RoutingVoiceGateway(
@@ -102,5 +118,7 @@ class AppContainer(app: Application) {
         settings = voiceSettings,
         micControl = gateways.builtinMic,
         continuousServerAsr = BuildConfig.IS_ROBOT,
+        builtinAsrAvailable = gateways.builtinAsrAvailable,
+        healthCheck = { backend.health() is ApiResult.Success },
     )
 }

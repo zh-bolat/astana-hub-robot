@@ -20,6 +20,7 @@ object FlavorGateways {
             builtinMic = AgentMicControl,
             robot = RobotApiGateway(app),
             camera = SurfaceShareCameraGateway(),
+            builtinAsrAvailable = true,
         )
     }
 }

@@ -4,6 +4,9 @@ import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.robot.RobotGateway
 
+/** Место для офлайн-кнопки «Где X?» / «Проводите: X». */
+data class QuickPlace(val place: Place, val canGuide: Boolean)
+
 /** Ответ «где …» — полностью локальный. [guideTarget] — можно предложить «Проводить». */
 data class WayAnswer(val text: String, val place: Place?, val guideTarget: Place?)
 
@@ -28,6 +31,25 @@ class WayFinder(
             ?: return WayAnswer(WayPhrases.whereIsNoPose(name, lang, canGuide), place, place.takeIf { canGuide })
         val bearing = Directions.bearing(pose, point.x, point.y)
         return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide })
+    }
+
+    /**
+     * place_id для /ask и /look: ближайшая достижимая точка карты (id места с сервера, иначе имя на карте).
+     * null — позиция неизвестна.
+     */
+    suspend fun nearestPlaceId(): String? {
+        val pose = robot.getPosition() ?: return null
+        val nearest = repository.mapPlaces().filter { it.isReachable }
+            .minByOrNull { Directions.bearing(pose, it.x, it.y).distanceM } ?: return null
+        return repository.places().firstOrNull { it.mapName.equals(nearest.name, ignoreCase = true) }?.id ?: nearest.name
+    }
+
+    /** Места для кнопок без сети: только те, что есть на карте; [QuickPlace.canGuide] — точка достижима. */
+    suspend fun quickPlaces(): List<QuickPlace> {
+        val map = repository.mapPlaces()
+        return repository.places().mapNotNull { place ->
+            repository.findOnMap(place, map)?.let { QuickPlace(place, it.isReachable) }
+        }
     }
 
     suspend fun whereAmI(lang: Lang): WayAnswer {

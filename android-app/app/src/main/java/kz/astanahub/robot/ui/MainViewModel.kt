@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,17 +20,21 @@ import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.backend.QuickQuestion
+import kz.astanahub.robot.backend.QuickQuestionCache
 import kz.astanahub.robot.camera.CameraGateway
 import kz.astanahub.robot.core.IntentRouter
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.PhraseKey
 import kz.astanahub.robot.core.PhraseSplitter
 import kz.astanahub.robot.core.Phrases
+import kz.astanahub.robot.core.UtteranceFilter
+import kz.astanahub.robot.places.OfflineQuickButtons
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.places.WayPhrases
 import kz.astanahub.robot.robot.NavEvent
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
+import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
 import kz.astanahub.robot.core.LogSafe
@@ -70,6 +76,8 @@ class MainViewModel(
     private val robot: RobotGateway? = null,
     /** Через сколько мс бездействия показать заставку и сбросить сессию; null — выключено (тесты). */
     private val screensaverMillis: Long? = null,
+    /** Кеш кнопок частых вопросов на диске (показываем без сети). */
+    private val quickCache: QuickQuestionCache? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -84,26 +92,85 @@ class MainViewModel(
     /** Язык выбран кнопкой — тогда передаём его серверу; иначе сервер определяет сам. */
     private var langChosenExplicitly = false
 
+    /** session_id разговора; тот же уходит в /v1/stt (voice.setSessionId). */
     private var sessionId = newSessionId()
+        set(value) {
+            field = value
+            voice.setSessionId(value)
+        }
     private var lastInteraction = clock()
 
+    /** Когда последний раз говорили «нет связи» — не чаще раза в [NO_CONNECTION_REPEAT_MILLIS]. */
+    private var lastNoConnectionPhrase = Long.MIN_VALUE / 2
+
+    /** Кнопки частых вопросов пришли с сервера (а не офлайн-набор). */
+    private var quickFromServer = false
+
     init {
+        voice.setSessionId(sessionId)
         viewModelScope.launch {
-            voice.transcripts.collect { t ->
-                if (t.isFinal) {
-                    if (t.text.isNotBlank()) submit(t.text)
-                } else {
-                    wake()
-                    _state.update { it.copy(partialQuestion = t.text.ifBlank { null }) }
-                }
-            }
+            voice.transcripts.collect(::onTranscript)
         }
         viewModelScope.launch {
             voice.activity.collect { refreshPhase(); restartIdleTimer() }
         }
+        viewModelScope.launch {
+            voice.connection.collect { up -> if (up) onConnectionRestored() else onConnectionLost() }
+        }
         loadQuickQuestions()
         wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
         restartIdleTimer()
+    }
+
+    /** Робот занят: думает, смотрит, говорит или ведёт — посторонние реплики фильтруем. */
+    private fun busyForVoice(): Boolean =
+        _state.value.phase in BUSY_PHASES || navJob?.isActive == true
+
+    /**
+     * Фраза посетителя. Пока робот занят, принимаем только «стоп» или новую содержательную фразу
+     * (≥ 3 слов, не «угу/ага/да»); остальное — шум/реплики в сторону, игнорируем (в лог — без текста).
+     */
+    private fun onTranscript(t: Transcript) {
+        val busyNow = busyForVoice()
+        if (!t.isFinal) {
+            if (busyNow) return
+            wake()
+            _state.update { it.copy(partialQuestion = t.text.ifBlank { null }) }
+            return
+        }
+        val text = t.text.trim()
+        if (text.isEmpty()) {
+            if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
+            return
+        }
+        if (UtteranceFilter.isStopCommand(text)) {
+            Timber.i("voice command: stop (phase=%s)", _state.value.phase)
+            _state.update { it.copy(partialQuestion = null) }
+            stop()
+            return
+        }
+        if (busyNow && !UtteranceFilter.isSubstantial(text)) {
+            Timber.i("utterance ignored in %s (len=%d)", _state.value.phase, text.length)
+            return
+        }
+        submit(text)
+    }
+
+    /** /v1/stt не прошёл из-за связи: бейдж + «нет связи» голосом (не чаще раза в минуту и не перебивая). */
+    private fun onConnectionLost() {
+        _state.update { it.copy(offline = true, partialQuestion = null) }
+        val now = clock()
+        if (now - lastNoConnectionPhrase < NO_CONNECTION_REPEAT_MILLIS) return
+        if (busyForVoice() || requestJob?.isActive == true) return
+        lastNoConnectionPhrase = now
+        val lang = _state.value.lang
+        requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
+    }
+
+    private fun onConnectionRestored() {
+        Timber.i("connection restored")
+        _state.update { it.copy(offline = false) }
+        if (!quickFromServer) loadQuickQuestions()
     }
 
     /** Сменили адрес сервера (экран диагностики) — перечитать кнопки и места. */
@@ -226,21 +293,38 @@ class MainViewModel(
         startGuide(place)
     }
 
+    /**
+     * Ведём к [place]. Если уже едем — сначала гасим прежнюю поездку и ждём от робота подтверждения остановки
+     * (или [RobotGateway.STOP_CONFIRM_TIMEOUT_MS]), только потом startNavigation.
+     * Все фразы поездки (старт, препятствие, прибытие) — внутри navJob и отменяются вместе с ним.
+     */
     private fun startGuide(place: Place) {
         val nav = robot ?: return
         val lang = _state.value.lang
         val name = WayFinder.displayName(place, lang)
         voice.stopSpeaking()
-        navJob?.cancel()
+        val previous = navJob
         navJob = viewModelScope.launch {
+            if (previous?.isActive == true) {
+                previous.cancelAndJoin()
+                val confirmed = nav.stopNavigationAndWait(RobotGateway.STOP_CONFIRM_TIMEOUT_MS)
+                Timber.i("previous navigation stopped (confirmed=%s)", confirmed)
+            }
             _state.update { it.copy(guideTarget = null, guidingTo = name, answer = WayPhrases.guideStart(name, lang)) }
             setBusy(Phase.NAVIGATING)
+            val trip = this
             // Фраза старта звучит параллельно с началом движения.
             val startSpeech = launch { voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
+            var obstacleSpeech: Job? = null
             val result = try {
                 nav.navigateTo(place.mapName) { event ->
                     if (event == NavEvent.OBSTACLE) {
-                        viewModelScope.launch { voice.speak(listOf(WayPhrases.guideObstacle(lang)), lang) }
+                        // Колбэк SDK может прийти из чужого потока: переходим в поездку, не копим фразы.
+                        trip.launch {
+                            if (obstacleSpeech?.isActive != true) {
+                                obstacleSpeech = launch { voice.speak(listOf(WayPhrases.guideObstacle(lang)), lang) }
+                            }
+                        }
                     }
                 }
             } finally {
@@ -248,6 +332,7 @@ class MainViewModel(
                 setBusy(null)
             }
             startSpeech.join()
+            obstacleSpeech?.join()
             val text = when (result) {
                 NavigationResult.Arrived -> WayPhrases.guideArrived(name, lang)
                 NavigationResult.AlreadyThere -> WayPhrases.guideAlreadyThere(name, lang)
@@ -282,9 +367,10 @@ class MainViewModel(
 
     private suspend fun handleAsk(question: String) {
         setBusy(Phase.THINKING)
-        var result = backend.ask(question, askContext())
+        val context = askContext()
+        var result = backend.ask(question, context)
         if (result.isRateLimited()) {
-            result = retryAfterRateLimit(result) { backend.ask(question, askContext()) }
+            result = retryAfterRateLimit(result) { backend.ask(question, context) }
         }
         deliver(result)
     }
@@ -298,14 +384,15 @@ class MainViewModel(
             return
         }
         setBusy(Phase.THINKING)
-        var result = backend.look(jpeg, question, askContext())
+        val context = askContext()
+        var result = backend.look(jpeg, question, context)
         if (result is ApiResult.Failure && result.error.kind == ErrorKind.PAYLOAD_TOO_LARGE) {
             // Контракт: пересжать кадр и повторить один раз.
             val smaller = camera.captureJpeg(quality = RECOMPRESS_QUALITY)
-            if (smaller != null) result = backend.look(smaller, question, askContext())
+            if (smaller != null) result = backend.look(smaller, question, context)
         }
         if (result.isRateLimited()) {
-            result = retryAfterRateLimit(result) { backend.look(jpeg, question, askContext()) }
+            result = retryAfterRateLimit(result) { backend.look(jpeg, question, context) }
         }
         deliver(result)
     }
@@ -331,10 +418,12 @@ class MainViewModel(
                     loadQuickQuestions()
                 }
                 _state.update { it.copy(answer = answer.text, offline = false) }
+                if (!quickFromServer) loadQuickQuestions()
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
             is ApiResult.Failure -> {
                 Timber.w("backend error: %s", result.error)
+                if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), _state.value.lang), offline = result.error.isConnectivity())
             }
         }
@@ -356,20 +445,52 @@ class MainViewModel(
         quickJob?.cancel()
         quickJob = viewModelScope.launch {
             when (val r = backend.quickQuestions(lang)) {
-                is ApiResult.Success -> _state.update { it.copy(quickQuestions = r.value) }
+                is ApiResult.Success -> {
+                    quickFromServer = true
+                    _state.update { it.copy(quickQuestions = r.value) }
+                    quickCache?.save(lang, r.value)
+                }
                 is ApiResult.Failure -> {
                     Timber.w("quick questions: %s", r.error)
-                    _state.update { it.copy(quickQuestions = OFFLINE_QUICK_QUESTIONS[lang].orEmpty()) }
+                    quickFromServer = false
+                    _state.update { it.copy(quickQuestions = offlineQuickQuestions(lang)) }
                 }
             }
         }
     }
 
-    private fun askContext() = AskContext(
+    /** Без сети: «Где X?» / «Проводите: X» из кеша мест (работают офлайн) + последние кнопки с сервера. */
+    private suspend fun offlineQuickQuestions(lang: Lang): List<QuickQuestion> {
+        val local = wayFinder?.let { wf ->
+            runCatching { OfflineQuickButtons.build(wf.quickPlaces(), lang) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Timber.e(it, "offline quick buttons") }
+                .getOrDefault(emptyList())
+        }.orEmpty()
+        val cached = quickCache?.load(lang).orEmpty()
+        return (local + cached).distinctBy { it.text.trim().lowercase() }.take(MAX_QUICK_BUTTONS)
+            .ifEmpty { OFFLINE_QUICK_QUESTIONS[lang].orEmpty() }
+    }
+
+    private suspend fun askContext() = AskContext(
         sessionId = sessionId,
         lang = if (langChosenExplicitly) _state.value.lang else null,
-        placeId = null, // TODO шаг 5.5: ближайшая точка карты
+        placeId = nearestPlaceId(),
     )
+
+    /** Ближайшая точка карты (контекст «здесь»), если позиция известна; не задерживаем запрос дольше секунды. */
+    private suspend fun nearestPlaceId(): String? {
+        val wf = wayFinder ?: return null
+        return withTimeoutOrNull(PLACE_LOOKUP_TIMEOUT_MILLIS) {
+            try {
+                wf.nearestPlaceId()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.e(e, "nearest place")
+                null
+            }
+        }
+    }
 
     private fun touchSession() {
         val now = clock()
@@ -401,6 +522,12 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+        const val NO_CONNECTION_REPEAT_MILLIS = 60_000L
+        private const val PLACE_LOOKUP_TIMEOUT_MILLIS = 1_000L
+        private const val MAX_QUICK_BUTTONS = 8
+
+        /** В этих фазах посторонние реплики фильтруются ([UtteranceFilter]). */
+        private val BUSY_PHASES = setOf(Phase.THINKING, Phase.LOOKING, Phase.SPEAKING, Phase.NAVIGATING)
         private const val MAX_RETRY_AFTER_SECONDS = 5L
         private const val RECOMPRESS_QUALITY = 50
 

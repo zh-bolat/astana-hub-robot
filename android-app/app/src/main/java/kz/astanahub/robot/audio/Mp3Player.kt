@@ -3,26 +3,47 @@ package kz.astanahub.robot.audio
 import android.media.AudioAttributes
 import android.media.MediaDataSource
 import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 
-/** Проигрывание MP3 из памяти через MediaPlayer (без ExoPlayer). Один звук за раз. */
+/**
+ * Проигрывание MP3 из памяти через MediaPlayer (без ExoPlayer). Один звук за раз.
+ * У каждого проигрывания своя сессия: [stop] завершает именно текущую, а не «последний сохранённый хук».
+ */
 class Mp3Player {
 
-    @Volatile private var current: MediaPlayer? = null
+    private class Session(val finish: (Boolean) -> Unit)
 
-    /** true — доиграно до конца; false — остановлено [stop] или ошибка. */
+    @Volatile private var session: Session? = null
+
+    /** true — доиграно до конца; false — остановлено [stop], отменено или ошибка. */
     suspend fun play(bytes: ByteArray): Boolean = withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { cont ->
             val player = MediaPlayer()
-            current = player
+            val released = AtomicBoolean(false)
+            fun release() {
+                if (released.compareAndSet(false, true)) runCatching { player.release() }
+            }
+            lateinit var self: Session
             fun finish(ok: Boolean) {
-                if (current === player) current = null
-                runCatching { player.release() }
+                if (session === self) session = null
+                release()
                 if (cont.isActive) cont.resume(ok)
+            }
+            self = Session(::finish)
+            // Предыдущая сессия (если её не дождались) не должна играть поверх новой.
+            session?.finish?.invoke(false)
+            session = self
+            cont.invokeOnCancellation {
+                if (session === self) session = null
+                // release — на главном потоке, где живёт MediaPlayer.
+                mainHandler.post { release() }
             }
             try {
                 player.setAudioAttributes(
@@ -37,24 +58,22 @@ class Mp3Player {
                     Timber.w("MediaPlayer error %d/%d", what, extra)
                     finish(false); true
                 }
-                player.setOnPreparedListener { it.start() }
+                player.setOnPreparedListener { if (!released.get()) it.start() }
                 player.prepareAsync()
             } catch (e: Exception) {
                 Timber.e(e, "MediaPlayer setup")
                 finish(false)
             }
-            cont.invokeOnCancellation { runCatching { player.release() } }
-            stopHook = { finish(false) }
         }
     }
 
-    @Volatile private var stopHook: (() -> Unit)? = null
-
+    /** Остановить текущее проигрывание (из любого потока). Нечего играть — ничего не делает. */
     fun stop() {
-        val hook = stopHook
-        stopHook = null
-        if (hook != null) android.os.Handler(android.os.Looper.getMainLooper()).post(hook)
+        val current = session ?: return
+        mainHandler.post { current.finish(false) }
     }
+
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     private class ByteArrayDataSource(private val data: ByteArray) : MediaDataSource() {
         override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {

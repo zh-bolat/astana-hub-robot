@@ -189,6 +189,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         binding.refreshPlaces.setOnClickListener {
             lifecycleScope.launch {
+                container.places.invalidateMap() // перечитать и точки карты, не ждать TTL
                 val ok = container.places.refresh()
                 val all = container.places.places()
                 log("/v1/places: ${if (ok) "OK" else "ошибка (кеш)"}; мест для поиска: ${all.size} — ${all.joinToString { it.mapName }}")
@@ -266,7 +267,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         stopMonitor()
         ttsJob?.cancel()
         container.voice.stopSpeaking()
-        container.androidTts.stopSpeaking()
+        if (container.androidTtsCreated) container.androidTts.stopSpeaking()
         container.serverVoice.stopListening()
         container.voice.setDiagnosticsOpen(false) // режим заново применит нужное состояние микрофона
         super.onStop()
@@ -285,7 +286,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val started = SystemClock.elapsedRealtime()
             // Токен не передаём вовсе: /health без авторизации, а адрес мог ещё не быть сохранён.
-            val r = RetrofitBackendApi(url, token = "").health()
+            val r = RetrofitBackendApi(url, token = "", client = container.httpClient).health()
             val ms = SystemClock.elapsedRealtime() - started
             val text = when (r) {
                 is ApiResult.Success -> "OK: ${r.value} — $ms мс ($url)"
@@ -376,7 +377,9 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private fun startMonitor() {
         if (!container.serverVoice.hasMicPermission()) {
-            log("Нет разрешения RECORD_AUDIO")
+            // Здесь оператор, а не посетитель — можно спросить разрешение ещё раз.
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
+            log("Нет разрешения RECORD_AUDIO — запрошено")
             binding.monitorSwitch.isChecked = false
             return
         }
@@ -407,5 +410,6 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private companion object {
         const val IDLE_CHECK_MILLIS = 15_000L
+        const val REQUEST_MIC = 1
     }
 }

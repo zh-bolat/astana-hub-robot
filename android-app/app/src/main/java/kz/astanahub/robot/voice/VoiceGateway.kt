@@ -2,6 +2,7 @@ package kz.astanahub.robot.voice
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kz.astanahub.robot.core.Lang
 
 /** Результат распознавания речи. Промежуточные результаты — для субтитров, финальные — вопрос. */
@@ -31,4 +32,13 @@ interface VoiceGateway {
 
     /** Язык ASR/TTS. На роботе API для этого в доке AgentOS SDK v0.4.12 нет — см. реализацию. */
     fun setLanguage(lang: Lang)
+
+    /** Сессия разговора (session_id для /v1/stt = session_id экрана). */
+    fun setSessionId(id: String) = Unit
+
+    /**
+     * Связь с сервером распознавания: false — /v1/stt не прошёл из-за сети/таймаута,
+     * true — связь восстановилась (проверка /v1/health). По умолчанию событий нет.
+     */
+    val connection: Flow<Boolean> get() = emptyFlow()
 }

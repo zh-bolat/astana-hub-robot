@@ -23,4 +23,5 @@
     <string name="phrase_not_heard">Кешіріңіз, естімей қалдым. Қайталап айтыңызшы.</string>
     <string name="phrase_one_moment">Бір сәт…</string>
     <string name="phrase_camera_unavailable">Кешіріңіз, камера қазір қолжетімсіз.</string>
+    <string name="mic_off_badge">Микрофон өшірулі: рұқсат жоқ</string>
 </resources>

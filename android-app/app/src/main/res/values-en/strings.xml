@@ -22,4 +22,5 @@
     <string name="phrase_not_heard">Sorry, I didn\'t catch that. Please say it again.</string>
     <string name="phrase_one_moment">One moment…</string>
     <string name="phrase_camera_unavailable">Sorry, the camera is not available right now.</string>
+    <string name="mic_off_badge">Microphone off: no permission</string>
 </resources>

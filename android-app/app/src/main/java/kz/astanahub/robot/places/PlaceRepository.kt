@@ -23,29 +23,40 @@ internal data class PlacesCacheDto(val etag: String? = null, val places: List<Pl
 /**
  * Места: /v1/places (ETag → 304) + офлайн-кеш в файле + точки карты робота (getPlaceList).
  * Без сети работает по кешу; точки карты без описания на сервере тоже участвуют (name = map_name).
+ * Пустой ответ сервера не затирает непустой кеш (ошибка наполнения базы не должна «стереть» карту).
+ * Точки карты робота кешируются на [mapTtlMillis] (getPlaceList — IPC, а «где X» спрашивают часто).
  */
 class PlaceRepository(
     private val backend: BackendApi,
     private val robot: RobotGateway,
     private val cacheFile: File,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val mapTtlMillis: Long = MAP_TTL_MILLIS,
 ) {
     private val mutex = Mutex()
     private var serverPlaces: List<Place>? = null
     private var etag: String? = null
-    private var mapPlaces: List<MapPlace> = emptyList()
+    @Volatile private var mapPlaces: List<MapPlace> = emptyList()
+    @Volatile private var mapFetchedAt: Long? = null
 
-    /** Обновить список с сервера; при ошибке остаёмся на кеше. */
-    suspend fun refresh(): Boolean = mutex.withLock {
-        loadCacheIfNeeded()
-        when (val r = backend.places(etag)) {
+    /** Обновить список с сервера; при ошибке остаёмся на кеше. Сетевой запрос — вне mutex. */
+    suspend fun refresh(): Boolean {
+        val knownEtag = mutex.withLock { loadCacheIfNeeded(); etag }
+        return when (val r = backend.places(knownEtag)) {
             is ApiResult.Success -> {
                 val result = r.value
-                if (!result.notModified && result.places != null) {
-                    serverPlaces = result.places
-                    etag = result.etag
-                    saveCache(result.places, result.etag)
-                    Timber.i("places updated: %d, etag=%s", result.places.size, result.etag)
+                val places = result.places
+                if (!result.notModified && places != null) mutex.withLock {
+                    val cached = serverPlaces.orEmpty()
+                    if (places.isEmpty() && cached.isNotEmpty()) {
+                        Timber.w("places: server returned empty list, keeping cache (%d)", cached.size)
+                    } else {
+                        serverPlaces = places
+                        etag = result.etag
+                        saveCache(places, result.etag)
+                        Timber.i("places updated: %d, etag=%s", places.size, result.etag)
+                    }
                 }
                 true
             }
@@ -56,11 +67,28 @@ class PlaceRepository(
         }
     }
 
-    /** Точки карты робота; при недоступном RobotAPI — последний удачный список. */
+    /** Точки карты робота (кеш [mapTtlMillis]); при недоступном RobotAPI — последний удачный список. */
     suspend fun mapPlaces(): List<MapPlace> {
-        val fresh = runCatching { robot.getPlaces() }.getOrDefault(emptyList())
-        if (fresh.isNotEmpty()) mapPlaces = fresh
+        val fetchedAt = mapFetchedAt
+        if (fetchedAt != null && mapPlaces.isNotEmpty() && clock() - fetchedAt < mapTtlMillis) return mapPlaces
+        val fresh = try {
+            robot.getPlaces()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "getPlaces")
+            emptyList()
+        }
+        if (fresh.isNotEmpty()) {
+            mapPlaces = fresh
+            mapFetchedAt = clock()
+        }
         return mapPlaces
+    }
+
+    /** Сбросить кеш карты (после смены карты на роботе / по кнопке диагностики). */
+    fun invalidateMap() {
+        mapFetchedAt = null
     }
 
     /** Места для сопоставления: серверные + точки карты, которых нет на сервере. */
@@ -99,7 +127,8 @@ class PlaceRepository(
         }.onFailure { Timber.e(it, "places cache write") }
     }
 
-    private companion object {
-        val json = Json { ignoreUnknownKeys = true }
+    companion object {
+        const val MAP_TTL_MILLIS = 10 * 60_000L
+        private val json = Json { ignoreUnknownKeys = true }
     }
 }

@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
                     wayFinder = container.wayFinder,
                     robot = container.robot,
                     screensaverMillis = BuildConfig.SCREENSAVER_SECONDS.takeIf { it > 0 }?.let { it * 1000L },
+                    quickCache = container.quickQuestionCache,
                 )
             }
         }
@@ -63,6 +64,7 @@ class MainActivity : AppCompatActivity() {
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         timber.log.Timber.i("RECORD_AUDIO granted=%s", granted)
+        renderMicBadge()
     }
 
     private var appliedScale = 0
@@ -76,6 +78,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (techPauseRedirected) return
+        renderMicBadge() // разрешение могли выдать в настройках
         val url = container.backend.url.value
         if (backendUrlSeen != null && backendUrlSeen != url) viewModel.refreshFromServer()
         backendUrlSeen = url
@@ -83,8 +87,17 @@ class MainActivity : AppCompatActivity() {
         if (UiScale.percent(this) != appliedScale) recreate()
     }
 
+    private var techPauseRedirected = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if ((application as AstanaHubApp).techPause) {
+            // Серия падений: контейнер не создан, показываем «техническую паузу».
+            techPauseRedirected = true
+            startActivity(Intent(this, TechPauseActivity::class.java))
+            finish()
+            return
+        }
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         enterKioskMode()
@@ -105,9 +118,13 @@ class MainActivity : AppCompatActivity() {
         binding.lookButton.setOnClickListener { viewModel.lookAround() }
         // Микрофон: одна фраза через серверный STT (на эмуляторе — микрофон хоста).
         binding.micButton.setOnClickListener {
-            if (ensureMicPermission()) {
+            if (hasMicPermission()) {
                 container.voice.stopSpeaking()
                 container.voice.pushToTalk()
+            } else {
+                // Посетителям системный диалог не показываем: бейдж «микрофон выключен» уже на экране.
+                timber.log.Timber.w("mic button: RECORD_AUDIO not granted")
+                renderMicBadge()
             }
         }
         // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
@@ -116,7 +133,7 @@ class MainActivity : AppCompatActivity() {
         }
         // Киоск: «Назад» на главном экране ничего не делает.
         onBackPressedDispatcher.addCallback(this) { }
-        ensureMicPermission()
+        requestMicPermissionOnce()
         binding.stopButton.setOnClickListener { viewModel.stop() }
         binding.guideButton.setOnClickListener { viewModel.guideToOffered() }
         binding.screensaver.setOnClickListener { viewModel.wake() }
@@ -187,6 +204,7 @@ class MainActivity : AppCompatActivity() {
         binding.lookButton.isEnabled = enabled
         binding.offlineBadge.text = t.get(R.string.offline_badge, lang)
         binding.offlineBadge.visibility = if (state.offline) View.VISIBLE else View.GONE
+        binding.micOffBadge.text = t.get(R.string.mic_off_badge, lang)
 
         binding.quickTitle.text = t.get(R.string.quick_questions_title, lang)
         binding.inputLayout.hint = t.get(R.string.input_hint, lang)
@@ -225,14 +243,25 @@ class MainActivity : AppCompatActivity() {
 
     /** Любое касание экрана — активность посетителя (таймер заставки). */
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.wake()
+        if (!techPauseRedirected && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.wake()
         return super.dispatchTouchEvent(ev)
     }
 
-    private fun ensureMicPermission(): Boolean {
-        val granted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (!granted) micPermission.launch(Manifest.permission.RECORD_AUDIO)
-        return granted
+    private fun hasMicPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    /** Разрешение на микрофон спрашиваем один раз — при первом запуске (оператор), не перед посетителями. */
+    private fun requestMicPermissionOnce() {
+        if (hasMicPermission()) return
+        val prefs = getSharedPreferences(PREFS_UI, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_MIC_ASKED, false)) return
+        prefs.edit().putBoolean(KEY_MIC_ASKED, true).apply()
+        micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun renderMicBadge() {
+        if (!::binding.isInitialized) return
+        binding.micOffBadge.visibility = if (hasMicPermission()) View.GONE else View.VISIBLE
     }
 
     private fun enterKioskMode() {
@@ -245,5 +274,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val DIAG_HOLD_MILLIS = 3_000L
+        const val PREFS_UI = "main_ui"
+        const val KEY_MIC_ASKED = "mic_permission_asked"
     }
 }

@@ -50,6 +50,14 @@ class FakeRobotGateway : RobotGateway {
         cancel?.complete(Unit)
     }
 
+    override suspend fun stopNavigationAndWait(timeoutMillis: Long): Boolean {
+        stopNavigation()
+        return withTimeoutOrNull(timeoutMillis) {
+            while (cancel != null) delay(20)
+            true
+        } ?: false
+    }
+
     private companion object {
         const val FAKE_TRIP_MILLIS = 6_000L
     }

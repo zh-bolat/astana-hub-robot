@@ -38,6 +38,11 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".TechPauseActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape" />
+        <activity
             android:name=".DiagnosticsActivity"
             android:exported="false"
             android:screenOrientation="landscape" />

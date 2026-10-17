@@ -41,4 +41,17 @@ interface RobotGateway {
     suspend fun navigateTo(placeName: String, onEvent: (NavEvent) -> Unit = {}): NavigationResult
 
     fun stopNavigation()
+
+    /**
+     * Остановить навигацию и дождаться подтверждения (итог startNavigation) не дольше [timeoutMillis] —
+     * перед новым startNavigation. true — подтверждено или ехать было некуда; false — таймаут.
+     */
+    suspend fun stopNavigationAndWait(timeoutMillis: Long = STOP_CONFIRM_TIMEOUT_MS): Boolean {
+        stopNavigation()
+        return true
+    }
+
+    companion object {
+        const val STOP_CONFIRM_TIMEOUT_MS = 3_000L
+    }
 }
