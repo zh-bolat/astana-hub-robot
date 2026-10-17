@@ -6,13 +6,16 @@ import hashlib
 import json
 import secrets
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.types import Send
 
 from app import __version__
 from app.errors import (
@@ -91,6 +94,24 @@ async def health() -> HealthResponse:
     return HealthResponse(version=__version__)
 
 
+class ClosingStreamingResponse(StreamingResponse):
+    """StreamingResponse, который всегда закрывает итератор тела (aclose).
+
+    Starlette при обрыве соединения клиентом просто бросает итерацию; генератор остаётся
+    незакрытым до сборки мусора, а с ним — стрим к LLM. Здесь aclose() вызывается сразу
+    (под щитом от отмены и с ограничением по времени), и цепочка finally закрывает стрим SDK.
+    """
+
+    async def stream_response(self, send: Send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                with anyio.CancelScope(shield=True), anyio.move_on_after(2):
+                    await aclose()
+
+
 def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
@@ -122,10 +143,11 @@ async def ask(body: AskRequest, request: Request):
 
     async def stream() -> AsyncIterator[bytes]:
         # Настоящий стриминг: фразы уходят по мере того, как модель дописывает предложения
-        async for event, data in service.ask_stream(body, request_id):
-            yield _sse(event, data)
+        async with aclosing(service.ask_stream(body, request_id)) as events:
+            async for event, data in events:
+                yield _sse(event, data)
 
-    return StreamingResponse(
+    return ClosingStreamingResponse(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

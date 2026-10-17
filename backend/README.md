@@ -81,7 +81,13 @@ Eval использует провайдер из `.env`: без ключа — 
 | `STT_PROVIDER`, `TTS_PROVIDER` | `auto`, `auto` | голос через сервер (см. ниже) |
 | `ELEVENLABS_API_KEY`, `YANDEX_API_KEY` | — | ключи провайдеров речи |
 | `SPEECH_RATE_LIMIT_PER_MIN` | 120 | отдельный лимит для /stt и /tts |
-| `DATABASE_URL` | `sqlite:///backend/data/questions.db` | лог вопросов; Postgres — `postgresql+psycopg://user:pass@host:5432/db` (psycopg в зависимостях) |
+| `DATABASE_URL` | `sqlite:///backend/data/questions.db` (в образе `sqlite:////data/questions.db`) | лог вопросов; Postgres — `postgresql+psycopg://user:pass@host:5432/db` (psycopg в зависимостях) |
+| `DB_TIMEOUT_S` | 2 | подключение/запрос Postgres (`connect_timeout`, `statement_timeout`), ожидание блокировки SQLite |
+| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов (0 — вечно); очистка раз в сутки фоном |
+| `KNOWLEDGE_SNAPSHOT_PATH`, `TTS_CACHE_DIR` | `backend/data/...` (в образе `/data/...`) | снимок таблицы и кеш синтеза |
+| `KNOWLEDGE_SYNC_TIMEOUT_S` | 5 | общий таймаут загрузки всех вкладок таблицы |
+| `TRUSTED_PROXIES` | `172.16.0.0/12,127.0.0.1` | откуда принимать `X-Forwarded-For` (IP клиента в access-логе; в образе — и для uvicorn `--forwarded-allow-ips`) |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | —, `production` | ошибки в Sentry; без DSN выключено; ПДн и тексты вопросов/ответов вырезаются |
 
 ## Режимы ответа и категории
 
@@ -192,10 +198,15 @@ STT и TTS выбираются раздельно (`app/speech/`):
 - Строки без обязательных полей пропускаются (`sheet_row_skipped` в логе); дубликаты `id` и пустая вкладка
   фактов — ошибка синхронизации.
 
-Поведение: при старте база читается из таблицы, затем синхронизируется раз в `KNOWLEDGE_SYNC_INTERVAL_S`
-(по умолчанию 5 мин). При ошибке (нет сети, таблица закрыта, битые данные) сервер остаётся на последней удачной
-версии. Удачная синхронизация сохраняет снимок в `data/knowledge_snapshot.json`; если при старте таблица
-недоступна — база берётся из снимка, а если нет и его — из YAML.
+Поведение: старт не ждёт Google — сервер поднимается на последнем снимке (`KNOWLEDGE_SNAPSHOT_PATH`), а если
+его нет — на YAML. Сразу после старта и далее раз в `KNOWLEDGE_SYNC_INTERVAL_S` (по умолчанию 5 мин) — фоновая
+синхронизация: все вкладки параллельно, общий таймаут `KNOWLEDGE_SYNC_TIMEOUT_S` (5 с). При ошибке (нет сети,
+таблица закрыта, битые данные, таймаут) сервер остаётся на последней удачной версии. Удачная синхронизация
+сохраняет снимок.
+
+Заголовки вкладок проверяются: «Факты» — `id` и хотя бы один из `answer_ru/kk/en`, «Места» — `id`, `map_name`,
+«Кнопки» — `id`, `text_ru`. Это важно: при неверном имени вкладки Google молча отдаёт первую вкладку, и без
+проверки «Места» прочитались бы из «Фактов». Несовпадение — ошибка синхронизации, база не меняется.
 
 Поиск на MVP — «вся база в контексте» LLM: база идёт в system instruction стабильным префиксом
 (Gemini кеширует его неявно). Источник скрыт за интерфейсом `KnowledgeSource` (`app/knowledge/source.py`).
@@ -204,6 +215,12 @@ STT и TTS выбираются раздельно (`app/speech/`):
 
 Каждый `/ask` и `/look` пишется в таблицу `question_log` (только текст: вопрос, ответ, язык, место, `found`,
 источники, задержка, провайдер и модель). Кадры камеры и аудио не сохраняются.
+
+Запись идёт фоном (отдельный поток с ограниченной очередью): ответ роботу не ждёт БД, а зависшая или упавшая БД
+на `/ask` не влияет (в логе — `question_log_failed`, при переполнении очереди — `question_log_dropped`). Схема
+создаётся/мигрирует при первом обращении (Postgres — под advisory lock и `ADD COLUMN IF NOT EXISTS`, безопасно
+при одновременном старте двух контейнеров). Записи старше `QUESTION_LOG_RETENTION_DAYS` (180) удаляются раз
+в сутки.
 
 ```bash
 uv run python -m app.cli export-csv --out questions.csv               # всё
@@ -215,7 +232,7 @@ uv run python -m app.cli export-csv --out unanswered.csv --unanswered # толь
 ```bash
 uv run python -m app.cli openapi --out openapi.json   # обновить OpenAPI-схему
 docker build -t astana-hub-backend .                   # образ: uv, non-root, порт 8000, healthcheck /v1/health
-docker run --rm -p 8000:8000 --env-file .env -v hub-data:/app/data astana-hub-backend
+docker run --rm -p 8000:8000 --env-file .env -v hub-data:/data astana-hub-backend   # данные — в volume /data
 ```
 
 ## Структура

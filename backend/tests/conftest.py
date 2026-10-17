@@ -114,3 +114,9 @@ def client(make_client) -> TestClient:
 
 def ask_body(question: str, **extra) -> dict:
     return {"question": question, "session_id": SESSION, **extra}
+
+
+def logged(client: TestClient, only_unanswered: bool = False):
+    """Строки лога вопросов после того, как фоновая запись дописала очередь."""
+    assert client.app.state.log_writer.wait_idle(5)
+    return client.app.state.log_repo.all(only_unanswered=only_unanswered)

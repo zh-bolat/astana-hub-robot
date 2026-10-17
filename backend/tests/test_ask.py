@@ -101,6 +101,7 @@ def test_unknown_question_is_refused(client, question, lang):
 def test_unknown_question_logged_as_unanswered(client):
     client.post("/v1/ask", json=ask_body("Кто выиграл чемпионат мира?"), headers=AUTH)
     client.post("/v1/ask", json=ask_body("Где кафе?"), headers=AUTH)
+    assert client.app.state.log_writer.wait_idle(5)
     repo = client.app.state.log_repo
     unanswered = repo.all(only_unanswered=True)
     assert [row.question for row in unanswered] == ["Кто выиграл чемпионат мира?"]

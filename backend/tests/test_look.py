@@ -4,7 +4,7 @@ import json
 import logging
 
 from app.llm.base import LLMAnswer
-from tests.conftest import AUTH, JPEG, SESSION, FailingProvider, ScriptedProvider
+from tests.conftest import AUTH, JPEG, SESSION, FailingProvider, ScriptedProvider, logged
 
 
 def _meta(**extra) -> str:
@@ -38,7 +38,7 @@ def test_look_default_question_and_unknown_place(client):
     assert r.status_code == 200
     assert body["found"] is False
     assert "reception" in body["answer"].lower()
-    row = client.app.state.log_repo.all()[-1]
+    row = logged(client)[-1]
     assert row.endpoint == "look"
     assert row.question == "What is this? Where am I?"
     assert row.found is False

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 
 from app.db import QuestionLogRepo, make_engine
 from app.llm.base import LLMAnswer
-from tests.conftest import AUTH, ScriptedProvider, ask_body
+from tests.conftest import AUTH, ScriptedProvider, ask_body, logged
 
 
 def _ask(c, question, **extra):
@@ -17,7 +17,7 @@ def _ask(c, question, **extra):
 
 
 def _last_row(c):
-    return c.app.state.log_repo.all()[-1]
+    return logged(c)[-1]
 
 
 # ---------- small talk ----------
@@ -96,7 +96,7 @@ def test_open_mode_general_answer(make_client):
     row = _last_row(c)
     assert row.category == "general" and row.found is False
     # «без ответа в базе» по-прежнему видно
-    assert c.app.state.log_repo.all(only_unanswered=True)
+    assert logged(c, only_unanswered=True)
 
 
 def test_strict_mode_general_is_refused(make_client):

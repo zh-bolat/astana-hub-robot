@@ -136,3 +136,123 @@ def test_build_source_without_network_falls_back_to_yaml(tmp_path, monkeypatch):
     src = build_knowledge_source(s)
     assert isinstance(src, SheetKnowledgeSource)
     assert len(src.load().facts) == 13
+
+
+# ---------- заголовки вкладок, параллельная загрузка, старт без сети ----------
+
+
+def test_wrong_tab_name_gviz_returns_first_tab_is_rejected(tmp_path):
+    """gviz при неверном имени вкладки отдаёт первую («Факты») — «Места» без map_name → ошибка."""
+    facts, _, buttons = _templates()
+    src = _source(tmp_path)
+    good = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
+    assert asyncio.run(src.sync(_client(_handler(good)))) is True
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        tab = req.url.params["sheet"]
+        return httpx.Response(200, text={"Факты": facts, "Места": facts, "Кнопки": buttons}[tab])
+
+    assert asyncio.run(src.sync(_client(handler))) is False
+    assert "map_name" in (src.last_error or "")
+    assert [f.id for f in src.load().facts] == ["gym"]  # остались на прошлой версии
+
+
+@pytest.mark.parametrize(
+    ("kind", "csv_text"),
+    [
+        ("facts", "id,keywords,question_ru\na,b,c\n"),
+        ("places", "id,name_ru\na,b\n"),
+        ("buttons", "id,text_en\na,b\n"),
+    ],
+)
+def test_required_headers_per_tab(kind, csv_text):
+    facts, places, buttons = _templates()
+    tabs = {"facts": facts, "places": places, "buttons": buttons}
+    tabs[kind] = csv_text
+    with pytest.raises(SheetError):
+        kb_from_csv(tabs["facts"], tabs["places"], tabs["buttons"])
+
+
+def test_tabs_load_in_parallel_with_total_timeout(tmp_path):
+    src = _source(tmp_path)
+    src.timeout_s = 0.3
+    calls: list[str] = []
+
+    async def slow(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.params["sheet"])
+        await asyncio.sleep(0.2 if req.url.params["sheet"] != "Кнопки" else 5)
+        return httpx.Response(200, text="id,map_name\n")
+
+    async def run() -> tuple[bool, float]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as client:
+            t0 = asyncio.get_running_loop().time()
+            ok = await src.sync(client)
+            return ok, asyncio.get_running_loop().time() - t0
+
+    ok, elapsed = asyncio.run(run())
+    assert ok is False
+    assert elapsed < 1.0
+    assert sorted(calls) == sorted(["Факты", "Места", "Кнопки"])  # все запрошены сразу
+    assert "timeout" in (src.last_error or "")
+
+
+def test_startup_does_not_wait_for_google_and_syncs_in_background(settings, monkeypatch, tmp_path):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from app.llm.fake import FakeProvider
+    from app.main import create_app
+
+    facts = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
+    _, places, buttons = _templates()
+
+    async def handler(req: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.5)  # Google медленный
+        tab = req.url.params["sheet"]
+        return httpx.Response(200, text={"Факты": facts, "Места": places, "Кнопки": buttons}[tab])
+
+    monkeypatch.setattr(
+        SheetKnowledgeSource,
+        "new_client",
+        lambda self: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    s = settings.model_copy(
+        update={
+            "knowledge_sheet_id": "SHEET",
+            "knowledge_snapshot_path": tmp_path / "snap.json",
+            "knowledge_reload_interval_s": 0,
+        }
+    )
+    t0 = time.perf_counter()
+    app = create_app(s, FakeProvider(), FakeProvider())
+    with TestClient(app) as c:
+        assert time.perf_counter() - t0 < 0.4  # старт — на YAML, без ожидания таблицы
+        assert len(c.app.state.store.get().facts) == 13
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(c.app.state.store.get().facts) != 1:
+            time.sleep(0.05)
+        assert [f.id for f in c.app.state.store.get().facts] == ["gym"]
+    assert (tmp_path / "snap.json").exists()
+
+
+def test_startup_uses_snapshot_without_network(tmp_path, monkeypatch):
+    from app.config import Settings
+    from app.main import build_knowledge_source
+
+    src = _source(tmp_path)
+    facts = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
+    assert asyncio.run(src.sync(_client(_handler(facts)))) is True
+
+    def no_network(*a, **kw):
+        raise AssertionError("startup must not touch the network")
+
+    monkeypatch.setattr(httpx.Client, "get", no_network)
+    monkeypatch.setattr(httpx.AsyncClient, "get", no_network)
+    s = Settings(
+        _env_file=None,
+        robot_token="t",
+        knowledge_sheet_id="SHEET",
+        knowledge_snapshot_path=tmp_path / "snap.json",
+    )
+    assert [f.id for f in build_knowledge_source(s).load().facts] == ["gym"]

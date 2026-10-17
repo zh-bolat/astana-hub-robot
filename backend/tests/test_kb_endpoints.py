@@ -80,6 +80,8 @@ def test_broken_knowledge_keeps_previous_version(client, knowledge_dir):
 def test_export_csv(client, settings):
     client.post("/v1/ask", json=ask_body("Где кафе?"), headers=AUTH)
     client.post("/v1/ask", json=ask_body("Кто выиграл чемпионат мира?"), headers=AUTH)
+    # запись лога фоновая — ждём, пока очередь допишется
+    assert client.app.state.log_writer.wait_idle(5)
     repo = QuestionLogRepo(make_engine(settings.database_url))
     buf = io.StringIO()
     assert repo.export_csv(buf) == 2

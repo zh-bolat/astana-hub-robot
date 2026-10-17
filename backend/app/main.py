@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import time
 from contextlib import asynccontextmanager
 
@@ -11,6 +13,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
 from app.api import router
+from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
 from app.db import QuestionLogRepo, make_engine
 from app.errors import error_response, install_error_handlers
@@ -19,6 +22,7 @@ from app.knowledge.sheets import SheetKnowledgeSource
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.llm.base import LLMProvider
 from app.llm.factory import build_text_provider, build_vision_provider
+from app.log_writer import BackgroundLogWriter, purge_job
 from app.logging_setup import (
     configure_logging,
     logger,
@@ -27,18 +31,22 @@ from app.logging_setup import (
     set_request_id,
 )
 from app.ratelimit import RateLimiter
+from app.sentry_setup import init_sentry
 from app.service import AnswerService
 from app.speech.base import SttProvider, TtsProvider
 from app.speech.cache import TtsCache
 from app.speech.factory import build_stt_provider, build_tts_provider
 from app.speech_api import router as speech_router
 
+RETENTION_INTERVAL_S = 24 * 3600
+
 
 class RequestContextMiddleware:
-    """X-Request-Id + access-лог одной JSON-строкой. Чистый ASGI (корректно со стримингом)."""
+    """X-Request-Id + access-лог одной JSON-строкой (с IP клиента). Чистый ASGI (корректно со стримингом)."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, trusted_proxies: tuple[Network, ...] = ()) -> None:
         self.app = app
+        self.trusted_proxies = trusted_proxies
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -74,6 +82,7 @@ class RequestContextMiddleware:
                 extra={
                     "method": scope["method"],
                     "path": scope["path"],
+                    "client_ip": client_ip(scope, self.trusted_proxies),
                     "status": status,
                     "duration_ms": int((time.perf_counter() - started) * 1000),
                 },
@@ -95,9 +104,44 @@ def build_knowledge_source(settings: Settings) -> KnowledgeSource:
         ),
         snapshot_path=settings.knowledge_snapshot_path,
         fallback=yaml_source,
+        timeout_s=settings.knowledge_sync_timeout_s,
     )
-    sheet.initial_load()
+    sheet.initial_load()  # без сети: снимок или YAML; таблица — фоновым синком в lifespan
     return sheet
+
+
+async def close_resources(*objs: object) -> None:
+    """Закрывает HTTP-клиенты провайдеров (каждый объект один раз; ошибки только в лог)."""
+    seen: set[int] = set()
+    for obj in objs:
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        aclose = getattr(obj, "aclose", None)
+        if not callable(aclose):
+            continue
+        try:
+            result = aclose()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=2)
+        except Exception as exc:
+            logger.warning(
+                "resource_close_failed", extra={"resource": type(obj).__name__, "error": str(exc)}
+            )
+
+
+async def _retention_loop(writer: BackgroundLogWriter, repo: QuestionLogRepo, days: int) -> None:
+    while True:
+        writer.submit_job(purge_job(repo, days), name="retention")
+        await asyncio.sleep(RETENTION_INTERVAL_S)
+
+
+async def _cancel(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
 
 
 def create_app(
@@ -112,24 +156,40 @@ def create_app(
     configure_logging(settings.log_level)
     if not settings.robot_token.get_secret_value():
         raise RuntimeError("ROBOT_TOKEN is not set (see backend/.env.example)")
+    init_sentry(settings)
 
     source = build_knowledge_source(settings)
     store = KnowledgeStore(source, settings.knowledge_reload_interval_s)
     store.get()  # битая база — падаем на старте, а не на первом вопросе
     text_llm = text_llm or build_text_provider(settings)
     vision_llm = vision_llm or build_vision_provider(settings, text_llm)
-    repo = QuestionLogRepo(make_engine(settings.database_url))
+    # БД не на критическом пути: engine без подключения, схема и записи — в фоновом потоке
+    repo = QuestionLogRepo(make_engine(settings.database_url, settings.db_timeout_s))
+    log_writer = BackgroundLogWriter(repo, max_pending=settings.question_log_queue_max)
+    stt = speech or build_stt_provider(settings)
+    tts_provider = tts or speech or build_tts_provider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        task = None
-        if isinstance(source, SheetKnowledgeSource) and settings.knowledge_sync_interval_s > 0:
-            task = asyncio.create_task(source.run_periodic(settings.knowledge_sync_interval_s))
+        log_writer.submit_job(repo.ensure_schema, name="schema")
+        sync_task = retention_task = None
+        sheet_client = None
+        if isinstance(source, SheetKnowledgeSource):
+            sheet_client = source.new_client()
+            sync_task = asyncio.create_task(
+                source.run_periodic(settings.knowledge_sync_interval_s, sheet_client)
+            )
+        if settings.question_log_retention_days > 0:
+            retention_task = asyncio.create_task(
+                _retention_loop(log_writer, repo, settings.question_log_retention_days)
+            )
         try:
             yield
         finally:
-            if task:
-                task.cancel()
+            await _cancel(sync_task)
+            await _cancel(retention_task)
+            await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider)
+            await asyncio.to_thread(log_writer.close, 3.0)
 
     app = FastAPI(
         lifespan=lifespan,
@@ -144,10 +204,11 @@ def create_app(
     app.state.store = store
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
-    app.state.service = AnswerService(settings, store, text_llm, vision_llm, repo)
+    app.state.service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
     app.state.log_repo = repo
-    app.state.stt = speech or build_stt_provider(settings)
-    app.state.tts = tts or speech or build_tts_provider(settings)
+    app.state.log_writer = log_writer
+    app.state.stt = stt
+    app.state.tts = tts_provider
     app.state.speech_rate_limiter = RateLimiter(settings.speech_rate_limit_per_min)
     app.state.tts_cache = TtsCache(
         memory_bytes=settings.tts_cache_memory_mb * 1024 * 1024,
@@ -160,7 +221,9 @@ def create_app(
     app.include_router(speech_router)
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(
+        RequestContextMiddleware, trusted_proxies=parse_networks(settings.trusted_proxies)
+    )
 
     logger.info(
         "startup",

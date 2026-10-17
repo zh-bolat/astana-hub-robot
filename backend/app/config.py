@@ -65,10 +65,19 @@ class Settings(BaseSettings):
     knowledge_sheet_places: str = "Места"
     knowledge_sheet_buttons: str = "Кнопки"
     knowledge_sync_interval_s: float = 300.0
+    # Общий таймаут загрузки всех вкладок (параллельно); не успели — остаёмся на прошлой версии
+    knowledge_sync_timeout_s: float = 5.0
     knowledge_snapshot_path: Path = BACKEND_DIR / "data" / "knowledge_snapshot.json"
 
-    # Лог вопросов: SQLite на MVP, Postgres — сменой URL
+    # Лог вопросов: SQLite на MVP, Postgres — сменой URL. Пишется фоном, ответ БД не ждёт.
+    # В Docker-образе пути данных — под /data (volume), см. Dockerfile.
     database_url: str = f"sqlite:///{BACKEND_DIR / 'data' / 'questions.db'}"
+    # Таймауты БД, сек: подключение, запрос (Postgres statement_timeout), ожидание блокировки SQLite
+    db_timeout_s: float = 2.0
+    # Хранение лога вопросов, дней (0 — хранить вечно). Очистка — раз в сутки фоном.
+    question_log_retention_days: int = 180
+    # Очередь фоновой записи: при зависшей БД сверх лимита записи отбрасываются (с предупреждением)
+    question_log_queue_max: int = 1000
 
     # /look
     max_image_bytes: int = 1024 * 1024
@@ -114,6 +123,13 @@ class Settings(BaseSettings):
     tts_cache_disk_mb: int = 100
 
     log_level: str = "INFO"
+    # Сети/адреса доверенных прокси (через запятую): X-Forwarded-For принимается только от них.
+    # По умолчанию — сети docker (caddy) и localhost. В образе тот же список идёт в
+    # uvicorn --forwarded-allow-ips.
+    trusted_proxies: str = "172.16.0.0/12,127.0.0.1"
+    # Sentry: подключается только если задан DSN; ПДн (тексты вопросов/ответов, IP) не отправляются
+    sentry_dsn: SecretStr | None = None
+    sentry_environment: str = "production"
 
     @field_validator(
         "tts_cache_dir",
@@ -125,6 +141,7 @@ class Settings(BaseSettings):
         "elevenlabs_api_key",
         "yandex_api_key",
         "gemini_api_key",
+        "sentry_dsn",
         mode="before",
     )
     @classmethod

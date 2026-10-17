@@ -15,6 +15,9 @@ class DeepSeekProvider:
         self.model = model
         self.max_tokens = max_tokens
 
+    async def aclose(self) -> None:
+        await self.client.close()
+
     async def answer(self, req: LLMRequest) -> LLMAnswer:
         try:
             resp = await self.client.chat.completions.create(

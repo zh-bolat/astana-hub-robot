@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import httpx
 from google import genai
 from google.genai import errors as genai_errors
@@ -74,6 +76,12 @@ class GeminiSttProvider:
         self.models = list(dict.fromkeys([model, *(fallback_models or [])]))
         self.deadline_s = deadline_s
         self.hedge_after_s = hedge_after_s
+
+    async def aclose(self) -> None:
+        with contextlib.suppress(Exception):
+            await self.client.aio.aclose()
+        with contextlib.suppress(Exception):
+            self.client.close()
 
     async def _attempt(self, model: str, wav: bytes, lang: Lang | None) -> _SttJson:
         config = types.GenerateContentConfig(

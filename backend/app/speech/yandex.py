@@ -37,14 +37,19 @@ class YandexSpeechKitProvider:
         voices: dict[str, str],
         timeout_s: float = 10.0,
         client: httpx.AsyncClient | None = None,
+        auto_lang_timeout_s: float = 3.0,
     ) -> None:
         self.folder_id = folder_id or None
+        self.auto_lang_timeout_s = auto_lang_timeout_s
         self.stt_url = stt_url
         self.tts_url = tts_url
         self.voices = voices
         self.client = client or httpx.AsyncClient(
             timeout=timeout_s, headers={"Authorization": f"Api-Key {api_key}"}
         )
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
 
     def voice_id(self, lang: Lang) -> str:
         return self.voices[lang]
@@ -84,23 +89,33 @@ class YandexSpeechKitProvider:
         2. ru-гипотеза непустая и по тексту выглядит русской/казахской → ru.
         3. en-гипотеза непустая и по тексту английская → en.
         4. Иначе — первая непустая гипотеза (ru, kk, en) или пустой текст.
-        Задержка = самый медленный из трёх запросов; стоимость — x3. Если робот знает язык
+        Все три запроса идут параллельно, но ждём не дольше `auto_lang_timeout_s` (~3 с): выбор
+        делается из успевших, опоздавшие отменяются. Так общий ответ укладывается в STT_TIMEOUT_S
+        (фабрика ставит auto_lang_timeout_s ≤ stt_timeout_s). Стоимость — x3. Если робот знает язык
         (кнопка RU/KZ/EN на экране), передавайте lang — будет один запрос.
         """
         langs: tuple[Lang, ...] = ("ru", "kk", "en")
-        results = await asyncio.gather(
-            *(self._recognize(pcm, sample_rate, lang) for lang in langs),
-            return_exceptions=True,
-        )
+        tasks = {
+            asyncio.ensure_future(self._recognize(pcm, sample_rate, lang)): lang for lang in langs
+        }
+        try:
+            done, _ = await asyncio.wait(set(tasks), timeout=self.auto_lang_timeout_s)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
         texts: dict[Lang, str] = {}
-        errors = []
-        for lang, res in zip(langs, results, strict=True):
-            if isinstance(res, BaseException):
-                errors.append(res)
+        errors: list[BaseException] = []
+        for task in done:
+            exc = task.exception()
+            if exc is not None:
+                errors.append(exc)
             else:
-                texts[lang] = res
+                texts[tasks[task]] = task.result()
         if not texts:
-            raise SpeechError(f"yandex stt failed for all languages: {errors[0]}")
+            if errors:
+                raise SpeechError(f"yandex stt failed for all languages: {errors[0]}")
+            raise TimeoutError(f"yandex stt: no language answered in {self.auto_lang_timeout_s}s")
         return choose_hypothesis(texts)
 
     async def tts(self, text: str, lang: Lang) -> bytes:

@@ -45,6 +45,9 @@ class ElevenLabsProvider:
             timeout=timeout_s, headers={"xi-api-key": api_key}
         )
 
+    async def aclose(self) -> None:
+        await self.client.aclose()
+
     # ---------- TTS ----------
     def tts_model(self, lang: Lang) -> str:
         return self.tts_model_kk if lang == "kk" else self.tts_model_default

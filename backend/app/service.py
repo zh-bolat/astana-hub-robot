@@ -16,15 +16,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-
-from starlette.concurrency import run_in_threadpool
+from contextlib import aclosing
 
 from app.config import Settings
-from app.db import QuestionLogRepo
 from app.errors import ApiError, error_body, llm_timeout, llm_unavailable
 from app.knowledge.source import KnowledgeStore
 from app.lang import Lang, resolve_lang
 from app.llm.base import LLMAnswer, LLMError, LLMProvider, LLMRequest
+from app.log_writer import BackgroundLogWriter
 from app.logging_setup import logger
 from app.prompts import (
     LOOK_REFUSALS,
@@ -69,13 +68,13 @@ class AnswerService:
         store: KnowledgeStore,
         text_llm: LLMProvider,
         vision_llm: LLMProvider,
-        log_repo: QuestionLogRepo,
+        log_writer: BackgroundLogWriter,
     ) -> None:
         self.settings = settings
         self.store = store
         self.text_llm = text_llm
         self.vision_llm = vision_llm
-        self.log_repo = log_repo
+        self.log_writer = log_writer
 
     @property
     def mode(self) -> str:
@@ -158,24 +157,21 @@ class AnswerService:
                 "latency_ms": latency_ms,
             },
         )
-        try:
-            await run_in_threadpool(
-                self.log_repo.add,
-                request_id=request_id,
-                session_id=session_id,
-                endpoint=endpoint,
-                question=question,
-                lang=resp.lang,
-                place_id=place_id,
-                found=resp.found,
-                category=category,
-                answer=resp.answer,
-                sources=resp.sources,
-                provider=provider_id,
-                latency_ms=latency_ms,
-            )
-        except Exception as exc:  # лог не должен ломать ответ роботу
-            logger.error("question_log_failed", extra={"error": str(exc)})
+        # Фоном: ответ роботу не ждёт БД (зависшая/упавшая БД на /ask не влияет)
+        self.log_writer.submit(
+            request_id=request_id,
+            session_id=session_id,
+            endpoint=endpoint,
+            question=question,
+            lang=resp.lang,
+            place_id=place_id,
+            found=resp.found,
+            category=category,
+            answer=resp.answer,
+            sources=resp.sources,
+            provider=provider_id,
+            latency_ms=latency_ms,
+        )
 
     @staticmethod
     def _provider_id(provider: LLMProvider, model: str | None) -> str:
@@ -253,10 +249,12 @@ class AnswerService:
         Любое непредвиденное исключение превращается в event: error (поток уже начат)."""
         finished = False
         try:
-            async for event, data in self._ask_stream(req, request_id):
-                if event in ("done", "error"):
-                    finished = True
-                yield event, data
+            # aclosing: при отмене/обрыве SSE внутренний генератор (и стрим LLM) закрывается сразу
+            async with aclosing(self._ask_stream(req, request_id)) as events:
+                async for event, data in events:
+                    if event in ("done", "error"):
+                        finished = True
+                    yield event, data
         except Exception:
             logger.exception("ask_stream_failed")
             if not finished:

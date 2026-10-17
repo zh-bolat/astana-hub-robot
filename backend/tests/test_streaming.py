@@ -7,7 +7,7 @@ import pytest
 
 from app.llm.base import LLMError, LLMRequest
 from app.streaming import AnswerStreamParser
-from tests.conftest import AUTH, ask_body
+from tests.conftest import AUTH, ask_body, logged
 
 
 def _feed_all(payload: str, size: int) -> tuple[AnswerStreamParser, list[str]]:
@@ -105,7 +105,7 @@ def test_sse_streams_phrases_and_sources(make_client):
             "sources": ["fact:cafe"],
         },
     )
-    row = c.app.state.log_repo.all()[-1]
+    row = logged(c)[-1]
     assert row.found is True and row.answer == "Кафе на первом этаже. Оно работает до 19."
 
 
@@ -117,7 +117,7 @@ def test_sse_refusal_when_not_found(make_client):
     assert "Ресепшенге" in " ".join(phrases)
     assert "Ойдан" not in " ".join(phrases)
     assert events[-1][1]["found"] is False
-    assert c.app.state.log_repo.all(only_unanswered=True)
+    assert logged(c, only_unanswered=True)
 
 
 def test_sse_found_true_but_empty_answer_is_refusal(make_client):

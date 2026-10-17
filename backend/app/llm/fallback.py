@@ -8,11 +8,14 @@
 3. Хедж: если активная попытка молчит дольше `hedge_after_s`, параллельно запускается следующая модель.
    Медленный запрос не отменяется: побеждает первый успешный ответ, остальные отменяются.
 4. Дедлайн вышел → TimeoutError (в API это 504). Все модели ответили ошибкой → последняя ошибка.
+5. Результаты, которые не пошли в ответ (две попытки завершились одновременно), передаются в
+   `on_discard` — например, чтобы закрыть открытый стрим проигравшей хедж-попытки.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 
 from app.logging_setup import logger
@@ -28,6 +31,7 @@ async def run_with_fallback[T](
     deadline_s: float,
     hedge_after_s: float = 3.0,
     retry_min_s: float = 2.5,
+    on_discard: Callable[[T], Awaitable[object]] | None = None,
 ) -> tuple[T, str]:
     """Возвращает (результат, модель, которая ответила)."""
     if not models:
@@ -101,4 +105,8 @@ async def run_with_fallback[T](
                 last_launch = loop.time()
     finally:
         for task in pending:
-            task.cancel()
+            if not task.done():
+                task.cancel()  # попытка сама освобождает ресурсы при отмене
+            elif on_discard and not task.cancelled() and task.exception() is None:
+                with contextlib.suppress(Exception):
+                    await on_discard(task.result())

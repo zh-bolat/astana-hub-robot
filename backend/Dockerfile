@@ -17,16 +17,23 @@ FROM python:3.12-slim-bookworm
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /app /app
-RUN mkdir -p /app/data && chown app:app /app/data
+# Все изменяемые данные — в /data (docker volume): лог вопросов (SQLite), снимок таблицы, кеш TTS.
+# Каталог создаётся в образе с владельцем app — именованный volume наследует владельца.
+RUN mkdir -p /data && chown app:app /data
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    DATABASE_URL=sqlite:////app/data/questions.db \
-    KNOWLEDGE_DIR=/app/knowledge
+    DATABASE_URL=sqlite:////data/questions.db \
+    KNOWLEDGE_SNAPSHOT_PATH=/data/knowledge_snapshot.json \
+    TTS_CACHE_DIR=/data/tts_cache \
+    KNOWLEDGE_DIR=/app/knowledge \
+    TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1
 
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=2).status == 200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# X-Forwarded-* принимаются только от доверенных прокси (TRUSTED_PROXIES, по умолчанию сети docker
+# и localhost) — тот же список приложение использует для IP в access-логе.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"$TRUSTED_PROXIES\""]

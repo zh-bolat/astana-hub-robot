@@ -5,10 +5,13 @@
 Формат колонок — backend/README.md и шаблоны в backend/knowledge/sheet_template/.
 
 Поведение:
-- при старте — загрузка из таблицы; не вышло → последний снимок (data/knowledge_snapshot.json);
-  нет снимка → локальные YAML;
-- далее фоновая синхронизация раз в KNOWLEDGE_SYNC_INTERVAL_S; при ошибке остаёмся на последней
+- при старте сеть не трогаем: последний снимок (KNOWLEDGE_SNAPSHOT_PATH), нет снимка → локальные
+  YAML; старт не ждёт Google;
+- сразу после старта и далее раз в KNOWLEDGE_SYNC_INTERVAL_S — фоновая синхронизация: все вкладки
+  параллельно с общим таймаутом KNOWLEDGE_SYNC_TIMEOUT_S; при ошибке остаёмся на последней
   удачной версии (и не затираем базу пустой/битой таблицей);
+- заголовки каждой вкладки проверяются (`REQUIRED_HEADERS`): gviz при неверном имени вкладки
+  молча отдаёт первую вкладку — без проверки «Места» могли бы прочитаться из «Фактов»;
 - удачная синхронизация сохраняет снимок на диск.
 """
 
@@ -41,11 +44,33 @@ def sheet_csv_url(sheet_id: str, tab: str) -> str:
     )
 
 
-def read_csv(text: str) -> list[dict[str, str]]:
+# Обязательные колонки вкладок: (все из ...), (хотя бы одна из ...)
+REQUIRED_HEADERS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "facts": (frozenset({"id"}), frozenset({"answer_ru", "answer_kk", "answer_en"})),
+    "places": (frozenset({"id", "map_name"}), frozenset()),
+    "buttons": (frozenset({"id", "text_ru"}), frozenset()),
+}
+
+
+def check_headers(kind: str, headers: list[str]) -> None:
+    required, any_of = REQUIRED_HEADERS[kind]
+    present = set(headers)
+    missing = sorted(required - present)
+    if any_of and not any_of & present:
+        missing.append(" | ".join(sorted(any_of)))
+    if missing:
+        raise SheetError(
+            f"вкладка {kind}: нет колонок {missing} (неверное имя вкладки? gviz отдаёт первую)"
+        )
+
+
+def read_table(text: str) -> tuple[list[str], list[dict[str, str]]]:
+    """CSV → (нормализованные заголовки, активные непустые строки)."""
     text = text.lstrip("﻿")
     if text.lstrip().startswith("<"):
         raise SheetError("got HTML instead of CSV (таблица не открыта по ссылке?)")
     reader = csv.DictReader(io.StringIO(text))
+    headers = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
     rows = []
     for row in reader:
         clean = {
@@ -56,6 +81,16 @@ def read_csv(text: str) -> list[dict[str, str]]:
         if clean.get("active", "").lower() in _INACTIVE:
             continue
         rows.append(clean)
+    return headers, rows
+
+
+def read_csv(text: str) -> list[dict[str, str]]:
+    return read_table(text)[1]
+
+
+def _tab(kind: str, text: str) -> list[dict[str, str]]:
+    headers, rows = read_table(text)
+    check_headers(kind, headers)
     return rows
 
 
@@ -126,11 +161,16 @@ def buttons_from_rows(rows: list[dict[str, str]]) -> list[QuickQuestion]:
 
 
 def kb_from_csv(facts_csv: str, places_csv: str, buttons_csv: str) -> KnowledgeBase:
-    facts = facts_from_rows(read_csv(facts_csv))
+    facts_rows, places_rows, buttons_rows = (
+        _tab("facts", facts_csv),
+        _tab("places", places_csv),
+        _tab("buttons", buttons_csv),
+    )
+    facts = facts_from_rows(facts_rows)
     if not facts:
         raise SheetError("вкладка фактов пуста — не заменяем базу")
-    places = places_from_rows(read_csv(places_csv))
-    buttons = buttons_from_rows(read_csv(buttons_csv))
+    places = places_from_rows(places_rows)
+    buttons = buttons_from_rows(buttons_rows)
     try:
         return build_kb(facts, places, buttons)
     except ValueError as exc:
@@ -146,7 +186,7 @@ class SheetKnowledgeSource:
         tabs: tuple[str, str, str],
         snapshot_path: Path,
         fallback: KnowledgeSource,
-        timeout_s: float = 10.0,
+        timeout_s: float = 5.0,
     ) -> None:
         self.sheet_id = sheet_id
         self.tabs = tabs
@@ -191,32 +231,44 @@ class SheetKnowledgeSource:
             raise SheetError(f"http {r.status_code} for sheet tab")
         return r.text
 
-    def sync_blocking(self) -> bool:
-        """Синхронная загрузка (старт сервера, CLI). True — удалось."""
-        try:
-            with httpx.Client(timeout=self.timeout_s, follow_redirects=True) as client:
-                texts = [self._check(client.get(u)) for u in self.urls()]
-            self._apply(kb_from_csv(*texts))
-            return True
-        except (httpx.HTTPError, SheetError, ValueError) as exc:
-            self._fail(exc)
-            return False
+    def new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True)
+
+    async def _fetch_all(self, client: httpx.AsyncClient) -> list[str]:
+        responses = await asyncio.wait_for(
+            asyncio.gather(*(client.get(u) for u in self.urls())), timeout=self.timeout_s
+        )
+        return [self._check(r) for r in responses]
 
     async def sync(self, client: httpx.AsyncClient) -> bool:
+        """Загружает все вкладки параллельно (общий таймаут timeout_s). True — база обновлена."""
         try:
-            responses = await asyncio.gather(*(client.get(u) for u in self.urls()))
-            texts = [self._check(r) for r in responses]
+            texts = await self._fetch_all(client)
             self._apply(kb_from_csv(*texts))
             return True
+        except TimeoutError:
+            self._fail(SheetError(f"timeout {self.timeout_s}s loading sheet tabs"))
+            return False
         except (httpx.HTTPError, SheetError, ValueError) as exc:
             self._fail(exc)
             return False
 
-    async def run_periodic(self, interval_s: float) -> None:
-        async with httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True) as client:
-            while True:
-                await asyncio.sleep(interval_s)
-                await self.sync(client)
+    def sync_blocking(self) -> bool:
+        """Синхронная обёртка для CLI (вне event loop)."""
+
+        async def once() -> bool:
+            async with self.new_client() as client:
+                return await self.sync(client)
+
+        return asyncio.run(once())
+
+    async def run_periodic(self, interval_s: float, client: httpx.AsyncClient) -> None:
+        """Синк сразу после старта, затем раз в interval_s (interval_s <= 0 — только один раз)."""
+        while True:
+            await self.sync(client)
+            if interval_s <= 0:
+                return
+            await asyncio.sleep(interval_s)
 
     # --- снимок ---
     def _save_snapshot(self, kb: KnowledgeBase) -> None:
@@ -238,8 +290,7 @@ class SheetKnowledgeSource:
         return True
 
     def initial_load(self) -> None:
-        if self.sync_blocking():
-            return
+        """Старт без сети: снимок, иначе YAML. Таблица подтянется фоновой синхронизацией."""
         if self.load_snapshot():
             return
-        logger.error("knowledge_sheet_unavailable_using_yaml")
+        logger.warning("knowledge_sheet_no_snapshot_using_yaml")

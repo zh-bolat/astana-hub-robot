@@ -1,13 +1,16 @@
 """Лог вопросов и ответов (шаг 3.7). Только текст, без изображений.
 
 MVP — SQLite; переход на Postgres — сменой DATABASE_URL (+ драйвер psycopg).
+БД не на критическом пути ответа: запись идёт фоном (`app.log_writer.BackgroundLogWriter`),
+подключение и запросы ограничены таймаутами (`engine_options`), схема создаётся лениво.
 """
 
 from __future__ import annotations
 
 import csv
 import json
-from datetime import UTC, datetime
+import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO
 
@@ -18,11 +21,12 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    delete,
     inspect,
     select,
     text,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -70,39 +74,87 @@ CSV_FIELDS = [
 ]
 
 
-def make_engine(url: str) -> Engine:
+def is_postgres(url: str) -> bool:
+    return make_url(url).get_backend_name() == "postgresql"
+
+
+def engine_options(url: str, timeout_s: float = 2.0) -> dict:
+    """Таймауты, чтобы зависшая/недоступная БД не держала поток записи лога бесконечно."""
+    if url.startswith("sqlite"):
+        # timeout — сколько ждать снятия блокировки файла (busy timeout)
+        return {"connect_args": {"check_same_thread": False, "timeout": timeout_s}}
+    opts: dict = {"pool_pre_ping": True, "pool_timeout": timeout_s}
+    if is_postgres(url):
+        ms = int(timeout_s * 1000)
+        opts["connect_args"] = {
+            "connect_timeout": max(1, round(timeout_s)),
+            "options": f"-c statement_timeout={ms} -c lock_timeout={ms}",
+        }
+    return opts
+
+
+def make_engine(url: str, timeout_s: float = 2.0) -> Engine:
+    """Создаёт engine без подключения к БД: схема создаётся лениво (`QuestionLogRepo.ensure_schema`)."""
     if url.startswith("sqlite:///"):
         path = url.removeprefix("sqlite:///")
         if path and path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(url, connect_args={"check_same_thread": False})
-    else:
-        engine = create_engine(url, pool_pre_ping=True)
-    Base.metadata.create_all(engine)
-    _migrate(engine)
-    return engine
+    return create_engine(url, **engine_options(url, timeout_s))
 
 
-def _migrate(engine: Engine) -> None:
-    """Мини-миграции для уже созданных таблиц (без Alembic на MVP)."""
-    columns = {c["name"] for c in inspect(engine).get_columns("question_log")}
-    if "category" not in columns:
-        with engine.begin() as conn:
+# Ключ advisory-lock для миграций: два контейнера, стартующие одновременно, не мешают друг другу
+_MIGRATION_LOCK_KEY = 0x48554230  # "HUB0"
+
+
+def migrate(engine: Engine) -> None:
+    """Создание таблиц и мини-миграции (без Alembic на MVP). Идемпотентно."""
+    with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+            Base.metadata.create_all(conn)
+            conn.execute(
+                text("ALTER TABLE question_log ADD COLUMN IF NOT EXISTS category VARCHAR(16)")
+            )
+            return
+        Base.metadata.create_all(conn)
+        columns = {c["name"] for c in inspect(conn).get_columns("question_log")}
+        if "category" not in columns:  # в SQLite нет ADD COLUMN IF NOT EXISTS
             conn.execute(text("ALTER TABLE question_log ADD COLUMN category VARCHAR(16)"))
 
 
 class QuestionLogRepo:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
+
+    def ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
+        with self._schema_lock:
+            if not self._schema_ready:
+                migrate(self.engine)
+                self._schema_ready = True
 
     def add(self, **fields) -> None:
+        self.ensure_schema()
         if isinstance(fields.get("sources"), list):
             fields["sources"] = json.dumps(fields["sources"], ensure_ascii=False)
         with Session(self.engine) as s:
             s.add(QuestionLog(**fields))
             s.commit()
 
+    def purge_older_than(self, days: int, now: datetime | None = None) -> int:
+        """Удаляет записи старше `days` дней. Возвращает число удалённых."""
+        self.ensure_schema()
+        cutoff = (now or datetime.now(UTC)) - timedelta(days=days)
+        with Session(self.engine) as s:
+            result = s.execute(delete(QuestionLog).where(QuestionLog.created_at < cutoff))
+            s.commit()
+            return result.rowcount or 0
+
     def all(self, only_unanswered: bool = False) -> list[QuestionLog]:
+        self.ensure_schema()
         stmt = select(QuestionLog).order_by(QuestionLog.id)
         if only_unanswered:
             stmt = stmt.where(QuestionLog.found.is_(False))

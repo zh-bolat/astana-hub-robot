@@ -23,6 +23,8 @@ def _yandex(settings: Settings):
             "en": settings.yandex_voice_en,
         },
         timeout_s=max(settings.stt_timeout_s, settings.tts_timeout_s) + 1,
+        # lang=null: три языка параллельно, ждём ~3 с, но не дольше общего STT_TIMEOUT_S
+        auto_lang_timeout_s=min(3.0, settings.stt_timeout_s),
     )
 
 

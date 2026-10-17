@@ -88,6 +88,7 @@ def run(cases_path: Path, sleep_s: float = 4.0, force_fake: bool = False) -> dic
                 r = client.post("/v1/ask", json=body, headers={"Authorization": f"Bearer {token}"})
                 latency_ms = int((time.perf_counter() - t0) * 1000)
                 res = r.json() if r.status_code == 200 else {}
+                assert app.state.log_writer.wait_idle(5)
                 rows = app.state.log_repo.all()
                 category = rows[-1].category if rows and r.status_code == 200 else None
                 reasons = check(case, r.status_code, res, corpus)

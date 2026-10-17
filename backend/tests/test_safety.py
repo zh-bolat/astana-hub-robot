@@ -13,7 +13,7 @@ from app.llm.base import LLMAnswer, LLMRequest, parse_answer_json
 from app.prompts import ask_system_prompt, ask_user_prompt, look_user_prompt
 from app.safety import BLOCKED_ANSWERS, MAX_ANSWER_CHARS, blocked_reason, limit_phrases
 from app.streaming import AnswerStreamParser
-from tests.conftest import AUTH, JPEG, SESSION, ScriptedProvider, ask_body
+from tests.conftest import AUTH, JPEG, SESSION, ScriptedProvider, ask_body, logged
 from tests.test_streaming import StreamProvider, _sse_events
 
 EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
@@ -32,7 +32,7 @@ def _sse(c, question):
 
 
 def _last_row(c):
-    return c.app.state.log_repo.all()[-1]
+    return logged(c)[-1]
 
 
 # ---------- промпт ----------
