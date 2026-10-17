@@ -9,6 +9,13 @@
 # Сервер:     COMPOSE_PROFILES=prod в infra/.env → docker compose up -d
 name: astana-hub-robot
 
+# Логи всех сервисов с ротацией (иначе json-file растёт без предела).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   api:
     build:
@@ -16,6 +23,11 @@ services:
     # В CI образ собирается и пушится в GHCR; на сервере API_IMAGE указывает на тег.
     image: ${API_IMAGE:-astana-hub-robot-api:local}
     restart: unless-stopped
+    logging: *logging
+    # uvicorn на 8000 (>1024) под пользователем app — capabilities не нужны.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
     env_file:
       - path: .env
         required: false
@@ -41,6 +53,8 @@ services:
     image: postgres:16-alpine
     profiles: ["postgres"]
     restart: unless-stopped
+    logging: *logging
+    mem_limit: 1g
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-hub}
       POSTGRES_USER: ${POSTGRES_USER:-hub}
@@ -57,9 +71,21 @@ services:
     image: caddy:2-alpine
     profiles: ["prod"]
     restart: unless-stopped
+    logging: *logging
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:-}
+    # ACME_EMAIL обязателен (уведомления Let's Encrypt). `${ACME_EMAIL:?}` здесь
+    # нельзя: compose интерполирует весь файл и сломал бы локальный запуск без
+    # профиля prod — поэтому проверка на старте контейнера.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        [ -n "$$ACME_EMAIL" ] || { echo "ACME_EMAIL is required (infra/.env)" >&2; exit 1; };
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
       - "80:80"
       - "443:443"

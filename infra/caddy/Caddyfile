@@ -1,30 +1,120 @@
+# Край (edge) перед api: HTTPS, лимиты тела, отсечение запросов без токена,
+# заголовки безопасности. Лимиты и коды ошибок — docs/api-contract.md
+# («Таймауты и лимиты», «Ошибки»).
+#
 # HTTPS-сертификат Let's Encrypt выпускается автоматически для $DOMAIN.
-# Условия: A-запись домена указывает на VPS, порты 80/443 открыты.
+# Условия: A-запись домена указывает на VPS, порты 80/443 открыты, ACME_EMAIL задан.
+# Локальный прогон без ACME: DOMAIN="http://:8080" (сайт только по HTTP).
 {
 	email {$ACME_EMAIL}
+
+	servers {
+		timeouts {
+			read_header 10s
+			# Тело /v1/look (~1 МБ) с Wi-Fi робота — с запасом. На ответ (SSE) не влияет.
+			read_body 30s
+			idle 2m
+		}
+	}
 }
 
-{$DOMAIN} {
-	encode zstd gzip
-
-	# /v1/look принимает кадр камеры (base64 JPEG) — запас по размеру тела.
-	request_body {
-		max_size 10MB
-	}
-
-	reverse_proxy api:8000 {
-		health_uri /v1/health
-		health_interval 30s
-	}
-
+# Заголовки безопасности: и для обычных ответов, и для handle_errors
+# (у handle_errors свой маршрут, заголовки сайта туда не попадают).
+(security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 		-Server
+		-Via
 	}
+}
 
+(proxy_api) {
+	# Активный health-check не используем: при одном upstream он после старта
+	# помечает api «нездоровым» до следующей проверки и отдаёт 503. Здоровье api
+	# проверяет healthcheck compose.
+	reverse_proxy api:8000 {
+		# api перезапускается при деплое — подождать его, а не сразу отдавать 502.
+		lb_try_duration 15s
+		lb_try_interval 500ms
+		# SSE (/v1/ask с Accept: text/event-stream): отдавать фразы сразу, без буфера.
+		flush_interval -1
+		header_down -Server
+	}
+}
+
+{$DOMAIN} {
 	log {
 		output stdout
 		format json
+	}
+
+	import security_headers
+
+	# --- Лимиты тела (проверяются по Content-Length до чтения; chunked — при чтении) ---
+	# Контракт: /look ≤ 1 МБ + 64 КБ, /stt ≤ 600 КБ + 64 КБ, /ask ≤ 16 КБ, /tts ≤ 4 КБ.
+	# Точные лимиты держит backend; здесь — грубый барьер с небольшим запасом.
+	@look path /v1/look
+	request_body @look {
+		max_size 1200KB
+	}
+	@stt path /v1/stt
+	request_body @stt {
+		max_size 700KB
+	}
+	@small not path /v1/look /v1/stt
+	request_body @small {
+		max_size 32KB
+	}
+
+	# Health — без авторизации (робот проверяет адрес сервера).
+	handle /v1/health {
+		import proxy_api
+	}
+
+	handle /v1/* {
+		# Без Bearer-заголовка — 401 на краю, тело не проксируется.
+		# Сам токен проверяет backend.
+		@noauth not header_regexp Authorization ^Bearer\s+\S+
+		handle @noauth {
+			header Content-Type application/json
+			header X-Request-Id "req_edge_{http.request.uuid}"
+			respond `\{"error":\{"code":"unauthorized","message":"Missing bearer token"\},"request_id":"req_edge_{http.request.uuid}"\}` 401 {
+				close
+			}
+		}
+
+		import proxy_api
+	}
+
+	# /docs, /redoc, /openapi.json и всё вне /v1/* — 404.
+	handle {
+		error 404
+	}
+
+	# Ошибки края (413, 404, недоступность api) — JSON в формате контракта.
+	handle_errors {
+		import security_headers
+		header Content-Type application/json
+		header X-Request-Id "req_edge_{http.request.uuid}"
+
+		@too_large expression {err.status_code} == 413
+		handle @too_large {
+			respond `\{"error":\{"code":"payload_too_large","message":"Request body too large"\},"request_id":"req_edge_{http.request.uuid}"\}` 413
+		}
+		@not_found expression {err.status_code} == 404
+		handle @not_found {
+			respond `\{"error":\{"code":"not_found","message":"Not found"\},"request_id":"req_edge_{http.request.uuid}"\}` 404
+		}
+		@upstream expression {err.status_code} in [502, 503, 504]
+		handle @upstream {
+			respond `\{"error":\{"code":"internal_error","message":"Backend unavailable"\},"request_id":"req_edge_{http.request.uuid}"\}` 503
+		}
+		handle {
+			respond `\{"error":\{"code":"internal_error","message":"Edge error"\},"request_id":"req_edge_{http.request.uuid}"\}` {err.status_code}
+		}
 	}
 }
