@@ -44,11 +44,15 @@ cd android-app
   flavor `robot` — честное «нет связи».
 - Локальный backend с эмулятора: `BACKEND_URL=http://10.0.2.2:8000/v1` (HTTP разрешён только в debug,
   `src/debug/res/xml/network_security_config.xml`).
+- Экран диагностики: удержание логотипа ≥ 3 с → PIN (`DIAG_PIN` в secrets, в APK только хеш).
+  5 неверных попыток → блокировка 5 мин. Без `DIAG_PIN` на robot/robotos диагностика недоступна, на emulator — без PIN.
+- Адрес сервера с экрана диагностики: только https на хост `BACKEND_URL` или из `BACKEND_ALLOWED_HOSTS`;
+  в debug ещё http на приватные IP (10.x, 172.16–31.x, 192.168.x). `/health` вызывается без токена.
 - Контракт: `../docs/api-contract.md`. Таймауты клиента: `/ask` 8 с, `/look` 12 с, справочники 5 с.
 
 ## Голос
 Настройка (secrets `VOICE_ASR`, `VOICE_TTS_RU/KK/EN`: `builtin` | `server`; на роботе без пересборки —
-**долгое нажатие на «Astana Hub»** → экран диагностики). По умолчанию во всех flavor-ах:
+**удержание «Astana Hub» ≥ 3 с + PIN** → экран диагностики). По умолчанию во всех flavor-ах:
 - распознавание — `server` (наш микрофон → VAD → `/v1/stt`), встроенный ASR робота — опция;
 - синтез: ru и en — встроенный (robotos: SkillApi.playText; robot: AgentOS; emulator: Android TTS),
   kk — `/v1/tts`; при `503 speech_unavailable` или `X-Speech-Provider: fake` — встроенный.

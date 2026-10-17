@@ -1,9 +1,12 @@
 package kz.astanahub.robot
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
+import androidx.activity.addCallback
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
@@ -17,7 +20,8 @@ import kotlinx.coroutines.launch
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.RetrofitBackendApi
-import kz.astanahub.robot.backend.SwitchableBackendApi
+import kz.astanahub.robot.backend.BackendUrlPolicy
+import kz.astanahub.robot.core.LogSafe
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.databinding.ActivityDiagnosticsBinding
 import kz.astanahub.robot.ui.UiScale
@@ -27,7 +31,9 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 import timber.log.Timber
 
 /**
- * Скрытый экран диагностики голоса (долгое нажатие на «Astana Hub» на главном экране).
+ * Скрытый экран диагностики голоса (удержание «Astana Hub» ≥ 3 с на главном экране + PIN).
+ * Доступ проверяется при каждом открытии/возврате ([kz.astanahub.robot.security.DiagnosticsGate]);
+ * разблокировка сбрасывается через 5 мин бездействия и при уходе с экрана.
  * Для спайков 2.3–2.5 на роботе: встроенный vs серверный TTS, лог встроенного ASR и серверного STT
  * с языком и временем, уровень микрофона, переключение режима голоса без пересборки.
  */
@@ -40,12 +46,26 @@ class DiagnosticsActivity : AppCompatActivity() {
     private var ttsJob: Job? = null
     private var monitorJob: Job? = null
 
+    private val gate by lazy { container.diagnostics }
+    private val idleHandler = Handler(Looper.getMainLooper())
+    private val idleCheck = object : Runnable {
+        override fun run() {
+            if (!gate.canEnter()) { finish(); return }
+            idleHandler.postDelayed(this, IDLE_CHECK_MILLIS)
+        }
+    }
+
     override fun attachBaseContext(newBase: android.content.Context) {
         super.attachBaseContext(UiScale.wrap(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!gate.canEnter()) {
+            Timber.w("diagnostics: locked, closing")
+            finish()
+            return
+        }
         binding = ActivityDiagnosticsBinding.inflate(layoutInflater)
         setContentView(binding.root)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -58,14 +78,20 @@ class DiagnosticsActivity : AppCompatActivity() {
         binding.serverStatus.text = "Сейчас: ${container.backend.url.value.ifEmpty { "не задан" }}"
         binding.serverCheck.setOnClickListener { checkServer() }
         binding.serverSave.setOnClickListener {
-            val url = SwitchableBackendApi.normalizeUserUrl(binding.serverUrl.text?.toString().orEmpty())
-            container.backendSettings.save(url)
-            container.backend.switchTo(url)
-            binding.serverUrl.setText(url)
-            binding.serverStatus.text = "Сохранено: ${url.ifEmpty { "не задан" }}"
-            log("Адрес сервера: ${url.ifEmpty { "не задан" }}")
-            lifecycleScope.launch { container.places.refresh() }
-            checkServer()
+            when (val r = container.backendSettings.save(binding.serverUrl.text?.toString().orEmpty())) {
+                is BackendUrlPolicy.Result.Invalid -> {
+                    binding.serverStatus.text = "Не сохранено: ${r.message}"
+                    log("Адрес сервера отклонён: ${r.message}")
+                }
+                is BackendUrlPolicy.Result.Valid -> {
+                    container.backend.switchTo(r.url)
+                    binding.serverUrl.setText(r.url)
+                    binding.serverStatus.text = "Сохранено: ${r.url}"
+                    log("Адрес сервера: ${r.url}")
+                    lifecycleScope.launch { container.places.refresh() }
+                    checkServer()
+                }
+            }
         }
         binding.serverReset.setOnClickListener {
             container.backendSettings.reset()
@@ -171,12 +197,14 @@ class DiagnosticsActivity : AppCompatActivity() {
 
         binding.clearButton.setOnClickListener { binding.logText.text = "" }
         binding.closeButton.setOnClickListener { finish() }
+        // «Назад» — на главный экран.
+        onBackPressedDispatcher.addCallback(this) { finish() }
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     router.builtinAsr.transcripts.collect { t ->
-                        if (t.isFinal) log("Встроенный ASR: «${t.text}»")
+                        if (t.isFinal) log("Встроенный ASR: «${t.text}»", pii = t.text)
                     }
                 }
                 launch {
@@ -188,6 +216,7 @@ class DiagnosticsActivity : AppCompatActivity() {
                             log(
                                 "Серверный STT [${e.lang?.code ?: "?"}, conf=${e.confidence ?: "-"}]: «${e.text}» " +
                                     "аудио ${e.audioMillis} мс, ответ ${e.latencyMillis} мс",
+                                pii = e.text,
                             )
                         }
                     }
@@ -203,8 +232,27 @@ class DiagnosticsActivity : AppCompatActivity() {
         log("Голос: ${container.voiceSettings.config.value.describe()}, flavor: ${getString(R.string.flavor_name)}, backend: ${container.backend.url.value.ifEmpty { "не задан" }}")
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!gate.canEnter()) { finish(); return }
+        idleHandler.removeCallbacks(idleCheck)
+        idleHandler.postDelayed(idleCheck, IDLE_CHECK_MILLIS)
+    }
+
+    override fun onPause() {
+        idleHandler.removeCallbacks(idleCheck)
+        super.onPause()
+    }
+
+    /** Любое касание продлевает разблокировку (сброс — через 5 мин бездействия). */
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        gate.session.touch()
+    }
+
     override fun onStart() {
         super.onStart()
+        if (!::binding.isInitialized) return
         container.voice.setDiagnosticsOpen(true)
         // Встроенный ASR по умолчанию включён, чтобы видеть onASRResult.
         binding.builtinMicSwitch.isChecked = true
@@ -212,6 +260,9 @@ class DiagnosticsActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        // Ушли с экрана (не пересоздание из-за масштаба) — снова нужен PIN.
+        if (!isChangingConfigurations) gate.session.lock()
+        if (!::binding.isInitialized) { super.onStop(); return }
         stopMonitor()
         ttsJob?.cancel()
         container.voice.stopSpeaking()
@@ -221,17 +272,20 @@ class DiagnosticsActivity : AppCompatActivity() {
         super.onStop()
     }
 
-    /** GET /v1/health по адресу из поля (ещё не сохранённому). */
+    /** GET /v1/health (без токена) по адресу из поля — только если адрес разрешён политикой. */
     private fun checkServer() {
-        val url = SwitchableBackendApi.normalizeUserUrl(binding.serverUrl.text?.toString().orEmpty())
-        if (url.isEmpty()) {
-            binding.serverStatus.text = "Адрес пустой или некорректный"
-            return
+        val url = when (val r = container.backendUrlPolicy.validate(binding.serverUrl.text?.toString().orEmpty())) {
+            is BackendUrlPolicy.Result.Invalid -> {
+                binding.serverStatus.text = "Не проверено: ${r.message}"
+                return
+            }
+            is BackendUrlPolicy.Result.Valid -> r.url
         }
         binding.serverStatus.text = "Проверяю $url …"
         lifecycleScope.launch {
             val started = SystemClock.elapsedRealtime()
-            val r = RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN).health()
+            // Токен не передаём вовсе: /health без авторизации, а адрес мог ещё не быть сохранён.
+            val r = RetrofitBackendApi(url, token = "").health()
             val ms = SystemClock.elapsedRealtime() - started
             val text = when (r) {
                 is ApiResult.Success -> "OK: ${r.value} — $ms мс ($url)"
@@ -341,12 +395,17 @@ class DiagnosticsActivity : AppCompatActivity() {
         if (binding.monitorSwitch.isChecked) binding.monitorSwitch.isChecked = false
     }
 
-    private fun log(line: String) {
+    /** [pii] — текст посетителя в строке: на экран целиком, в logcat — только длина и хеш. */
+    private fun log(line: String, pii: String? = null) {
         val text = "${timeFormat.format(Date())}  $line\n"
-        Timber.i("DIAG %s", line)
+        if (pii == null) Timber.i("DIAG %s", line) else Timber.i("DIAG (скрыто) %s", LogSafe.redact(pii))
         runOnUiThread {
             binding.logText.append(text)
             binding.logScroll.post { binding.logScroll.fullScroll(View.FOCUS_DOWN) }
         }
+    }
+
+    private companion object {
+        const val IDLE_CHECK_MILLIS = 15_000L
     }
 }

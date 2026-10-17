@@ -10,6 +10,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
+import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -30,7 +31,10 @@ import kz.astanahub.robot.databinding.ActivityMainBinding
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
 import kz.astanahub.robot.ui.Phase
+import kz.astanahub.robot.security.DiagAccess
+import kz.astanahub.robot.ui.DiagPinDialog
 import kz.astanahub.robot.ui.UiScale
+import kz.astanahub.robot.ui.setOnHoldListener
 
 /** Главный экран-киоск (шаг 1.6). Вся логика — в [MainViewModel]. */
 class MainActivity : AppCompatActivity() {
@@ -106,10 +110,12 @@ class MainActivity : AppCompatActivity() {
                 container.voice.pushToTalk()
             }
         }
-        // Скрытый жест: долгое нажатие на логотип → диагностика голоса и выбор режима.
-        binding.brandText.setOnLongClickListener {
-            startActivity(Intent(this, DiagnosticsActivity::class.java)); true
+        // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
+        if (container.diagnostics.access != DiagAccess.DISABLED) {
+            binding.brandText.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
         }
+        // Киоск: «Назад» на главном экране ничего не делает.
+        onBackPressedDispatcher.addCallback(this) { }
         ensureMicPermission()
         binding.stopButton.setOnClickListener { viewModel.stop() }
         binding.guideButton.setOnClickListener { viewModel.guideToOffered() }
@@ -128,6 +134,18 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.state.collect(::render)
+            }
+        }
+    }
+
+    private fun openDiagnostics() {
+        val gate = container.diagnostics
+        when (gate.access) {
+            DiagAccess.DISABLED -> Unit
+            DiagAccess.OPEN -> startActivity(Intent(this, DiagnosticsActivity::class.java))
+            DiagAccess.PIN -> DiagPinDialog.show(this, gate.guard) {
+                gate.session.unlock()
+                startActivity(Intent(this, DiagnosticsActivity::class.java))
             }
         }
     }
@@ -223,5 +241,9 @@ class MainActivity : AppCompatActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+    }
+
+    private companion object {
+        const val DIAG_HOLD_MILLIS = 3_000L
     }
 }

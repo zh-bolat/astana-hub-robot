@@ -1,3 +1,4 @@
+import java.security.MessageDigest
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -23,6 +24,23 @@ fun String.asBuildConfigString(): String =
 
 val agentAppId = secret("AGENT_APP_ID")
 
+// PIN экрана диагностики: в APK попадает только итерированный SHA-256 с солью, не сам PIN.
+// Алгоритм должен совпадать с kz.astanahub.robot.security.DiagPin.hash.
+val diagPinSalt = secret("DIAG_PIN_SALT").ifEmpty { "kz.astanahub.robot/diag-pin/v1" }
+
+fun diagPinHash(pin: String, salt: String): String {
+    if (pin.isEmpty()) return ""
+    if (!pin.matches(Regex("\\d{4,12}"))) {
+        throw GradleException("DIAG_PIN в secrets.properties: только цифры, 4–12 знаков")
+    }
+    val md = MessageDigest.getInstance("SHA-256")
+    var digest = md.digest("$salt:$pin".toByteArray(Charsets.UTF_8))
+    repeat(9_999) { digest = md.digest(digest) }
+    return digest.joinToString("") { "%02x".format(it) }
+}
+
+val diagPinHashValue = diagPinHash(secret("DIAG_PIN"), diagPinSalt)
+
 android {
     namespace = "kz.astanahub.robot"
     compileSdk = 36
@@ -38,6 +56,11 @@ android {
         buildConfigField("String", "AGENT_APP_ID", agentAppId.asBuildConfigString())
         buildConfigField("String", "ROBOT_TOKEN", secret("ROBOT_TOKEN").asBuildConfigString())
         buildConfigField("String", "BACKEND_URL", secret("BACKEND_URL").asBuildConfigString())
+        // Хосты, на которые можно переключить сервер с экрана диагностики (через запятую), плюс хост BACKEND_URL.
+        buildConfigField("String", "BACKEND_ALLOWED_HOSTS", secret("BACKEND_ALLOWED_HOSTS").asBuildConfigString())
+        // PIN экрана диагностики (хеш). Пусто: robot/robotos — диагностика недоступна, emulator — без PIN.
+        buildConfigField("String", "DIAG_PIN_HASH", diagPinHashValue.asBuildConfigString())
+        buildConfigField("String", "DIAG_PIN_SALT", diagPinSalt.asBuildConfigString())
         // Голос (меняется и без пересборки — экран диагностики): builtin | server.
         // Распознавание: по умолчанию сервер (все языки). Синтез: ru/en — встроенный, kk — сервер.
         buildConfigField("String", "VOICE_ASR", secret("VOICE_ASR").ifEmpty { "server" }.asBuildConfigString())

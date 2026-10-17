@@ -26,7 +26,10 @@ class SwitchableBackendApi(
         switchTo(initialUrl)
     }
 
-    /** Применяется сразу: следующие запросы идут на новый адрес. */
+    /**
+     * Применяется сразу: следующие запросы идут на новый адрес.
+     * Сюда передаётся только адрес из сборки или прошедший [BackendUrlPolicy] (см. [BackendSettings]).
+     */
     fun switchTo(rawUrl: String) {
         val url = normalizeUserUrl(rawUrl)
         delegate = if (url.isEmpty()) fallback() else factory(url)
@@ -44,13 +47,18 @@ class SwitchableBackendApi(
 
     companion object {
         /**
-         * «10.54.180.166:8000» → «http://10.54.180.166:8000/v1»; пустая строка — пусто.
-         * Некорректный адрес → пусто (как «не задан»).
+         * «robot-api.example.kz» → «https://robot-api.example.kz/v1»; пустая строка — пусто.
+         * Схема по умолчанию https; при [httpForPrivateIp] (debug) «10.54.180.166:8000» → «http://10.54.180.166:8000/v1».
+         * Некорректный адрес → пусто (как «не задан»). Разрешён ли адрес — решает [BackendUrlPolicy].
          */
-        fun normalizeUserUrl(raw: String): String {
+        fun normalizeUserUrl(raw: String, httpForPrivateIp: Boolean = false): String {
             var u = raw.trim()
             if (u.isEmpty()) return ""
-            if (!u.contains("://")) u = "http://$u"
+            if (!u.contains("://")) {
+                val host = u.substringBefore('/').substringBefore(':')
+                val scheme = if (httpForPrivateIp && BackendUrlPolicy.isPrivateIpv4(host)) "http" else "https"
+                u = "$scheme://$u"
+            }
             val parsed = u.toHttpUrlOrNull() ?: return ""
             val path = parsed.encodedPath.trimEnd('/')
             val withApi = if (path.isEmpty()) parsed.newBuilder().encodedPath("/v1").build() else parsed
@@ -59,19 +67,38 @@ class SwitchableBackendApi(
     }
 }
 
-/** Сохранённый адрес сервера; по умолчанию — BuildConfig.BACKEND_URL. */
-class BackendSettings(context: Context, private val default: String) {
+/**
+ * Сохранённый адрес сервера; по умолчанию — BuildConfig.BACKEND_URL (он из сборки, ему доверяем).
+ * Сохраняется только адрес, разрешённый [policy]; сохранённый раньше, но больше не разрешённый — игнорируется.
+ */
+class BackendSettings(context: Context, private val default: String, private val policy: BackendUrlPolicy) {
     private val prefs = context.applicationContext.getSharedPreferences("backend", Context.MODE_PRIVATE)
 
     val defaultUrl: String get() = default
 
-    fun current(): String = prefs.getString(KEY_URL, null) ?: default
+    fun current(): String {
+        val saved = prefs.getString(KEY_URL, null) ?: return default
+        if (!policy.isAllowed(saved)) {
+            Timber.w("saved backend url rejected by policy, using default")
+            reset()
+        }
+        return resolve(saved, default, policy)
+    }
 
-    fun save(url: String) = prefs.edit().putString(KEY_URL, url).apply()
+    /** @return [BackendUrlPolicy.Result.Valid] с нормализованным адресом (сохранён) или причина отказа. */
+    fun save(raw: String): BackendUrlPolicy.Result {
+        val result = policy.validate(raw)
+        if (result is BackendUrlPolicy.Result.Valid) prefs.edit().putString(KEY_URL, result.url).apply()
+        return result
+    }
 
     fun reset() = prefs.edit().remove(KEY_URL).apply()
 
-    private companion object {
-        const val KEY_URL = "url"
+    companion object {
+        private const val KEY_URL = "url"
+
+        /** Сохранённый адрес, если он ещё проходит проверку; иначе адрес по умолчанию из сборки. */
+        fun resolve(saved: String?, default: String, policy: BackendUrlPolicy): String =
+            (saved?.let(policy::validate) as? BackendUrlPolicy.Result.Valid)?.url ?: default
     }
 }

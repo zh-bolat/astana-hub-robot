@@ -14,6 +14,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Invocation
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -53,7 +54,7 @@ class RetrofitBackendApi(
         call(timeouts.askMillis) {
             service.ask(
                 AskRequestDto(
-                    question = question,
+                    question = clipQuestion(question),
                     lang = context.lang?.code,
                     sessionId = context.sessionId,
                     placeId = context.placeId,
@@ -64,7 +65,7 @@ class RetrofitBackendApi(
     override suspend fun look(jpeg: ByteArray, question: String?, context: AskContext): ApiResult<Answer> {
         val meta = json.encodeToString(
             LookMetaDto.serializer(),
-            LookMetaDto(question, context.lang?.code, context.sessionId, context.placeId),
+            LookMetaDto(question?.let(::clipQuestion), context.lang?.code, context.sessionId, context.placeId),
         )
         val image = MultipartBody.Part.createFormData(
             "image",
@@ -158,9 +159,13 @@ class RetrofitBackendApi(
             ApiResult.Failure(BackendError(ErrorKind.UNKNOWN, message = e.message))
         }
 
+    /** Bearer-токен на всех эндпоинтах, кроме помеченных [NoAuth] (`/health`). */
     private fun authInterceptor() = Interceptor { chain ->
-        val request = chain.request().newBuilder().apply {
-            if (token.isNotEmpty()) header("Authorization", "Bearer $token")
+        val original = chain.request()
+        val noAuth = original.tag(Invocation::class.java)?.method()?.isAnnotationPresent(NoAuth::class.java) == true
+        val request = original.newBuilder().apply {
+            if (noAuth) removeHeader("Authorization")
+            else if (token.isNotEmpty()) header("Authorization", "Bearer $token")
         }.build()
         chain.proceed(request)
     }
@@ -170,6 +175,18 @@ class RetrofitBackendApi(
         private val JPEG_MEDIA_TYPE = "image/jpeg".toMediaType()
         private val WAV_MEDIA_TYPE = "audio/wav".toMediaType()
         const val SPEECH_PROVIDER_HEADER = "X-Speech-Provider"
+
+        /** Контракт: `question` — 1–500 символов. */
+        const val MAX_QUESTION_CHARS = 500
+
+        /** Обрезка до [MAX_QUESTION_CHARS] без разрыва суррогатной пары (эмодзи). */
+        fun clipQuestion(question: String): String {
+            val q = question.trim()
+            if (q.length <= MAX_QUESTION_CHARS) return q
+            var end = MAX_QUESTION_CHARS
+            if (Character.isHighSurrogate(q[end - 1])) end--
+            return q.substring(0, end).trimEnd()
+        }
 
         internal val json = Json {
             ignoreUnknownKeys = true

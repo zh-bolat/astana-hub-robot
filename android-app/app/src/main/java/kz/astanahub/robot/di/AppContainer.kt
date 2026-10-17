@@ -5,6 +5,12 @@ import kz.astanahub.robot.BuildConfig
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.audio.Mp3Player
 import kz.astanahub.robot.backend.BackendSettings
+import kz.astanahub.robot.backend.BackendUrlPolicy
+import kz.astanahub.robot.security.DiagAccess
+import kz.astanahub.robot.security.DiagPinGuard
+import kz.astanahub.robot.security.DiagSession
+import kz.astanahub.robot.security.DiagnosticsGate
+import kz.astanahub.robot.security.PrefsLockStore
 import kz.astanahub.robot.backend.SwitchableBackendApi
 import kz.astanahub.robot.backend.FakeBackendApi
 import kz.astanahub.robot.backend.RetrofitBackendApi
@@ -43,7 +49,21 @@ class AppContainer(app: Application) {
     val camera: CameraGateway get() = gateways.camera
     val builtinMic: BuiltinMicControl get() = gateways.builtinMic
 
-    val backendSettings = BackendSettings(app, BuildConfig.BACKEND_URL)
+    /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
+    val backendUrlPolicy = BackendUrlPolicy.fromBuildConfig(
+        backendUrl = BuildConfig.BACKEND_URL,
+        allowedHostsCsv = BuildConfig.BACKEND_ALLOWED_HOSTS,
+        debug = BuildConfig.DEBUG,
+    )
+
+    val backendSettings = BackendSettings(app, BuildConfig.BACKEND_URL, backendUrlPolicy)
+
+    /** Доступ к экрану диагностики: PIN из secrets (хеш), блокировка после неверных попыток. */
+    val diagnostics = DiagnosticsGate(
+        access = DiagAccess.of(BuildConfig.DIAG_PIN_HASH, BuildConfig.IS_ROBOT),
+        guard = DiagPinGuard(BuildConfig.DIAG_PIN_HASH, BuildConfig.DIAG_PIN_SALT, PrefsLockStore(app)),
+        session = DiagSession(android.os.SystemClock::elapsedRealtime),
+    )
 
     /** Адрес сервера меняется на экране диагностики без пересборки; токен — из BuildConfig. */
     val backend: SwitchableBackendApi = SwitchableBackendApi(

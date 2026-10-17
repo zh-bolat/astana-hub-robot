@@ -26,6 +26,7 @@ import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.core.Lang
+import kz.astanahub.robot.core.LogSafe
 import timber.log.Timber
 
 /** Событие серверного STT — для лога на экране диагностики. */
@@ -141,7 +142,7 @@ class ServerVoiceGateway(
                 when (stt) {
                     is ApiResult.Success -> {
                         val r = stt.value
-                        Timber.i("STT %dms audio=%dms [%s %.2f]: %s", latency, audioMillis, r.lang?.code, r.confidence ?: -1.0, r.text)
+                        Timber.i("STT %dms audio=%dms [%s %.2f]: %s", latency, audioMillis, r.lang?.code, r.confidence ?: -1.0, LogSafe.redact(r.text))
                         _sttEvents.tryEmit(SttEvent(r.text, r.lang, r.confidence, audioMillis, latency))
                         _transcripts.tryEmit(Transcript(r.text, isFinal = true, lang = r.lang))
                         true

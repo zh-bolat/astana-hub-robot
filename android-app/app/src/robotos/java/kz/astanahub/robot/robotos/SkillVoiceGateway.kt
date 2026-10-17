@@ -19,6 +19,7 @@ import kz.astanahub.robot.voice.BuiltinMicControl
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
+import kz.astanahub.robot.core.LogSafe
 import timber.log.Timber
 
 /**
@@ -65,7 +66,7 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
         }
 
         override fun onQueryAsrResult(asrResult: String?) {
-            Timber.i("SkillCallback.onQueryAsrResult: %s", asrResult)
+            Timber.i("SkillCallback.onQueryAsrResult: %s", LogSafe.redact(asrResult))
             emitFinal(asrResult, "asr")
         }
 
@@ -97,7 +98,7 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
 
     /** Из ModuleCallbackApi.onSendRequest: текст запроса, который система распознала. */
     fun onSystemRequest(reqType: String?, reqText: String?, reqParam: String?) {
-        Timber.i("onSendRequest type=%s text=%s param=%s", reqType, reqText, reqParam)
+        Timber.i("onSendRequest type=%s text=%s param=%s", reqType, LogSafe.redact(reqText), LogSafe.redact(reqParam))
         emitFinal(reqText, "request:$reqType")
     }
 
@@ -109,7 +110,7 @@ class SkillVoiceGateway : VoiceGateway, BuiltinMicControl {
         val last = lastFinal
         if (last != null && last.first == t && now - last.second < DEDUP_WINDOW_MS) return
         lastFinal = t to now
-        Timber.i("builtin ASR [%s]: %s", source, t)
+        Timber.i("builtin ASR [%s]: %s", source, LogSafe.redact(t))
         _transcripts.tryEmit(Transcript(t, isFinal = true))
     }
 

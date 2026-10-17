@@ -273,4 +273,42 @@ class RetrofitBackendApiTest {
         assertEquals("http://10.0.2.2:8000/v1/", RetrofitBackendApi.normalizeBaseUrl("http://10.0.2.2:8000/v1"))
         assertEquals("http://h/v1/", RetrofitBackendApi.normalizeBaseUrl(" http://h/v1/ "))
     }
+
+    @Test
+    fun `health is sent without Authorization header`() = runBlocking {
+        server.enqueue(json(200, """{"status":"ok","version":"0.1.0"}"""))
+
+        assertEquals("ok 0.1.0", (api.health() as ApiResult.Success).value)
+
+        val request = server.takeRequest()
+        assertEquals("/v1/health", request.path)
+        assertEquals(null, request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `other endpoints still send token`() = runBlocking {
+        server.enqueue(json(200, """{"items":[]}"""))
+        api.quickQuestions(Lang.RU)
+        assertEquals("Bearer secret-token", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `long question is clipped to 500 chars before sending`() = runBlocking {
+        server.enqueue(json(200, """{"answer":"ok"}"""))
+        api.ask("  " + "я".repeat(700) + "  ", ctx)
+        val body = server.takeRequest().body.readUtf8()
+        val sent = RetrofitBackendApi.json.parseToJsonElement(body)
+            .let { (it as kotlinx.serialization.json.JsonObject)["question"] }
+            .let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+        assertEquals(500, sent.length)
+    }
+
+    @Test
+    fun `clip keeps short questions and does not split surrogate pairs`() {
+        assertEquals("Где кафе?", RetrofitBackendApi.clipQuestion("  Где кафе?  "))
+        val emoji = "\uD83D\uDE00"
+        val clipped = RetrofitBackendApi.clipQuestion("a".repeat(499) + emoji + "tail")
+        assertEquals(499, clipped.length)
+        assertEquals(500, RetrofitBackendApi.clipQuestion("b".repeat(600)).length)
+    }
 }

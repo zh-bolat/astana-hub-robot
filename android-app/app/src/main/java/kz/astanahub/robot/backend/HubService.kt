@@ -12,6 +12,11 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Query
 
+/** Запрос без заголовка Authorization (контракт: `/health` вызывается без токена). */
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+internal annotation class NoAuth
+
 /** Retrofit-описание эндпоинтов. Пути относительные: baseUrl оканчивается на `/v1/`. */
 internal interface HubService {
     @POST("ask")
@@ -24,6 +29,7 @@ internal interface HubService {
         @Part("meta") meta: RequestBody,
     ): Response<AnswerDto>
 
+    @NoAuth
     @GET("health")
     suspend fun health(): Response<HealthDto>
 

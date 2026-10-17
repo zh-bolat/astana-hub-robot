@@ -31,6 +31,7 @@ import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
+import kz.astanahub.robot.core.LogSafe
 import timber.log.Timber
 
 /** Индикатор на экране. */
@@ -165,7 +166,7 @@ class MainViewModel(
         // Повторное нажатие той же кнопки, пока ответ ещё готовится, — игнорируем (на роботе жали 6 раз подряд).
         val current = _state.value
         if (current.processing && requestJob?.isActive == true && current.question == question) {
-            Timber.d("duplicate question ignored: %s", question)
+            Timber.d("duplicate question ignored: %s", LogSafe.redact(question))
             return
         }
         touchSession()
@@ -175,7 +176,7 @@ class MainViewModel(
         requestJob = viewModelScope.launch {
             _state.update { it.copy(question = question, partialQuestion = null, answer = null, guideTarget = null) }
             val routed = IntentRouter.route(question)
-            Timber.d("intent %s subject=%s", routed.intent, routed.subject)
+            Timber.d("intent %s subject=%s", routed.intent, LogSafe.redact(routed.subject))
             when (routed.intent) {
                 IntentRouter.Intent.LOOK -> handleLook(question)
                 IntentRouter.Intent.WHERE_IS -> handleWhereIs(question, routed.subject)

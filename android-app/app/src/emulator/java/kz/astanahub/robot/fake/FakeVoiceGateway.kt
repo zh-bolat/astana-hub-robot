@@ -9,6 +9,7 @@ import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
+import kz.astanahub.robot.core.LogSafe
 import timber.log.Timber
 
 /**
@@ -30,7 +31,7 @@ class FakeVoiceGateway(private val millisPerChar: Long = 35) : VoiceGateway {
         _activity.value = VoiceActivity.SPEAKING
         try {
             for (phrase in phrases) {
-                Timber.i("FAKE TTS [%s]: %s", lang.code, phrase)
+                Timber.i("FAKE TTS [%s]: %s", lang.code, LogSafe.redact(phrase))
                 var left = (phrase.length * millisPerChar).coerceIn(300, 6_000)
                 while (left > 0) {
                     if (stopRequested) return false

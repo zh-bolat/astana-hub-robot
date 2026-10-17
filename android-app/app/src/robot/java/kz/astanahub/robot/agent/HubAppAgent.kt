@@ -37,7 +37,8 @@ object HubAppAgent {
 
             override fun onExecuteAction(action: Action, params: Bundle?): Boolean {
                 // Actions (ask_hub_info, where_is, guide_to, look_and_describe) — шаги 4.1 / 4.5.
-                Timber.i("onExecuteAction: %s", action)
+                // Только имя действия: параметры могут содержать текст посетителя.
+                Timber.i("onExecuteAction: %s params=%d", action.name, params?.size() ?: 0)
                 return false
             }
         }

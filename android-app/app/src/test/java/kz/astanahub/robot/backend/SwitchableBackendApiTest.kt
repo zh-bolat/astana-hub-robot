@@ -58,12 +58,15 @@ class SwitchableBackendApiTest {
 
     @Test
     fun `user typed address is normalized`() {
-        val n = SwitchableBackendApi::normalizeUserUrl
+        val n = { raw: String -> SwitchableBackendApi.normalizeUserUrl(raw, httpForPrivateIp = true) }
         assertEquals("http://10.54.180.166:8000/v1", n("10.54.180.166:8000"))
         assertEquals("http://10.54.180.166:8000/v1", n(" http://10.54.180.166:8000/ "))
         assertEquals("http://192.168.1.5:8000/v1", n("http://192.168.1.5:8000/v1/"))
         assertEquals("https://robot.example.kz/api/v1", n("https://robot.example.kz/api/v1"))
+        assertEquals("https://robot.example.kz/v1", n("robot.example.kz"))
         assertEquals("", n(""))
         assertTrue(n("::::").isEmpty())
+        // По умолчанию (release) схема https даже для приватного IP.
+        assertEquals("https://10.54.180.166:8000/v1", SwitchableBackendApi.normalizeUserUrl("10.54.180.166:8000"))
     }
 }
