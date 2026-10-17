@@ -4,7 +4,11 @@
 - kb          — ответ по базе знаний (found=true, sources заполнены);
 - small_talk  — приветствие, «ты меня слышишь?», «что умеешь?» и т.п. (found=true, sources=[]);
 - general     — только ANSWER_MODE=open: в базе ответа нет, модель ответила из общих знаний (found=false);
-- out_of_scope — ответа нет: стандартный отказ «обратитесь на ресепшен» (found=false).
+- out_of_scope — ответа нет: стандартный отказ «обратитесь на ресепшен» (found=false);
+- blocked     — ответ модели не прошёл выходной фильтр (дословный повтор реплики, чужие ссылки/телефоны),
+                заменён безопасным (found=false). См. app/safety.py.
+
+Длина ответа: не больше 4 фраз и 600 символов (и в обычном ответе, и в SSE).
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from app.prompts import (
     look_system_prompt,
     look_user_prompt,
 )
+from app.safety import BLOCKED_ANSWERS, blocked_reason, kb_corpus, limit_phrases
 from app.schemas import AnswerResponse, AskRequest, LookMeta
 from app.smalltalk import quick_reply
 from app.streaming import AnswerStreamParser
@@ -95,21 +100,30 @@ class AnswerService:
         valid_sources: set[str],
         request_id: str,
         mode: str,
+        corpus: str,
     ) -> tuple[AnswerResponse, str]:
         lang: Lang = resolve_lang(requested_lang, res.lang, question)
         answer = clean_for_tts(res.answer)
         category = decide_category(res.category, res.found, mode) or "out_of_scope"
         if not answer:
             category = "out_of_scope"
+        if category != "out_of_scope":
+            reason = blocked_reason(answer, question, corpus)
+            if reason:
+                logger.warning("answer_blocked", extra={"reason": reason})
+                category = "blocked"
         sources: list[str] = []
         if category == "kb":
             sources = list(dict.fromkeys(s for s in res.sources if s in valid_sources))
         elif category == "out_of_scope":
             answer = refusals[lang]
+        elif category == "blocked":
+            answer = BLOCKED_ANSWERS[lang]
+        phrases = limit_phrases(split_phrases(answer))
         resp = AnswerResponse(
             request_id=request_id,
-            answer=answer,
-            phrases=split_phrases(answer),
+            answer=" ".join(phrases),
+            phrases=phrases,
             lang=lang,
             found=category in ANSWERED,
             sources=sources,
@@ -211,6 +225,7 @@ class AnswerService:
             llm_req.kb.source_ids(),
             request_id,
             self.mode,
+            kb_corpus(llm_req.kb),
         )
         await self._log_ask(
             req, resp, category, self._provider_id(self.text_llm, res.model), started
@@ -234,7 +249,22 @@ class AnswerService:
 
     async def ask_stream(self, req: AskRequest, request_id: str) -> AsyncIterator[tuple[str, dict]]:
         """SSE-версия /ask: события ("phrase", {text}) по мере готовности предложений,
-        затем ("done", {...}) или ("error", {...}). Формат — docs/api-contract.md."""
+        затем ("done", {...}) или ("error", {...}). Формат — docs/api-contract.md.
+        Любое непредвиденное исключение превращается в event: error (поток уже начат)."""
+        finished = False
+        try:
+            async for event, data in self._ask_stream(req, request_id):
+                if event in ("done", "error"):
+                    finished = True
+                yield event, data
+        except Exception:
+            logger.exception("ask_stream_failed")
+            if not finished:
+                yield "error", error_body("internal_error", "Internal server error")
+
+    async def _ask_stream(
+        self, req: AskRequest, request_id: str
+    ) -> AsyncIterator[tuple[str, dict]]:
         started = time.perf_counter()
         quick = self._quick(req, request_id)
         if quick is not None:
@@ -258,6 +288,7 @@ class AnswerService:
         llm_req = self._ask_request(req)
         kb = llm_req.kb
         assert kb is not None
+        corpus = kb_corpus(kb)
         loop = asyncio.get_running_loop()
         end = loop.time() + self.settings.ask_stream_total_s
         parser = AnswerStreamParser()
@@ -267,12 +298,27 @@ class AnswerService:
         first = True
         error: ApiError | None = None
         category: str | None = None
+        stop = False  # лимит длины или фильтр — дальше модель не слушаем
 
-        def to_phrases(sentences: list[str]) -> list[str]:
-            return [p for s in sentences for p in split_phrases(clean_for_tts(s))]
+        def admit(sentences: list[str]) -> list[str]:
+            """Фразы, которые можно отправить: выходной фильтр + лимит 4 фразы / 600 символов."""
+            nonlocal category, stop
+            out: list[str] = []
+            for phrase in (p for s in sentences for p in split_phrases(clean_for_tts(s))):
+                reason = blocked_reason(" ".join([*emitted, *out, phrase]), req.question, corpus)
+                if reason:
+                    logger.warning("answer_blocked", extra={"reason": reason, "stream": True})
+                    category = "blocked"
+                    stop = True
+                    break
+                if len(limit_phrases([*emitted, *out, phrase])) <= len(emitted) + len(out):
+                    stop = True
+                    break
+                out.append(phrase)
+            return out
 
         try:
-            while True:
+            while not stop:
                 timeout = llm_req.deadline_s + 0.5 if first else end - loop.time()
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), timeout=max(0.01, timeout))
@@ -286,12 +332,12 @@ class AnswerService:
                 if category is None:
                     held.extend(sentences)
                     continue
-                for phrase in to_phrases([*held, *sentences]):
+                for phrase in admit([*held, *sentences]):
                     emitted.append(phrase)
                     yield "phrase", {"text": phrase}
                 held.clear()
-            if category not in (None, "out_of_scope"):
-                for phrase in to_phrases([*held, *parser.finish()]):
+            if not stop and category not in (None, "out_of_scope"):
+                for phrase in admit([*held, *parser.finish()]):
                     emitted.append(phrase)
                     yield "phrase", {"text": phrase}
         except TimeoutError:
@@ -307,20 +353,19 @@ class AnswerService:
             return
 
         lang: Lang = resolve_lang(req.lang, parser.lang, req.question)
-        if not emitted or category is None:
+        if category != "blocked" and (not emitted or category is None):
             category = "out_of_scope"
         sources: list[str] = []
         if category == "kb":
             raw_sources = parser.full_json().get("sources") or []
             valid = kb.source_ids()
             sources = list(dict.fromkeys(s for s in raw_sources if s in valid))
-        if category == "out_of_scope":
-            answer = REFUSALS[lang]
-            for phrase in split_phrases(answer):
+        if category in ("out_of_scope", "blocked"):
+            fallback = REFUSALS[lang] if category == "out_of_scope" else BLOCKED_ANSWERS[lang]
+            for phrase in limit_phrases([*emitted, *split_phrases(fallback)])[len(emitted) :]:
                 emitted.append(phrase)
                 yield "phrase", {"text": phrase}
-        else:
-            answer = " ".join(emitted)
+        answer = " ".join(emitted)
         resp = AnswerResponse(
             request_id=request_id,
             answer=answer,
@@ -363,7 +408,14 @@ class AnswerService:
         if res.category in ("general", "small_talk"):
             res.category = "kb"
         resp, category = self._finalize(
-            res, meta.lang, question, LOOK_REFUSALS, kb.source_ids(), request_id, "strict"
+            res,
+            meta.lang,
+            question,
+            LOOK_REFUSALS,
+            kb.source_ids(),
+            request_id,
+            "strict",
+            kb_corpus(kb),
         )
         await self._log(
             endpoint="look",

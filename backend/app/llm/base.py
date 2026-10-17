@@ -65,9 +65,35 @@ def parse_answer_json(raw: str) -> LLMAnswer:
         if text.lower().startswith("json"):
             text = text[4:]
     start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    if start != -1 and end != -1:
+        try:
+            return LLMAnswer.model_validate_json(text[start : end + 1])
+        except Exception as exc:
+            salvaged = _salvage_truncated(text)
+            if salvaged is None:
+                raise LLMError(f"LLM returned invalid JSON: {exc}") from exc
+            return salvaged
+    salvaged = _salvage_truncated(text)
+    if salvaged is None:
         raise LLMError("LLM returned non-JSON output")
-    try:
-        return LLMAnswer.model_validate_json(text[start : end + 1])
-    except Exception as exc:
-        raise LLMError(f"LLM returned invalid JSON: {exc}") from exc
+    return salvaged
+
+
+def _salvage_truncated(text: str) -> LLMAnswer | None:
+    """JSON, обрезанный по max_output_tokens: берём category/found/lang и законченные предложения."""
+    from app.streaming import AnswerStreamParser
+
+    parser = AnswerStreamParser()
+    sentences = parser.feed(text)
+    if parser.answer_closed:
+        sentences += parser.finish()
+    if parser.found is None and parser.category is None:
+        return None
+    found = parser.found if parser.found is not None else parser.category in ("kb", "small_talk")
+    return LLMAnswer(
+        found=found,
+        category=parser.category,
+        answer=" ".join(sentences),
+        lang=parser.lang,
+        sources=[],
+    )

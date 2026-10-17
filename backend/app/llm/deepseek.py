@@ -10,9 +10,10 @@ from app.llm.base import LLMAnswer, LLMError, LLMRequest, parse_answer_json
 class DeepSeekProvider:
     name = "deepseek"
 
-    def __init__(self, api_key: str, base_url: str, model: str) -> None:
+    def __init__(self, api_key: str, base_url: str, model: str, max_tokens: int = 320) -> None:
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
         self.model = model
+        self.max_tokens = max_tokens
 
     async def answer(self, req: LLMRequest) -> LLMAnswer:
         try:
@@ -23,7 +24,7 @@ class DeepSeekProvider:
                     {"role": "user", "content": req.user},
                 ],
                 temperature=0.2,
-                max_tokens=512,
+                max_tokens=self.max_tokens,
                 response_format={"type": "json_object"},
             )
         except Exception as exc:

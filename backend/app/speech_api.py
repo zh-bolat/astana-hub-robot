@@ -123,12 +123,12 @@ async def stt(request: Request) -> SttResponse:
     if not request.headers.get("content-type", "").startswith("multipart/form-data"):
         raise bad_request("Expected multipart/form-data with parts 'audio' and 'meta'")
 
-    body = await _read_body_limited(request, settings.max_audio_bytes + 16 * 1024)
+    body = await _read_body_limited(request, settings.max_audio_bytes + 64 * 1024)
 
     async def _replay() -> AsyncIterator[bytes]:
         yield body
 
-    audio_part: UploadFile | None = None
+    audio_part: object = None
     try:
         try:
             form = await _InMemoryMultiPartParser(
@@ -138,7 +138,7 @@ async def stt(request: Request) -> SttResponse:
             raise bad_request(f"Invalid multipart body: {exc.message}") from exc
         body = b""
 
-        audio_part = form.get("audio")  # type: ignore[assignment]
+        audio_part = form.get("audio")
         meta_raw = form.get("meta")
         if not isinstance(audio_part, UploadFile):
             raise bad_request("Part 'audio' (audio/wav) is required")
@@ -195,7 +195,8 @@ async def stt(request: Request) -> SttResponse:
             confidence=result.confidence,
         )
     finally:
-        if audio_part is not None:
+        # audio может прийти текстовым полем (str) — тогда закрывать нечего (иначе было 500)
+        if isinstance(audio_part, UploadFile):
             await audio_part.close()
 
 

@@ -69,6 +69,15 @@ def require_robot(request: Request) -> str:
     return key
 
 
+def require_robot_kb(request: Request) -> str:
+    """/places и /quick-questions: свой бакет (60/мин), не делит лимит с /ask и /look."""
+    key = check_token(request)
+    retry_after = request.app.state.kb_rate_limiter.check(key)
+    if retry_after is not None:
+        raise rate_limited(retry_after)
+    return key
+
+
 def _service(request: Request) -> AnswerService:
     return request.app.state.service
 
@@ -188,7 +197,7 @@ async def look(request: Request) -> AnswerResponse:
     async def _replay() -> AsyncIterator[bytes]:
         yield body
 
-    image_part: UploadFile | None = None
+    image_part: object = None
     try:
         try:
             form = await _InMemoryMultiPartParser(
@@ -198,7 +207,7 @@ async def look(request: Request) -> AnswerResponse:
             raise bad_request(f"Invalid multipart body: {exc.message}") from exc
         body = b""  # тело больше не нужно — не держим копию кадра
 
-        image_part = form.get("image")  # type: ignore[assignment]
+        image_part = form.get("image")
         meta_raw = form.get("meta")
         if not isinstance(image_part, UploadFile):
             raise bad_request("Part 'image' (image/jpeg) is required")
@@ -223,7 +232,8 @@ async def look(request: Request) -> AnswerResponse:
         finally:
             del image
     finally:
-        if image_part is not None:
+        # image может прийти текстовым полем (str) — тогда закрывать нечего (иначе было 500)
+        if isinstance(image_part, UploadFile):
             await image_part.close()
 
 
@@ -258,7 +268,7 @@ def _etag_matches(header: str | None, etag: str) -> bool:
     "/places",
     response_model=PlacesResponse,
     responses={**_ERRORS, 304: {"description": "Not modified (If-None-Match)"}},
-    dependencies=[Depends(require_robot)],
+    dependencies=[Depends(require_robot_kb)],
 )
 async def places(request: Request, response: Response):
     payload, etag = _places_payload(request)
@@ -273,7 +283,7 @@ async def places(request: Request, response: Response):
     "/quick-questions",
     response_model=QuickQuestionsResponse,
     responses=_ERRORS,
-    dependencies=[Depends(require_robot)],
+    dependencies=[Depends(require_robot_kb)],
 )
 async def quick_questions(
     request: Request, lang: Annotated[Lang, Query()] = "ru"

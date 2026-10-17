@@ -4,7 +4,9 @@
   который Gemini кеширует неявно (implicit context caching).
 - «Размышления»: для Gemini 3.x управляются `thinking_level` (minimal/low/medium/high), для 2.5 —
   `thinking_budget`. По умолчанию minimal — в замерах thoughts_token_count = 0.
-  `max_output_tokens` включает токены размышлений, поэтому запас 1024.
+  `max_output_tokens` включает токены размышлений; по умолчанию 320 (ответ ≤ 600 символов + JSON) —
+  при включённых размышлениях его нужно поднять (LLM_MAX_OUTPUT_TOKENS). Обрезанный по лимиту JSON
+  не теряется: из него берутся законченные предложения (parse_answer_json).
 - Внутренние ретраи SDK выключены (retry_options=None); повторы и резервные модели — в
   `run_with_fallback` в рамках дедлайна запроса.
 """
@@ -48,7 +50,7 @@ class GeminiProvider:
         fallback_models: list[str] | None = None,
         thinking_level: str | None = "minimal",
         thinking_budget: int | None = None,
-        max_output_tokens: int = 1024,
+        max_output_tokens: int = 320,
         hedge_after_s: float = 3.0,
         retry_min_s: float = 2.5,
     ) -> None:

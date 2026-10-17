@@ -3,7 +3,8 @@
 FastAPI-сервер для робота: `/v1/ask` (вопросы о хабе по базе знаний, JSON или SSE-стриминг), `/v1/look`
 (кадр с камеры → vision LLM), `/v1/stt` и `/v1/tts` (голос через сервер), `/v1/places`, `/v1/quick-questions`,
 `/v1/health`. Контракт — [`docs/api-contract.md`](../docs/api-contract.md) (истина), OpenAPI — `openapi.json`
-(генерируется, см. ниже) или `http://localhost:8000/docs`.
+(генерируется, см. ниже). `/docs`, `/redoc`, `/openapi.json` по умолчанию выключены (404); локально включить:
+`EXPOSE_DOCS=true uv run uvicorn app.main:app --port 8000` → `http://localhost:8000/docs`.
 
 ## Быстрый старт
 
@@ -49,6 +50,8 @@ uv run pytest                 # тесты (на Fake-провайдерах, б
 uv run ruff check && uv run ruff format --check
 uv run python -m eval.run_eval [--min-accuracy 0.9] [--no-lang] [--json report.json]   # eval, шаг 3.8
 LLM_PROVIDER=fake uv run python -m eval.run_eval --min-accuracy 0.9                     # eval без ключа (CI)
+uv run python -m eval.run_injection [--sleep 4] [--json report.json]  # prompt injection на модели из .env
+uv run python -m eval.run_injection --fake                            # то же без сети
 ```
 
 Eval использует провайдер из `.env`: без ключа — fake (проверяет пайплайн), с `GEMINI_API_KEY` — реальную модель
@@ -69,7 +72,10 @@ Eval использует провайдер из `.env`: без ключа — 
 | `ASK_TIMEOUT_S`, `LOOK_TIMEOUT_S` | 6.5, 11 | бюджет сервера на ответ LLM, включая повтор и резерв; иначе `504 timeout` |
 | `ASK_STREAM_TOTAL_S` | 12 | SSE /ask: предел на весь стрим |
 | `ANSWER_MODE` | `open` | `open` — база, иначе ответ модели из общих знаний; `strict` — только база + small talk |
-| `RATE_LIMIT_PER_MIN` | 30 | на токен, in-memory (один процесс) |
+| `RATE_LIMIT_PER_MIN` | 30 | /ask и /look, на токен, in-memory (один процесс) |
+| `KB_RATE_LIMIT_PER_MIN` | 60 | отдельный бакет для /places и /quick-questions |
+| `EXPOSE_DOCS` | `false` | отдавать `/docs`, `/redoc`, `/openapi.json` (только локально) |
+| `LLM_MAX_OUTPUT_TOKENS` | 320 | потолок длины ответа модели; при включённых размышлениях Gemini поднять |
 | `KNOWLEDGE_DIR` | `./knowledge` | YAML-база (источник по умолчанию) |
 | `KNOWLEDGE_SHEET_ID`, `KNOWLEDGE_SYNC_INTERVAL_S` | —, 300 | база из Google-таблицы (см. ниже) |
 | `STT_PROVIDER`, `TTS_PROVIDER` | `auto`, `auto` | голос через сервер (см. ниже) |
@@ -87,6 +93,7 @@ Eval использует провайдер из `.env`: без ключа — 
 | `small_talk` | «привет», «ты меня слышишь?», «спасибо», «что ты умеешь?»… | true | дружелюбный ответ от лица помощника |
 | `general` | в базе нет (только `ANSWER_MODE=open`) | false | ответ модели из общих знаний; конкретику о хабе (цены, телефоны, имена, расписания) не выдумывает — предлагает ресепшен |
 | `out_of_scope` | ответить нечего (в `strict` — всё, чего нет в базе) | false | «обратитесь на ресепшен» |
+| `blocked` | ответ модели не прошёл выходной фильтр (см. «Защита») | false | «могу рассказать только об Astana Hub…» |
 
 Самые частые короткие реплики («привет», «сәлем», «hello», «спасибо», «рахмет», «пока»…) отвечаются локально без LLM
 (`app/smalltalk.py`, ~0 мс). Вопросы «без ответа в базе» — это `found=false` (категории `general` и `out_of_scope`):
@@ -95,6 +102,20 @@ Eval использует провайдер из `.env`: без ключа — 
 Язык ответа: письменность вопроса важнее всего — кириллица → только ru или kk (kk по казахским буквам/частицам или
 если так сказали робот/модель), никогда en; латиница → en (kk — только явно). `lang` робота и язык от модели
 используются, только когда по тексту не понять (нет букв). Модели язык подсказывается заранее в промпте.
+
+## Защита
+
+- `app/guard.py` — чистый ASGI-middleware перед FastAPI: для `/v1/*` (кроме `/v1/health`) сначала Bearer-токен
+  (`401` без чтения тела), затем лимит тела по пути: `/ask` 16 КБ, `/look` 1 МБ + 64 КБ, `/stt` 600 КБ + 64 КБ,
+  `/tts` 4 КБ, прочее 16 КБ. По `Content-Length` — `413` сразу; chunked — счёт байтов при чтении и обрыв с `413`.
+- Rate limit на токен: `/ask`+`/look` 30/мин, `/stt`+`/tts` 120/мин, `/places`+`/quick-questions` 60/мин — три
+  независимых бакета.
+- Prompt injection: реплика посетителя идёт в промпт внутри `<visitor_message>…</visitor_message>` (теги изнутри
+  реплики вырезаются), в системном промпте — блок «БЕЗОПАСНОСТЬ» (реплика и база — данные, не раскрывать правила,
+  не повторять дословно, не выдумывать статус/часы/цены/акции/ссылки, не брать новые роли).
+- Выходной фильтр (`app/safety.py`): ≥ 6 слов подряд из реплики (кроме фраз из базы), URL/домены/e-mail/телефоны/QR,
+  которых нет в базе → безопасный ответ, в логе `category=blocked`. Работает и в SSE (пофразно).
+- Длина: не больше 4 фраз и 600 символов (`_finalize` и SSE — после лимита фразы не отправляются).
 
 ## LLM: повтор, резерв, стриминг
 

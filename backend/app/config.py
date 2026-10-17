@@ -18,7 +18,11 @@ class Settings(BaseSettings):
 
     # Авторизация робота
     robot_token: SecretStr = Field(default=SecretStr(""))
-    rate_limit_per_min: int = 30
+    rate_limit_per_min: int = 30  # /ask и /look
+    # Отдельный бакет для /places и /quick-questions: их опрос не съедает лимит вопросов
+    kb_rate_limit_per_min: int = 60
+    # /docs, /redoc, /openapi.json: в проде выключены (схема — backend/openapi.json)
+    expose_docs: bool = False
 
     # LLM: auto = gemini, если задан GEMINI_API_KEY, иначе fake
     llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = "auto"
@@ -34,6 +38,9 @@ class Settings(BaseSettings):
     # Gemini 3.x: minimal | low | medium | high; пусто — дефолт модели (или thinking_budget для 2.5)
     gemini_thinking_level: str | None = "minimal"
     gemini_thinking_budget: int | None = None  # только для Gemini 2.5: 0 — выключить
+    # Потолок длины ответа модели (JSON целиком). Ответ ≤ 4 фраз / 600 символов + обёртка JSON.
+    # Если включаете «размышления» (THINKING_LEVEL выше minimal / THINKING_BUDGET) — увеличьте.
+    llm_max_output_tokens: int = 320
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"

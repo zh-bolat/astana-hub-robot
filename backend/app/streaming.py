@@ -63,7 +63,27 @@ class AnswerStreamParser:
                 if nxt == "u":
                     if i + 6 > len(buf):
                         break
-                    out.append(chr(int(buf[i + 2 : i + 6], 16)))
+                    code = _hex(buf[i + 2 : i + 6])
+                    if code is None:  # битое \u — пропускаем
+                        i += 6
+                        continue
+                    if 0xD800 <= code <= 0xDBFF:
+                        # суррогатная пара 😀 → один символ; вторая половина может
+                        # ещё не прийти — ждём продолжения
+                        tail = buf[i + 6 : i + 8]
+                        if i + 12 > len(buf) and "\\u".startswith(tail):
+                            break
+                        low = _hex(buf[i + 8 : i + 12]) if buf[i + 6 : i + 8] == "\\u" else None
+                        if low is not None and 0xDC00 <= low <= 0xDFFF:
+                            out.append(chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)))
+                            i += 12
+                        else:
+                            i += 6  # одиночная высокая половина — отбрасываем
+                        continue
+                    if 0xDC00 <= code <= 0xDFFF:
+                        i += 6  # одиночная низкая половина — отбрасываем
+                        continue
+                    out.append(chr(code))
                     i += 6
                     continue
                 out.append(_ESCAPES.get(nxt, nxt))
@@ -100,6 +120,12 @@ class AnswerStreamParser:
             return json.loads(text[start : end + 1])
         except ValueError:
             return {}
+
+
+def _hex(s: str) -> int | None:
+    if len(s) != 4 or any(c not in "0123456789abcdefABCDEF" for c in s):
+        return None
+    return int(s, 16)
 
 
 _SPLIT = re.compile(r"(?<=[.!?…])\s+")

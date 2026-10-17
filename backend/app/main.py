@@ -14,6 +14,7 @@ from app.api import router
 from app.config import Settings
 from app.db import QuestionLogRepo, make_engine
 from app.errors import error_response, install_error_handlers
+from app.guard import GuardMiddleware
 from app.knowledge.sheets import SheetKnowledgeSource
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.llm.base import LLMProvider
@@ -135,10 +136,14 @@ def create_app(
         title="Astana Hub Robot API",
         version=__version__,
         description="Контракт: docs/api-contract.md (v1)",
+        docs_url="/docs" if settings.expose_docs else None,
+        redoc_url="/redoc" if settings.expose_docs else None,
+        openapi_url="/openapi.json" if settings.expose_docs else None,
     )
     app.state.settings = settings
     app.state.store = store
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
+    app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = AnswerService(settings, store, text_llm, vision_llm, repo)
     app.state.log_repo = repo
     app.state.stt = speech or build_stt_provider(settings)
@@ -153,6 +158,8 @@ def create_app(
     install_error_handlers(app)
     app.include_router(router)
     app.include_router(speech_router)
+    # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
+    app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(RequestContextMiddleware)
 
     logger.info(

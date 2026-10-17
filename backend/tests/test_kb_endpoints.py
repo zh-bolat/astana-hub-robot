@@ -90,8 +90,19 @@ def test_export_csv(client, settings):
     assert "чемпионат" in buf.getvalue()
 
 
+def test_docs_hidden_by_default(client):
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+
+def test_docs_exposed_with_flag(make_client):
+    c = make_client(expose_docs=True)
+    assert c.get("/docs").status_code == 200
+    assert c.get("/openapi.json").status_code == 200
+
+
 def test_openapi_matches_contract_paths(client):
-    spec = client.get("/openapi.json").json()
+    spec = client.app.openapi()  # схема генерируется и при выключенном /openapi.json
     assert set(spec["paths"]) == {
         "/v1/health",
         "/v1/ask",
