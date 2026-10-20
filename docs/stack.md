@@ -25,6 +25,7 @@
 | LLM-слой | свой интерфейс `LLMProvider` (text / vision), реализации `GeminiProvider`, `DeepSeekProvider`; провайдер и модель — в `.env` | смена провайдера без изменения кода и контракта |
 | LLM (текст) ⚠ | Gemini (Flash-класс) — основной; DeepSeek — альтернатива/резерв | выбор по eval 3.8 (качество RU/KZ/EN) и замеру 3.9 (задержка); context caching у Gemini для «база в контексте» |
 | LLM (vision) | Gemini (мультимодальная модель) для `/look` | у DeepSeek нет vision-API |
+| **Агентский чат** (2026-10-21) | **OpenAI Agents SDK** + **Claude Haiku 5.5** (через `LitellmModel`) + голос **ElevenLabs**; эндпоинт `/v1/chat`, память в Postgres | решение владельца проекта; условия и альтернативы — `docs/decisions/0001-agent-chat-stack.md` |
 | Поиск по базе | MVP: вся база в контексте (с context caching). Рост базы → Postgres + `pgvector` + полнотекст (гибрид), эмбеддинги мультиязычные (Gemini embeddings или `bge-m3`) | база хаба небольшая — «всё в контексте» проще и точнее RAG; переход без смены API |
 | БД | PostgreSQL 16 (+ `pgvector` при необходимости) | факты, места, логи вопросов |
 | Источник базы знаний | Google-таблица + папка Google Drive → синхронизация в Postgres | сотрудники редактируют без программиста, админку писать не нужно |
