@@ -24,7 +24,9 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.knowledge.source import YamlKnowledgeSource
 from app.main import create_app
+from eval.memory_log import MemoryQuestionLog
 
 DEFAULT_QUESTIONS = Path(__file__).with_name("questions.yaml")
 
@@ -36,11 +38,18 @@ def run(questions_path: Path, pass_lang: bool) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         settings = Settings(
             robot_token=token,
-            database_url=f"sqlite:///{Path(tmp) / 'eval.db'}",
+            # Postgres не нужен: база знаний — YAML, лог вопросов — в памяти
+            database_url="postgresql+psycopg://eval@127.0.0.1:1/none",
+            db_auto_migrate=False,
+            knowledge_snapshot_path=Path(tmp) / "snapshot.json",
             rate_limit_per_min=0,
             log_level="WARNING",
         )
-        app = create_app(settings)
+        app = create_app(
+            settings,
+            knowledge_source=YamlKnowledgeSource(settings.knowledge_dir),
+            log_repo=MemoryQuestionLog(),  # type: ignore[arg-type]
+        )
         provider = app.state.service.text_llm
         results = []
         with TestClient(app) as client:

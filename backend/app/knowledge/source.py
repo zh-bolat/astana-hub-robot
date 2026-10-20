@@ -1,9 +1,9 @@
 """Источники базы знаний и хранилище с горячей перезагрузкой.
 
 `KnowledgeSource` — интерфейс: `fingerprint()` (дешёвая проверка «изменилось ли») и `load()`.
-Сейчас есть `YamlKnowledgeSource` (папка backend/knowledge/). Синк из Google Sheets (шаг 3.3)
-добавляется новой реализацией источника (или выгрузкой таблицы в Postgres + `DbKnowledgeSource`),
-API и остальной код при этом не меняются.
+Рабочий источник — `app.knowledge.pg.DbKnowledgeSource` (Postgres; таблица/YAML синхронизируются
+в БД). `YamlKnowledgeSource` (папка backend/knowledge/) — сид для разработки и запасной вариант,
+если БД недоступна при старте и снимка нет.
 
 `KnowledgeStore` отдаёт актуальную базу и перечитывает её при изменении источника —
 перезапуск сервера (и тем более робота) не нужен.
@@ -19,7 +19,7 @@ from typing import Protocol
 
 import yaml
 
-from app.knowledge.models import Fact, KnowledgeBase, Place, QuickQuestion
+from app.knowledge.models import Event, Fact, KnowledgeBase, Place, QuickQuestion
 from app.logging_setup import logger
 
 
@@ -64,12 +64,20 @@ class YamlKnowledgeSource:
 
 
 def build_kb(
-    facts: list[Fact], places: list[Place], quick_questions: list[QuickQuestion]
+    facts: list[Fact],
+    places: list[Place],
+    quick_questions: list[QuickQuestion],
+    events: list[Event] | None = None,
 ) -> KnowledgeBase:
     """Собирает базу, проверяет уникальность id и считает версию по содержимому."""
     _check_unique("fact", [f.id for f in facts])
     _check_unique("place", [p.id for p in places])
-    content = KnowledgeBase(facts=facts, places=places, quick_questions=quick_questions)
+    _check_unique("place map_name", [p.map_name for p in places])
+    _check_unique("quick question", [q.id for q in quick_questions])
+    _check_unique("event", [e.id for e in events or []])
+    content = KnowledgeBase(
+        facts=facts, places=places, quick_questions=quick_questions, events=events or []
+    )
     content.version = hashlib.sha256(content.model_dump_json().encode()).hexdigest()[:16]
     return content
 
@@ -97,7 +105,13 @@ class KnowledgeStore:
             return self._kb
         with self._lock:
             self._checked_at = now
-            fp = self.source.fingerprint()
+            try:
+                fp = self.source.fingerprint()
+            except Exception as exc:
+                if self._kb is None:
+                    raise
+                logger.error("knowledge_fingerprint_failed", extra={"error": str(exc)})
+                return self._kb
             if self._kb is None or fp != self._fingerprint:
                 try:
                     kb = self.source.load()

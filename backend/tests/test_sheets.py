@@ -5,16 +5,19 @@ from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import text
 
 from app.config import BACKEND_DIR
+from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo
 from app.knowledge.sheets import (
     SheetError,
-    SheetKnowledgeSource,
+    SheetFetcher,
     kb_from_csv,
     read_csv,
     sheet_csv_url,
 )
-from app.knowledge.source import KnowledgeStore, YamlKnowledgeSource
+from app.knowledge.source import KnowledgeStore, YamlKnowledgeSource, build_kb
+from app.knowledge.sync import KnowledgeSyncer
 
 TEMPLATE = BACKEND_DIR / "knowledge" / "sheet_template"
 
@@ -66,95 +69,108 @@ def test_duplicate_ids_rejected():
         kb_from_csv("id,answer_ru\na,1\na,2\n", "id,map_name\n", "id,text_ru\n")
 
 
-# ---------- источник с синхронизацией (MockTransport) ----------
+# ---------- таблица → Postgres (MockTransport) ----------
 
 
-def _source(tmp_path: Path) -> SheetKnowledgeSource:
-    return SheetKnowledgeSource(
-        sheet_id="SHEET",
-        tabs=("Факты", "Места", "Кнопки"),
-        snapshot_path=tmp_path / "snap.json",
-        fallback=YamlKnowledgeSource(BACKEND_DIR / "knowledge"),
-    )
+def _fetcher(timeout_s: float = 5.0) -> SheetFetcher:
+    return SheetFetcher(sheet_id="SHEET", tabs=("Факты", "Места", "Кнопки"), timeout_s=timeout_s)
 
 
 def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _handler(facts: str, status: int = 200):
-    _, places, buttons = _templates()
+def _handler(facts: str, status: int = 200, places: str | None = None):
+    _, default_places, buttons = _templates()
 
     def handler(req: httpx.Request) -> httpx.Response:
         tab = req.url.params["sheet"]
-        body = {"Факты": facts, "Места": places, "Кнопки": buttons}[tab]
+        body = {"Факты": facts, "Места": places or default_places, "Кнопки": buttons}[tab]
         return httpx.Response(status, text=body)
 
     return handler
 
 
-def test_sync_updates_store_and_snapshot(tmp_path):
-    src = _source(tmp_path)
-    store = KnowledgeStore(src, reload_interval_s=0)
-    assert len(store.get().facts) == 13  # пока не синхронизировано — YAML
+GYM = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
 
-    facts = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
-    assert asyncio.run(src.sync(_client(_handler(facts)))) is True
-    kb = store.get()
-    assert [f.id for f in kb.facts] == ["gym"]
+
+def _syncer(db, tmp_path: Path) -> KnowledgeSyncer:
+    repo = KnowledgeRepo(db)
+    source = DbKnowledgeSource(
+        repo, YamlKnowledgeSource(BACKEND_DIR / "knowledge"), tmp_path / "snap.json"
+    )
+    return KnowledgeSyncer(repo, source, _fetcher())
+
+
+def _statuses(db) -> list[str]:
+    with db.connect() as conn:
+        return list(conn.execute(text("SELECT status FROM kb_sync ORDER BY id")).scalars())
+
+
+def test_sync_writes_db_and_keeps_last_good_version_on_errors(db, tmp_path):
+    syncer = _syncer(db, tmp_path)
+    store = KnowledgeStore(syncer.source, reload_interval_s=0)
+    assert len(store.get().facts) == 13  # пока не синхронизировано — YAML (БД пуста)
+
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
+    assert [f.id for f in store.get().facts] == ["gym"]
+    assert syncer.source.from_db is True
     assert (tmp_path / "snap.json").exists()
 
-    # ошибка синка — остаёмся на последней удачной версии
-    assert asyncio.run(src.sync(_client(_handler("", status=500)))) is False
+    # http 500, HTML вместо CSV (таблица закрыта) — база в БД и в памяти не меняется
+    assert asyncio.run(syncer.sync_sheet(_client(_handler("", status=500)))) is False
+    assert asyncio.run(syncer.sync_sheet(_client(_handler("<html>login</html>")))) is False
+    assert syncer.last_error
     assert [f.id for f in store.get().facts] == ["gym"]
-    assert src.last_error
+    assert [f.id for f in KnowledgeRepo(db).load_active().facts] == ["gym"]
 
-    # HTML (таблица закрыта) — тоже остаёмся
-    assert asyncio.run(src.sync(_client(_handler("<html>login</html>")))) is False
-    assert [f.id for f in store.get().facts] == ["gym"]
-
-    # новый процесс без сети поднимается со снимка
-    src2 = _source(tmp_path)
-    assert src2.load_snapshot() is True
-    assert [f.id for f in src2.load().facts] == ["gym"]
+    # повтор той же таблицы — skipped, без записи
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
+    assert _statuses(db) == ["ok", "error", "error", "skipped"]
 
 
-def test_build_source_without_network_falls_back_to_yaml(tmp_path, monkeypatch):
-    from app.config import Settings
-    from app.main import build_knowledge_source
+def test_sync_deactivates_rows_missing_from_sheet(db, tmp_path):
+    syncer = _syncer(db, tmp_path)
+    facts, _, _ = _templates()
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(facts)))) is True
+    assert len(syncer.source.load().facts) == 13
 
-    def boom(self):
-        raise httpx.ConnectError("offline")
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
+    with db.connect() as conn:
+        active = dict(conn.execute(text("SELECT id, is_active FROM facts")).all())
+    assert len(active) == 14 and active["gym"] is True
+    assert sum(active.values()) == 1  # остальные выключены, но не удалены
+    last = KnowledgeRepo(db).sync_log(1)[0]
+    assert last.status == "ok"
+    assert last.counts["facts"] == {"inserted": 1, "updated": 0, "deactivated": 13}
+    assert last.version == syncer.source.load().version
 
-    monkeypatch.setattr(httpx.Client, "get", lambda self, url: boom(self))
-    s = Settings(
-        _env_file=None,
-        robot_token="t",
-        knowledge_sheet_id="SHEET",
-        knowledge_snapshot_path=tmp_path / "none.json",
-    )
-    src = build_knowledge_source(s)
-    assert isinstance(src, SheetKnowledgeSource)
-    assert len(src.load().facts) == 13
-
-
-# ---------- заголовки вкладок, параллельная загрузка, старт без сети ----------
+    # строка вернулась в таблицу — снова активна
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(facts)))) is True
+    assert len(syncer.source.load().facts) == 13
 
 
-def test_wrong_tab_name_gviz_returns_first_tab_is_rejected(tmp_path):
+def test_wrong_tab_name_gviz_returns_first_tab_is_rejected(db, tmp_path):
     """gviz при неверном имени вкладки отдаёт первую («Факты») — «Места» без map_name → ошибка."""
-    facts, _, buttons = _templates()
-    src = _source(tmp_path)
-    good = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
-    assert asyncio.run(src.sync(_client(_handler(good)))) is True
+    facts, _, _ = _templates()
+    syncer = _syncer(db, tmp_path)
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM, places=facts)))) is False
+    assert "map_name" in (syncer.last_error or "")
+    assert [f.id for f in syncer.source.load().facts] == ["gym"]  # остались на прошлой версии
+    last = KnowledgeRepo(db).sync_log(1)[0]
+    assert last.status == "error" and "map_name" in last.error
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        tab = req.url.params["sheet"]
-        return httpx.Response(200, text={"Факты": facts, "Места": facts, "Кнопки": buttons}[tab])
 
-    assert asyncio.run(src.sync(_client(handler))) is False
-    assert "map_name" in (src.last_error or "")
-    assert [f.id for f in src.load().facts] == ["gym"]  # остались на прошлой версии
+def test_duplicate_map_name_rejected_without_partial_write(db, tmp_path):
+    syncer = _syncer(db, tmp_path)
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
+    places = "id,map_name\na,Кафе\nb,Кафе\n"
+    assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM, places=places)))) is False
+    assert "map_name" in (syncer.last_error or "")
+    assert {p.id for p in KnowledgeRepo(db).load_active().places} == {
+        p.id for p in YamlKnowledgeSource(BACKEND_DIR / "knowledge").load().places
+    }
 
 
 @pytest.mark.parametrize(
@@ -173,9 +189,8 @@ def test_required_headers_per_tab(kind, csv_text):
         kb_from_csv(tabs["facts"], tabs["places"], tabs["buttons"])
 
 
-def test_tabs_load_in_parallel_with_total_timeout(tmp_path):
-    src = _source(tmp_path)
-    src.timeout_s = 0.3
+def test_tabs_load_in_parallel_with_total_timeout():
+    fetcher = _fetcher(timeout_s=0.3)
     calls: list[str] = []
 
     async def slow(req: httpx.Request) -> httpx.Response:
@@ -183,20 +198,22 @@ def test_tabs_load_in_parallel_with_total_timeout(tmp_path):
         await asyncio.sleep(0.2 if req.url.params["sheet"] != "Кнопки" else 5)
         return httpx.Response(200, text="id,map_name\n")
 
-    async def run() -> tuple[bool, float]:
+    async def run() -> tuple[str, float]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as client:
             t0 = asyncio.get_running_loop().time()
-            ok = await src.sync(client)
-            return ok, asyncio.get_running_loop().time() - t0
+            try:
+                await fetcher.fetch(client)
+            except SheetError as exc:
+                return str(exc), asyncio.get_running_loop().time() - t0
+            return "", 0.0
 
-    ok, elapsed = asyncio.run(run())
-    assert ok is False
+    error, elapsed = asyncio.run(run())
+    assert "timeout" in error
     assert elapsed < 1.0
     assert sorted(calls) == sorted(["Факты", "Места", "Кнопки"])  # все запрошены сразу
-    assert "timeout" in (src.last_error or "")
 
 
-def test_startup_does_not_wait_for_google_and_syncs_in_background(settings, monkeypatch, tmp_path):
+def test_startup_does_not_wait_for_google_and_syncs_in_background(settings, monkeypatch):
     import time
 
     from fastapi.testclient import TestClient
@@ -204,55 +221,69 @@ def test_startup_does_not_wait_for_google_and_syncs_in_background(settings, monk
     from app.llm.fake import FakeProvider
     from app.main import create_app
 
-    facts = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
     _, places, buttons = _templates()
 
     async def handler(req: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0.5)  # Google медленный
         tab = req.url.params["sheet"]
-        return httpx.Response(200, text={"Факты": facts, "Места": places, "Кнопки": buttons}[tab])
+        return httpx.Response(200, text={"Факты": GYM, "Места": places, "Кнопки": buttons}[tab])
 
     monkeypatch.setattr(
-        SheetKnowledgeSource,
+        SheetFetcher,
         "new_client",
         lambda self: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    s = settings.model_copy(
-        update={
-            "knowledge_sheet_id": "SHEET",
-            "knowledge_snapshot_path": tmp_path / "snap.json",
-            "knowledge_reload_interval_s": 0,
-        }
-    )
+    s = settings.model_copy(update={"knowledge_sheet_id": "SHEET"})
     t0 = time.perf_counter()
     app = create_app(s, FakeProvider(), FakeProvider())
     with TestClient(app) as c:
-        assert time.perf_counter() - t0 < 0.4  # старт — на YAML, без ожидания таблицы
+        assert time.perf_counter() - t0 < 0.4  # старт без ожидания таблицы
+        # таблица задана → автосида из YAML нет; пустая БД → запасной YAML до первого синка
+        assert KnowledgeRepo(c.app.state.engine).is_empty()
         assert len(c.app.state.store.get().facts) == 13
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and len(c.app.state.store.get().facts) != 1:
             time.sleep(0.05)
         assert [f.id for f in c.app.state.store.get().facts] == ["gym"]
-    assert (tmp_path / "snap.json").exists()
+    assert s.knowledge_snapshot_path.exists()
 
 
-def test_startup_uses_snapshot_without_network(tmp_path, monkeypatch):
-    from app.config import Settings
-    from app.main import build_knowledge_source
+def test_startup_uses_snapshot_when_db_is_down(settings, monkeypatch, tmp_path):
+    from app.main import create_app
 
-    src = _source(tmp_path)
-    facts = "id,answer_ru,keywords\ngym,Спортзал на 3 этаже.,спортзал\n"
-    assert asyncio.run(src.sync(_client(_handler(facts)))) is True
+    # снимок от прошлого запуска
+    snap = tmp_path / "snap.json"
+    snap.write_text(
+        build_kb(kb_from_csv(GYM, "id,map_name\n", "id,text_ru\n").facts, [], []).model_dump_json(),
+        encoding="utf-8",
+    )
 
     def no_network(*a, **kw):
         raise AssertionError("startup must not touch the network")
 
     monkeypatch.setattr(httpx.Client, "get", no_network)
     monkeypatch.setattr(httpx.AsyncClient, "get", no_network)
-    s = Settings(
-        _env_file=None,
-        robot_token="t",
-        knowledge_sheet_id="SHEET",
-        knowledge_snapshot_path=tmp_path / "snap.json",
+    s = settings.model_copy(
+        update={
+            "database_url": "postgresql+psycopg://u:p@127.0.0.1:1/none",
+            "db_timeout_s": 1,
+            "knowledge_sheet_id": "SHEET",
+            "knowledge_snapshot_path": snap,
+        }
     )
-    assert [f.id for f in build_knowledge_source(s).load().facts] == ["gym"]
+    from app.llm.fake import FakeProvider
+
+    app = create_app(s, FakeProvider(), FakeProvider())
+    assert [f.id for f in app.state.store.get().facts] == ["gym"]
+    assert app.state.knowledge.source.from_db is False
+
+
+def test_startup_falls_back_to_yaml_when_db_is_down_and_no_snapshot(settings):
+    from app.llm.fake import FakeProvider
+    from app.main import create_app
+
+    s = settings.model_copy(
+        update={"database_url": "postgresql+psycopg://u:p@127.0.0.1:1/none", "db_timeout_s": 1}
+    )
+    app = create_app(s, FakeProvider(), FakeProvider())
+    assert len(app.state.store.get().facts) == 13

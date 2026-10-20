@@ -158,6 +158,7 @@ class AnswerService:
             },
         )
         # Фоном: ответ роботу не ждёт БД (зависшая/упавшая БД на /ask не влияет)
+        self.log_writer.touch_session(session_id, resp.lang)
         self.log_writer.submit(
             request_id=request_id,
             session_id=session_id,

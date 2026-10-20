@@ -55,26 +55,32 @@ class Settings(BaseSettings):
     # SSE /ask: до первого куска — ask_timeout_s (с повтором/fallback), весь стрим — не дольше этого
     ask_stream_total_s: float = 12.0
 
-    # База знаний: локальная папка с YAML (позже — синк из Google Sheets)
+    # База знаний живёт в Postgres (таблицы facts/places/quick_questions/events). Источники:
+    # Google-таблица (KNOWLEDGE_SHEET_ID) → синк в БД; YAML в knowledge_dir — сид для разработки.
     knowledge_dir: Path = BACKEND_DIR / "knowledge"
+    # Как часто сервер сверяет kb_sync.version и перечитывает базу из БД в память, сек
     knowledge_reload_interval_s: float = 5.0
-    # Google-таблица (шаг 3.3): если задан ID — база берётся из неё (вкладки доступны по ссылке),
-    # иначе — из YAML в knowledge_dir. Снимок последней удачной синхронизации — на диске.
+    # Google-таблица (шаг 3.3): если задан ID — фоновый синк таблица → БД (вкладки доступны по ссылке)
     knowledge_sheet_id: str | None = None
     knowledge_sheet_facts: str = "Факты"
     knowledge_sheet_places: str = "Места"
     knowledge_sheet_buttons: str = "Кнопки"
     knowledge_sync_interval_s: float = 300.0
-    # Общий таймаут загрузки всех вкладок (параллельно); не успели — остаёмся на прошлой версии
+    # Общий таймаут загрузки всех вкладок (параллельно); не успели — база в БД не меняется
     knowledge_sync_timeout_s: float = 5.0
+    # Снимок последней загруженной из БД базы: старт, если Postgres недоступен
     knowledge_snapshot_path: Path = BACKEND_DIR / "data" / "knowledge_snapshot.json"
+    # БД без единого факта и таблица не задана → при старте засеять из YAML (разработка)
+    kb_seed_yaml_if_empty: bool = True
 
-    # Лог вопросов: SQLite на MVP, Postgres — сменой URL. Пишется фоном, ответ БД не ждёт.
-    # В Docker-образе пути данных — под /data (volume), см. Dockerfile.
-    database_url: str = f"sqlite:///{BACKEND_DIR / 'data' / 'questions.db'}"
-    # Таймауты БД, сек: подключение, запрос (Postgres statement_timeout), ожидание блокировки SQLite
+    # PostgreSQL 16 + pgvector — единственная рабочая БД (docs/db-schema.md).
+    # Локально: infra/docker-compose.dev.yml (порт 127.0.0.1:5432), пароль — в backend/.env.
+    database_url: str = "postgresql+psycopg://hub@127.0.0.1:5432/hub"
+    # Миграции Alembic при старте (до приёма запросов); ошибка миграции — сервер не стартует
+    db_auto_migrate: bool = True
+    # Таймауты БД, сек: подключение и запрос (statement_timeout/lock_timeout)
     db_timeout_s: float = 2.0
-    # Хранение лога вопросов, дней (0 — хранить вечно). Очистка — раз в сутки фоном.
+    # Хранение лога вопросов, сессий и сообщений, дней (0 — хранить вечно). Очистка — раз в сутки фоном.
     question_log_retention_days: int = 180
     # Очередь фоновой записи: при зависшей БД сверх лимита записи отбрасываются (с предупреждением)
     question_log_queue_max: int = 1000

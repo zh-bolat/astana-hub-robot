@@ -15,11 +15,14 @@ from app import __version__
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
-from app.db import QuestionLogRepo, make_engine
+from app.db import QuestionLogRepo, SessionRepo, make_engine
+from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
-from app.knowledge.sheets import SheetKnowledgeSource
+from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo
+from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
+from app.knowledge.sync import KnowledgeSyncer
 from app.llm.base import LLMProvider
 from app.llm.factory import build_text_provider, build_vision_provider
 from app.log_writer import BackgroundLogWriter, purge_job
@@ -90,24 +93,33 @@ class RequestContextMiddleware:
             reset_request_id(token)
 
 
-def build_knowledge_source(settings: Settings) -> KnowledgeSource:
-    """YAML по умолчанию; Google-таблица — если задан KNOWLEDGE_SHEET_ID."""
-    yaml_source = YamlKnowledgeSource(settings.knowledge_dir)
+def build_sheet_fetcher(settings: Settings) -> SheetFetcher | None:
     if not settings.knowledge_sheet_id:
-        return yaml_source
-    sheet = SheetKnowledgeSource(
+        return None
+    return SheetFetcher(
         sheet_id=settings.knowledge_sheet_id,
         tabs=(
             settings.knowledge_sheet_facts,
             settings.knowledge_sheet_places,
             settings.knowledge_sheet_buttons,
         ),
-        snapshot_path=settings.knowledge_snapshot_path,
-        fallback=yaml_source,
         timeout_s=settings.knowledge_sync_timeout_s,
     )
-    sheet.initial_load()  # без сети: снимок или YAML; таблица — фоновым синком в lifespan
-    return sheet
+
+
+def build_knowledge(settings: Settings, engine) -> KnowledgeSyncer:
+    """Знания из Postgres. Старт сеть не трогает: БД → снимок → YAML; таблица — фоновым синком.
+    Пустая БД без таблицы → сид из YAML (KB_SEED_YAML_IF_EMPTY)."""
+    yaml_source = YamlKnowledgeSource(settings.knowledge_dir)
+    repo = KnowledgeRepo(engine)
+    source = DbKnowledgeSource(repo, yaml_source, settings.knowledge_snapshot_path)
+    fetcher = build_sheet_fetcher(settings)
+    seed = yaml_source if settings.kb_seed_yaml_if_empty and fetcher is None else None
+    syncer = KnowledgeSyncer(repo, source, fetcher, yaml_seed=seed)
+    syncer.bootstrap()
+    if source.from_db is False and source.load_snapshot() is False:
+        logger.warning("knowledge_using_yaml_fallback")
+    return syncer
 
 
 async def close_resources(*objs: object) -> None:
@@ -150,35 +162,52 @@ def create_app(
     vision_llm: LLMProvider | None = None,
     speech: SttProvider | TtsProvider | None = None,
     tts: TtsProvider | None = None,
+    knowledge_source: KnowledgeSource | None = None,
+    log_repo: QuestionLogRepo | None = None,
 ) -> FastAPI:
-    """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS."""
+    """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
+    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi)."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
     if not settings.robot_token.get_secret_value():
         raise RuntimeError("ROBOT_TOKEN is not set (see backend/.env.example)")
     init_sentry(settings)
 
-    source = build_knowledge_source(settings)
-    store = KnowledgeStore(source, settings.knowledge_reload_interval_s)
+    engine = make_engine(settings.database_url, settings.db_timeout_s)
+    if settings.db_auto_migrate:
+        # До приёма запросов; ошибка → исключение, процесс завершается с ненулевым кодом
+        upgrade_head(settings.database_url)
+    syncer: KnowledgeSyncer | None = None
+    if knowledge_source is None:
+        syncer = build_knowledge(settings, engine)
+        knowledge_source = syncer.source
+    store = KnowledgeStore(knowledge_source, settings.knowledge_reload_interval_s)
     store.get()  # битая база — падаем на старте, а не на первом вопросе
     text_llm = text_llm or build_text_provider(settings)
     vision_llm = vision_llm or build_vision_provider(settings, text_llm)
-    # БД не на критическом пути: engine без подключения, схема и записи — в фоновом потоке
-    repo = QuestionLogRepo(make_engine(settings.database_url, settings.db_timeout_s))
-    log_writer = BackgroundLogWriter(repo, max_pending=settings.question_log_queue_max)
+    # БД не на критическом пути ответа: записи лога и сессий — в фоновом потоке
+    repo = log_repo or QuestionLogRepo(engine)
+    log_writer = BackgroundLogWriter(
+        repo,
+        sessions=SessionRepo(engine) if log_repo is None else None,
+        max_pending=settings.question_log_queue_max,
+    )
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        log_writer.submit_job(repo.ensure_schema, name="schema")
-        sync_task = retention_task = None
+        sync_task = refresh_task = retention_task = None
         sheet_client = None
-        if isinstance(source, SheetKnowledgeSource):
-            sheet_client = source.new_client()
-            sync_task = asyncio.create_task(
-                source.run_periodic(settings.knowledge_sync_interval_s, sheet_client)
+        if syncer is not None:
+            refresh_task = asyncio.create_task(
+                syncer.run_refresh(settings.knowledge_reload_interval_s)
             )
+            if syncer.fetcher is not None:
+                sheet_client = syncer.fetcher.new_client()
+                sync_task = asyncio.create_task(
+                    syncer.run_sheet_periodic(settings.knowledge_sync_interval_s, sheet_client)
+                )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(
                 _retention_loop(log_writer, repo, settings.question_log_retention_days)
@@ -187,9 +216,11 @@ def create_app(
             yield
         finally:
             await _cancel(sync_task)
+            await _cancel(refresh_task)
             await _cancel(retention_task)
             await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider)
             await asyncio.to_thread(log_writer.close, 3.0)
+            engine.dispose()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -202,6 +233,8 @@ def create_app(
     )
     app.state.settings = settings
     app.state.store = store
+    app.state.knowledge = syncer
+    app.state.engine = engine
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = AnswerService(settings, store, text_llm, vision_llm, log_writer)

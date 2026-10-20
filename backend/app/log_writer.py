@@ -4,7 +4,7 @@
   threadpool и не держит выход процесса, если БД зависла).
 - Очередь переполнена (БД зависла надолго) → новые записи отбрасываются с предупреждением в логе.
 - Ошибка БД → строка `question_log_failed` в логе, на ответ не влияет.
-- Здесь же — служебные задачи с БД (создание схемы, очистка по сроку хранения), чтобы они тоже
+- Здесь же — служебные задачи с БД (сессии, очистка по сроку хранения), чтобы они тоже
   не выполнялись в event loop.
 """
 
@@ -15,15 +15,21 @@ import threading
 import time
 from collections.abc import Callable
 
-from app.db import QuestionLogRepo
+from app.db import QuestionLogRepo, SessionRepo
 from app.logging_setup import logger
 
 _STOP = object()
 
 
 class BackgroundLogWriter:
-    def __init__(self, repo: QuestionLogRepo, max_pending: int = 1000) -> None:
+    def __init__(
+        self,
+        repo: QuestionLogRepo,
+        max_pending: int = 1000,
+        sessions: SessionRepo | None = None,
+    ) -> None:
         self.repo = repo
+        self.sessions = sessions
         self.max_pending = max_pending
         self.dropped = 0
         self._queue: queue.Queue = queue.Queue()
@@ -68,6 +74,13 @@ class BackgroundLogWriter:
     def submit(self, **fields) -> bool:
         """Запись строки лога вопросов (поля QuestionLog)."""
         return self.submit_job(lambda: self.repo.add(**fields), name="question_log")
+
+    def touch_session(self, session_id: str, lang: str | None) -> bool:
+        """Сессия посетителя: создать или обновить last_seen_at (фоном)."""
+        if self.sessions is None:
+            return False
+        sessions = self.sessions
+        return self.submit_job(lambda: sessions.touch(session_id, lang), name="session")
 
     def wait_idle(self, timeout_s: float = 5.0) -> bool:
         """Ждёт, пока очередь опустеет (тесты, остановка). True — успели."""

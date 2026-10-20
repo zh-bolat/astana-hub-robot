@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import create_engine, text
 
-from app.db import QuestionLogRepo, make_engine
 from app.llm.base import LLMAnswer
 from tests.conftest import AUTH, ScriptedProvider, ask_body, logged
 
@@ -213,36 +211,3 @@ def test_sse_quick_greeting(client):
     events = _sse(client, "Привет")
     assert events[0][0] == "phrase" and "Здравствуйте" in events[0][1]["text"]
     assert events[-1][1]["found"] is True
-
-
-# ---------- миграция БД ----------
-
-
-def test_question_log_migration_adds_category(tmp_path):
-    url = f"sqlite:///{tmp_path / 'old.db'}"
-    engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE question_log (id INTEGER PRIMARY KEY, created_at DATETIME, "
-                "request_id VARCHAR(64), session_id VARCHAR(64), endpoint VARCHAR(16), question TEXT, "
-                "lang VARCHAR(8), place_id VARCHAR(64), found BOOLEAN, answer TEXT, sources TEXT, "
-                "provider VARCHAR(64), latency_ms INTEGER)"
-            )
-        )
-    repo = QuestionLogRepo(make_engine(url))
-    repo.add(
-        request_id="r",
-        session_id="s",
-        endpoint="ask",
-        question="q",
-        lang="ru",
-        place_id=None,
-        found=False,
-        category="general",
-        answer="a",
-        sources=[],
-        provider="p",
-        latency_ms=1,
-    )
-    assert repo.all()[0].category == "general"

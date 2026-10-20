@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import text
 
-from app.db import QuestionLog, QuestionLogRepo, engine_options, make_engine, migrate
+from app.db import QuestionLogRepo, SessionRepo, engine_options, make_engine
 from app.llm.fake import FakeProvider
 from app.log_writer import BackgroundLogWriter
 from app.main import create_app
@@ -45,18 +43,12 @@ class HangingRepo:
         self.release = threading.Event()
         self.calls = 0
 
-    def ensure_schema(self) -> None:
-        self.release.wait(30)
-
     def add(self, **fields) -> None:
         self.calls += 1
         self.release.wait(30)
 
 
 class BrokenRepo:
-    def ensure_schema(self) -> None:
-        raise RuntimeError("db down")
-
     def add(self, **fields) -> None:
         raise RuntimeError("db down")
 
@@ -123,8 +115,6 @@ def test_writer_writes_rows(settings, client):
 
 
 def test_engine_options_have_timeouts():
-    sqlite = engine_options("sqlite:///x.db", 2.0)
-    assert sqlite["connect_args"]["timeout"] == 2.0
     pg = engine_options("postgresql+psycopg://u:p@h/db", 2.0)
     assert pg["pool_pre_ping"] is True
     assert pg["connect_args"]["connect_timeout"] == 2
@@ -142,38 +132,39 @@ def test_make_engine_does_not_connect():
         repo.add(**_row())
 
 
-# ---------- миграции ----------
+def test_sqlite_url_is_rejected():
+    with pytest.raises(ValueError, match="postgresql"):
+        make_engine("sqlite:///x.db")
 
 
-def test_sqlite_migration_adds_column_and_is_idempotent(tmp_path):
-    url = f"sqlite:///{tmp_path / 'old.db'}"
-    raw = create_engine(url)
-    with raw.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE question_log (id INTEGER PRIMARY KEY, created_at DATETIME, "
-                "request_id VARCHAR(64), session_id VARCHAR(64), endpoint VARCHAR(16), "
-                "question TEXT, lang VARCHAR(8), place_id VARCHAR(64), found BOOLEAN, "
-                "answer TEXT, sources TEXT, provider VARCHAR(64), latency_ms INTEGER)"
-            )
-        )
-    engine = make_engine(url)
-    migrate(engine)
-    migrate(engine)
-    assert "category" in {c["name"] for c in inspect(engine).get_columns("question_log")}
+# ---------- срок хранения ----------
 
 
-def test_retention_purges_old_rows(tmp_path):
-    repo = QuestionLogRepo(make_engine(f"sqlite:///{tmp_path / 'r.db'}"))
+def test_retention_purges_old_rows(db):
+    repo = QuestionLogRepo(db)
+    sessions = SessionRepo(db)
     now = datetime.now(UTC)
     repo.add(**_row(request_id="old"), created_at=now - timedelta(days=200))
     repo.add(**_row(request_id="fresh"), created_at=now - timedelta(days=10))
+    sessions.touch("old-session", "ru", now=now - timedelta(days=200))
+    sessions.touch("fresh-session", "ru", now=now - timedelta(days=10))
     assert repo.purge_older_than(180) == 1
     assert [r.request_id for r in repo.all()] == ["fresh"]
+    assert sessions.get("old-session") is None
+    assert sessions.get("fresh-session") is not None
 
 
-def test_retention_runs_in_background_on_startup(settings, tmp_path):
-    repo = QuestionLogRepo(make_engine(settings.database_url))
+def test_statement_timeout_applies(db, pg_url):
+    engine = make_engine(pg_url, timeout_s=1)
+    try:
+        with pytest.raises(Exception), engine.connect() as conn:  # noqa: B017
+            conn.execute(text("SELECT pg_sleep(3)"))
+    finally:
+        engine.dispose()
+
+
+def test_retention_runs_in_background_on_startup(settings, db):
+    repo = QuestionLogRepo(db)
     repo.add(**_row(request_id="old"), created_at=datetime.now(UTC) - timedelta(days=400))
     repo.add(**_row(request_id="new"))
     app = create_app(
@@ -191,8 +182,8 @@ def test_retention_runs_in_background_on_startup(settings, tmp_path):
         assert [r.request_id for r in c.app.state.log_repo.all()] == ["new"]
 
 
-def test_retention_disabled_with_zero(settings):
-    repo = QuestionLogRepo(make_engine(settings.database_url))
+def test_retention_disabled_with_zero(settings, db):
+    repo = QuestionLogRepo(db)
     repo.add(**_row(request_id="old"), created_at=datetime.now(UTC) - timedelta(days=4000))
     app = create_app(
         settings.model_copy(update={"question_log_retention_days": 0}),
@@ -204,41 +195,20 @@ def test_retention_disabled_with_zero(settings):
         assert [r.request_id for r in c.app.state.log_repo.all()] == ["old"]
 
 
-# Postgres: тест запускается, только если задан TEST_POSTGRES_URL (например, временный контейнер)
-PG_URL = os.environ.get("TEST_POSTGRES_URL")
+# ---------- сессии ----------
 
 
-@pytest.mark.skipif(not PG_URL, reason="TEST_POSTGRES_URL is not set")
-def test_postgres_concurrent_migrations_and_retention():
-    assert PG_URL
-    engine = make_engine(PG_URL)
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS question_log"))
-    # Таблица «старой» версии без category
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE question_log (id SERIAL PRIMARY KEY, "
-                "created_at TIMESTAMPTZ, request_id VARCHAR(64), session_id VARCHAR(64), "
-                "endpoint VARCHAR(16), question TEXT, lang VARCHAR(8), place_id VARCHAR(64), "
-                "found BOOLEAN, answer TEXT, sources TEXT, provider VARCHAR(64), latency_ms INTEGER)"
-            )
-        )
-    # Два «контейнера» стартуют одновременно
-    engines = [make_engine(PG_URL) for _ in range(4)]
-    with ThreadPoolExecutor(4) as pool:
-        list(pool.map(migrate, engines))
-    assert "category" in {c["name"] for c in inspect(engine).get_columns("question_log")}
-    repo = QuestionLogRepo(engine)
-    repo.add(**_row(request_id="old"), created_at=datetime.now(UTC) - timedelta(days=200))
-    repo.add(**_row(request_id="new"))
-    assert repo.purge_older_than(180) == 1
-    assert [r.request_id for r in repo.all()] == ["new"]
-    # statement_timeout действует
-    with pytest.raises(Exception), engine.connect() as conn:  # noqa: B017
-        conn.execute(text("SELECT pg_sleep(5)"))
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE question_log"))
-    for e in [engine, *engines]:
-        e.dispose()
-    assert QuestionLog.__tablename__ == "question_log"
+def test_ask_touches_session_in_background(client, db):
+    from tests.conftest import SESSION
+
+    client.post("/v1/ask", json=ask_body("Какой пароль от Wi-Fi?"), headers=AUTH)
+    assert client.app.state.log_writer.wait_idle(5)
+    first = SessionRepo(db).get(SESSION)
+    assert first is not None and first.lang == "ru"
+    client.post("/v1/ask", json=ask_body("Where is the cafe?"), headers=AUTH)
+    assert client.app.state.log_writer.wait_idle(5)
+    second = SessionRepo(db).get(SESSION)
+    assert second is not None
+    assert second.started_at == first.started_at
+    assert second.last_seen_at >= first.last_seen_at
+    assert second.lang == "en"

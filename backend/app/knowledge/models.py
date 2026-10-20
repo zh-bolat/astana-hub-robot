@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from app.lang import Lang
@@ -42,6 +44,7 @@ class Place(BaseModel):
     # Подсказки для vision-модели: как помещение выглядит (шаг 6.3; позже — эталонные фото)
     visual_hints: str = ""
     photos: list[str] = Field(default_factory=list)
+    floor: int | None = None
 
     @property
     def source_id(self) -> str:
@@ -53,11 +56,23 @@ class QuickQuestion(BaseModel):
     text: LocalizedText
 
 
+class Event(BaseModel):
+    """Мероприятие (таблица events; в промпт пока не попадает — для агента, шаг 3)."""
+
+    id: str
+    title: LocalizedText
+    description: LocalizedText = Field(default_factory=LocalizedText)
+    starts_at: datetime
+    ends_at: datetime | None = None
+    place_id: str | None = None
+
+
 class KnowledgeBase(BaseModel):
     version: str = ""
     facts: list[Fact] = Field(default_factory=list)
     places: list[Place] = Field(default_factory=list)
     quick_questions: list[QuickQuestion] = Field(default_factory=list)
+    events: list[Event] = Field(default_factory=list)
 
     def place(self, place_id: str | None) -> Place | None:
         if not place_id:

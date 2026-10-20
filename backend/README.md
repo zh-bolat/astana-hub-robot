@@ -8,12 +8,34 @@ FastAPI-сервер для робота: `/v1/ask` (вопросы о хабе 
 
 ## Быстрый старт
 
+Нужен PostgreSQL 16 + pgvector — единственная рабочая БД (схема: [`docs/db-schema.md`](../docs/db-schema.md)).
+Локально он поднимается из `infra/` в Docker:
+
 ```bash
-cd backend
+# 1) БД (порт 127.0.0.1:${POSTGRES_PORT:-5432}; пароль — POSTGRES_PASSWORD в infra/.env)
+cd infra && cp -n .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
+
+# 2) сервер вне Docker (hot reload)
+cd ../backend
 uv sync
-cp .env.example .env          # задайте ROBOT_TOKEN; GEMINI_API_KEY — по желанию
+cp .env.example .env          # ROBOT_TOKEN; DATABASE_URL с паролем из infra/.env; GEMINI_API_KEY — по желанию
 uv run uvicorn app.main:app --reload --port 8000
 ```
+
+При старте сервер сам применяет миграции (`DB_AUTO_MIGRATE=true`) и, если база знаний пуста и Google-таблица
+не задана, засевает её из `knowledge/*.yaml` (`KB_SEED_YAML_IF_EMPTY=true`). Вручную:
+
+```bash
+uv run python -m app.cli db upgrade      # миграции Alembic до head (то же: uv run alembic upgrade head)
+uv run python -m app.cli db current      # текущая ревизия (код 1 — схема не на head)
+uv run python -m app.cli kb seed-yaml    # YAML → Postgres (разработка)
+uv run python -m app.cli kb sync         # Google-таблица → Postgres
+uv run python -m app.cli kb status       # активная база и журнал синхронизаций (kb_sync)
+uv run python -m app.cli db import-sqlite /data/questions.db   # перенос старого лога вопросов из SQLite
+```
+
+Весь стек в Docker (api + postgres): `cd infra && docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build`.
 
 Без `GEMINI_API_KEY` сервер работает на **FakeProvider** (детерминированные ответы по ключевым словам базы, без сети)
 и **FakeSpeechProvider**. Так же работают тесты и CI.
@@ -45,8 +67,14 @@ curl -s 'localhost:8000/v1/quick-questions?lang=kk' -H "Authorization: Bearer $R
 
 ## Проверки
 
+Тесты идут на настоящем Postgres + pgvector (`TEST_POSTGRES_URL`, по умолчанию
+`postgresql+psycopg://hub:hub@127.0.0.1:55432/hub_test`; схема `hub_test` пересоздаётся миграциями):
+
 ```bash
+docker run -d --rm --name hubtest-pg -e POSTGRES_PASSWORD=hub -e POSTGRES_USER=hub \
+  -e POSTGRES_DB=hub_test -p 127.0.0.1:55432:5432 pgvector/pgvector:pg16
 uv run pytest                 # тесты (на Fake-провайдерах, без ключей и сети)
+docker stop hubtest-pg        # контейнер удалится сам (--rm)
 uv run ruff check && uv run ruff format --check
 uv run python -m eval.run_eval [--min-accuracy 0.9] [--no-lang] [--json report.json]   # eval, шаг 3.8
 LLM_PROVIDER=fake uv run python -m eval.run_eval --min-accuracy 0.9                     # eval без ключа (CI)
@@ -55,7 +83,7 @@ uv run python -m eval.run_injection --fake                            # то ж�
 ```
 
 Eval использует провайдер из `.env`: без ключа — fake (проверяет пайплайн), с `GEMINI_API_KEY` — реальную модель
-(тратит запросы).
+(тратит запросы). Postgres для eval не нужен: база знаний — YAML из `knowledge/`, лог вопросов — в памяти.
 
 ## Конфигурация (env / `backend/.env`)
 
@@ -76,15 +104,18 @@ Eval использует провайдер из `.env`: без ключа — 
 | `KB_RATE_LIMIT_PER_MIN` | 60 | отдельный бакет для /places и /quick-questions |
 | `EXPOSE_DOCS` | `false` | отдавать `/docs`, `/redoc`, `/openapi.json` (только локально) |
 | `LLM_MAX_OUTPUT_TOKENS` | 320 | потолок длины ответа модели; при включённых размышлениях Gemini поднять |
-| `KNOWLEDGE_DIR` | `./knowledge` | YAML-база (источник по умолчанию) |
-| `KNOWLEDGE_SHEET_ID`, `KNOWLEDGE_SYNC_INTERVAL_S` | —, 300 | база из Google-таблицы (см. ниже) |
+| `KNOWLEDGE_DIR` | `./knowledge` | YAML-база: сид для разработки и запасной вариант без БД |
+| `KB_SEED_YAML_IF_EMPTY` | `true` | пустая база знаний и нет таблицы → сид из YAML при старте |
+| `KNOWLEDGE_RELOAD_INTERVAL_S` | 5 | как часто сервер сверяет `kb_sync.version` и перечитывает базу из БД |
+| `KNOWLEDGE_SHEET_ID`, `KNOWLEDGE_SYNC_INTERVAL_S` | —, 300 | синк Google-таблица → Postgres (см. ниже) |
 | `STT_PROVIDER`, `TTS_PROVIDER` | `auto`, `auto` | голос через сервер (см. ниже) |
 | `ELEVENLABS_API_KEY`, `YANDEX_API_KEY` | — | ключи провайдеров речи |
 | `SPEECH_RATE_LIMIT_PER_MIN` | 120 | отдельный лимит для /stt и /tts |
-| `DATABASE_URL` | `sqlite:///backend/data/questions.db` (в образе `sqlite:////data/questions.db`) | лог вопросов; Postgres — `postgresql+psycopg://user:pass@host:5432/db` (psycopg в зависимостях) |
-| `DB_TIMEOUT_S` | 2 | подключение/запрос Postgres (`connect_timeout`, `statement_timeout`), ожидание блокировки SQLite |
-| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов (0 — вечно); очистка раз в сутки фоном |
-| `KNOWLEDGE_SNAPSHOT_PATH`, `TTS_CACHE_DIR` | `backend/data/...` (в образе `/data/...`) | снимок таблицы и кеш синтеза |
+| `DATABASE_URL` | `postgresql+psycopg://hub@127.0.0.1:5432/hub` (в compose — `…@postgres:5432/hub`) | Postgres 16 + pgvector; SQLite не поддерживается |
+| `DB_AUTO_MIGRATE` | `true` | миграции Alembic при старте, до приёма запросов; ошибка миграции — процесс завершается с ненулевым кодом |
+| `DB_TIMEOUT_S` | 2 | подключение/запрос Postgres (`connect_timeout`, `statement_timeout`, `lock_timeout`) |
+| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов, сессий и сообщений (0 — вечно); очистка раз в сутки фоном |
+| `KNOWLEDGE_SNAPSHOT_PATH`, `TTS_CACHE_DIR` | `backend/data/...` (в образе `/data/...`) | снимок базы знаний (старт без БД) и кеш синтеза |
 | `KNOWLEDGE_SYNC_TIMEOUT_S` | 5 | общий таймаут загрузки всех вкладок таблицы |
 | `TRUSTED_PROXIES` | `172.16.0.0/12,127.0.0.1` | откуда принимать `X-Forwarded-For` (IP клиента в access-логе; в образе — и для uvicorn `--forwarded-allow-ips`) |
 | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | —, `production` | ошибки в Sentry; без DSN выключено; ПДн и тексты вопросов/ответов вырезаются |
@@ -167,15 +198,28 @@ STT и TTS выбираются раздельно (`app/speech/`):
 
 ## База знаний
 
-Источник по умолчанию — YAML-файлы в `knowledge/` (**сейчас там примеры-заглушки**, не реальные данные хаба):
+База знаний живёт в Postgres: таблицы `facts`, `places`, `quick_questions`, `events` (+ `kb_sync` — журнал
+синхронизаций). Сотрудники хаба редактируют **Google-таблицу**, сервер синхронизирует её в БД; YAML-файлы в
+`knowledge/` (**сейчас там примеры-заглушки**, не реальные данные хаба) — только для разработки и тестов:
 
 - `facts.yaml` — факты: `id`, `keywords`, `question`/`answer` на ru/kk/en;
 - `places.yaml` — точки карты робота (`map_name` = имя в `getPlaceList`), синонимы, описания, `visual_hints` для `/look`;
 - `quick_questions.yaml` — кнопки частых вопросов.
 
-Файлы можно править на работающем сервере — изменения подхватываются за ~5 с (`KNOWLEDGE_RELOAD_INTERVAL_S`).
-Сломанный файл не роняет сервис: остаётся предыдущая версия, в логе `knowledge_reload_failed`.
-Проверка: `uv run python -m app.cli check-kb`.
+Как это работает:
+
+- Любая запись в базу (синк таблицы, `kb seed-yaml`) — одна транзакция: upsert строк, исчезнувшие строки
+  получают `is_active=false` (не удаляются; строки с `source='admin'` синк не трогает), в `kb_sync` — статус
+  `ok` / `skipped` (ничего не изменилось) / `error` и `version` — хеш содержимого базы.
+- Сервер держит базу в памяти и раз в `KNOWLEDGE_RELOAD_INTERVAL_S` (5 с) сверяет последнюю `kb_sync.version`;
+  изменилась — перечитывает. Перезапуск сервера и робота не нужен; синк, сделанный другим контейнером или через
+  CLI, подхватывается так же. Запросы к БД — в фоновом потоке, `/ask` их не ждёт.
+- Postgres недоступен при старте → последний снимок (`KNOWLEDGE_SNAPSHOT_PATH`), нет снимка → YAML; когда БД
+  поднимется, база подтянется фоном.
+
+Правка YAML на работающем сервере: `uv run python -m app.cli kb seed-yaml` → изменения видны за ~5 с. Битый
+YAML — ошибка команды (`kb_sync.status=error`), база в БД не меняется. Проверка YAML без БД:
+`uv run python -m app.cli check-kb`.
 
 ### Google-таблица (шаг 3.3)
 
@@ -184,7 +228,7 @@ STT и TTS выбираются раздельно (`app/speech/`):
    `knowledge/sheet_template/{facts,places,buttons}.csv` (их можно импортировать: Файл → Импорт → вставить в текущий лист).
 2. Доступ: «Все, у кого есть ссылка — Читатель» (OAuth не нужен, сервер читает CSV-экспорт
    `…/gviz/tq?tqx=out:csv&sheet=<вкладка>`).
-3. В `.env`: `KNOWLEDGE_SHEET_ID=<часть ссылки между /d/ и /edit>`. Проверить: `uv run python -m app.cli sync-kb`.
+3. В `.env`: `KNOWLEDGE_SHEET_ID=<часть ссылки между /d/ и /edit>`. Проверить: `uv run python -m app.cli kb sync`.
 
 | Вкладка | Колонки (обязательные — **жирным**) |
 |---|---|
@@ -198,18 +242,21 @@ STT и TTS выбираются раздельно (`app/speech/`):
 - Строки без обязательных полей пропускаются (`sheet_row_skipped` в логе); дубликаты `id` и пустая вкладка
   фактов — ошибка синхронизации.
 
-Поведение: старт не ждёт Google — сервер поднимается на последнем снимке (`KNOWLEDGE_SNAPSHOT_PATH`), а если
-его нет — на YAML. Сразу после старта и далее раз в `KNOWLEDGE_SYNC_INTERVAL_S` (по умолчанию 5 мин) — фоновая
-синхронизация: все вкладки параллельно, общий таймаут `KNOWLEDGE_SYNC_TIMEOUT_S` (5 с). При ошибке (нет сети,
-таблица закрыта, битые данные, таймаут) сервер остаётся на последней удачной версии. Удачная синхронизация
-сохраняет снимок.
+Поведение: старт не ждёт Google — сервер поднимается на базе из Postgres (пустая БД до первого синка —
+запасной YAML; автосида из YAML при заданной таблице нет). Сразу после старта и далее раз в
+`KNOWLEDGE_SYNC_INTERVAL_S` (по умолчанию 5 мин) — фоновая синхронизация таблица → Postgres: все вкладки
+параллельно, общий таймаут `KNOWLEDGE_SYNC_TIMEOUT_S` (5 с). При ошибке (нет сети, таблица закрыта, битые
+данные, дубли `id`/`map_name`, таймаут) база в БД не меняется, в `kb_sync` — строка `error`
+(`uv run python -m app.cli kb status`).
 
 Заголовки вкладок проверяются: «Факты» — `id` и хотя бы один из `answer_ru/kk/en`, «Места» — `id`, `map_name`,
 «Кнопки» — `id`, `text_ru`. Это важно: при неверном имени вкладки Google молча отдаёт первую вкладку, и без
 проверки «Места» прочитались бы из «Фактов». Несовпадение — ошибка синхронизации, база не меняется.
 
 Поиск на MVP — «вся база в контексте» LLM: база идёт в system instruction стабильным префиксом
-(Gemini кеширует его неявно). Источник скрыт за интерфейсом `KnowledgeSource` (`app/knowledge/source.py`).
+(Gemini кеширует его неявно). Источник скрыт за интерфейсом `KnowledgeSource` (`app/knowledge/source.py`,
+рабочая реализация — `DbKnowledgeSource` в `app/knowledge/pg.py`). Таблица `kb_chunks` (pgvector, HNSW + GIN)
+уже создана, но пока не заполняется — гибридный поиск будет на шаге 2 (docs/db-schema.md).
 
 ## Лог вопросов
 
@@ -217,10 +264,14 @@ STT и TTS выбираются раздельно (`app/speech/`):
 источники, задержка, провайдер и модель). Кадры камеры и аудио не сохраняются.
 
 Запись идёт фоном (отдельный поток с ограниченной очередью): ответ роботу не ждёт БД, а зависшая или упавшая БД
-на `/ask` не влияет (в логе — `question_log_failed`, при переполнении очереди — `question_log_dropped`). Схема
-создаётся/мигрирует при первом обращении (Postgres — под advisory lock и `ADD COLUMN IF NOT EXISTS`, безопасно
-при одновременном старте двух контейнеров). Записи старше `QUESTION_LOG_RETENTION_DAYS` (180) удаляются раз
-в сутки.
+на `/ask` не влияет (в логе — `question_log_failed`, при переполнении очереди — `question_log_dropped`). Так же
+фоном обновляется сессия посетителя (`sessions.last_seen_at`). Схема — миграции Alembic (`migrations/`, под
+advisory lock — безопасно при одновременном старте нескольких контейнеров); baseline-миграция подхватывает
+таблицу `question_log`, созданную до Alembic (`sources` → jsonb, `id` → bigint). Записи старше
+`QUESTION_LOG_RETENTION_DAYS` (180) удаляются раз в сутки (вместе с сессиями и сообщениями).
+
+Новая миграция: `uv run alembic revision -m "что меняем"` → правка файла в `migrations/versions/` и моделей в
+`app/db/models.py` (тест `tests/test_migrations.py` сверяет модели с миграциями).
 
 ```bash
 uv run python -m app.cli export-csv --out questions.csv               # всё
@@ -232,14 +283,14 @@ uv run python -m app.cli export-csv --out unanswered.csv --unanswered # толь
 ```bash
 uv run python -m app.cli openapi --out openapi.json   # обновить OpenAPI-схему
 docker build -t astana-hub-backend .                   # образ: uv, non-root, порт 8000, healthcheck /v1/health
-docker run --rm -p 8000:8000 --env-file .env -v hub-data:/data astana-hub-backend   # данные — в volume /data
+# запуск образа — через infra/docker-compose.yml (нужен Postgres); снимок базы и кеш TTS — в volume /data
 ```
 
 ## Структура
 
 ```
 app/
-  main.py          create_app(), выбор источника базы, фоновый синк таблицы, X-Request-Id + access-лог
+  main.py          create_app(): миграции, база знаний из Postgres, фоновые синк/сверка, X-Request-Id + access-лог
   api.py           эндпоинты v1, авторизация, rate limit, SSE, multipart
   service.py       логика /ask (JSON и стрим) и /look: база → промпт → LLM → очистка → фразы → лог
   streaming.py     разбор JSON-ответа модели на лету (фразы по готовности)
@@ -249,9 +300,10 @@ app/
   llm/             LLMProvider: gemini.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
   speech/          STT/TTS: gemini_stt.py, elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
   speech_api.py    эндпоинты /v1/stt, /v1/tts
-  knowledge/       модель базы, YAML-источник, Google-таблица (sheets.py), горячая перезагрузка
-  db.py            лог вопросов (SQLAlchemy), экспорт CSV
-  cli.py           export-csv, openapi, check-kb, sync-kb
+  knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML
+  db/              engine, модели всех таблиц (models.py), репозитории (repos.py), Alembic (migrate.py)
+  cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|status, export-csv, openapi, check-kb
+migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md)
 knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
 eval/              questions.yaml + run_eval.py (шаг 3.8)
 tests/             pytest

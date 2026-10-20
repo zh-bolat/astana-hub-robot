@@ -9,6 +9,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
 COPY knowledge ./knowledge
+COPY migrations ./migrations
+COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 
 
@@ -17,13 +19,14 @@ FROM python:3.12-slim-bookworm
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /app /app
-# Все изменяемые данные — в /data (docker volume): лог вопросов (SQLite), снимок таблицы, кеш TTS.
+# Изменяемые данные api — в /data (docker volume): снимок базы знаний, кеш TTS.
+# База данных — Postgres (DATABASE_URL задаёт compose); миграции Alembic — при старте
+# (DB_AUTO_MIGRATE=true по умолчанию; ошибка миграции → процесс завершается с ненулевым кодом).
 # Каталог создаётся в образе с владельцем app — именованный volume наследует владельца.
 RUN mkdir -p /data && chown app:app /data
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    DATABASE_URL=sqlite:////data/questions.db \
     KNOWLEDGE_SNAPSHOT_PATH=/data/knowledge_snapshot.json \
     TTS_CACHE_DIR=/data/tts_cache \
     KNOWLEDGE_DIR=/app/knowledge \

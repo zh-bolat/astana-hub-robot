@@ -4,15 +4,13 @@
     https://docs.google.com/spreadsheets/d/<ID>/gviz/tq?tqx=out:csv&sheet=<имя вкладки>
 Формат колонок — backend/README.md и шаблоны в backend/knowledge/sheet_template/.
 
-Поведение:
-- при старте сеть не трогаем: последний снимок (KNOWLEDGE_SNAPSHOT_PATH), нет снимка → локальные
-  YAML; старт не ждёт Google;
+Поведение (синк в Postgres — app.knowledge.sync):
+- старт сервера Google не ждёт: база читается из Postgres (или снимка/YAML);
 - сразу после старта и далее раз в KNOWLEDGE_SYNC_INTERVAL_S — фоновая синхронизация: все вкладки
-  параллельно с общим таймаутом KNOWLEDGE_SYNC_TIMEOUT_S; при ошибке остаёмся на последней
-  удачной версии (и не затираем базу пустой/битой таблицей);
+  параллельно с общим таймаутом KNOWLEDGE_SYNC_TIMEOUT_S, затем upsert в БД одной транзакцией;
+  при ошибке база в БД не меняется (пустая/битая таблица её не затирает);
 - заголовки каждой вкладки проверяются (`REQUIRED_HEADERS`): gviz при неверном имени вкладки
-  молча отдаёт первую вкладку — без проверки «Места» могли бы прочитаться из «Фактов»;
-- удачная синхронизация сохраняет снимок на диск.
+  молча отдаёт первую вкладку — без проверки «Места» могли бы прочитаться из «Фактов».
 """
 
 from __future__ import annotations
@@ -20,14 +18,12 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
-import os
-from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 
 from app.knowledge.models import Fact, KnowledgeBase, LocalizedText, Place, QuickQuestion
-from app.knowledge.source import KnowledgeSource, build_kb
+from app.knowledge.source import build_kb
 from app.logging_setup import logger
 
 _INACTIVE = {"нет", "no", "0", "false", "жоқ", "-"}
@@ -99,6 +95,13 @@ def _list(value: str) -> list[str]:
     return [x.strip() for x in value.split(sep) if x.strip()]
 
 
+def _int(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _loc(row: dict[str, str], prefix: str) -> LocalizedText:
     return LocalizedText(
         ru=row.get(f"{prefix}_ru", ""),
@@ -144,6 +147,7 @@ def places_from_rows(rows: list[dict[str, str]]) -> list[Place]:
                 description=_loc(row, "description"),
                 visual_hints=row.get("visual_hints", ""),
                 photos=_list(row.get("photos", "")),
+                floor=_int(row.get("floor", "")),
             )
         )
     return places
@@ -177,53 +181,19 @@ def kb_from_csv(facts_csv: str, places_csv: str, buttons_csv: str) -> KnowledgeB
         raise SheetError(str(exc)) from exc
 
 
-class SheetKnowledgeSource:
-    """Источник «Google-таблица» с фоновой синхронизацией и снимком на диске."""
+class SheetFetcher:
+    """Загрузка базы из Google-таблицы: все вкладки параллельно с общим таймаутом."""
 
-    def __init__(
-        self,
-        sheet_id: str,
-        tabs: tuple[str, str, str],
-        snapshot_path: Path,
-        fallback: KnowledgeSource,
-        timeout_s: float = 5.0,
-    ) -> None:
+    def __init__(self, sheet_id: str, tabs: tuple[str, str, str], timeout_s: float = 5.0) -> None:
         self.sheet_id = sheet_id
         self.tabs = tabs
-        self.snapshot_path = Path(snapshot_path)
-        self.fallback = fallback
         self.timeout_s = timeout_s
-        self._kb: KnowledgeBase | None = None
-        self.last_error: str | None = None
 
-    # --- интерфейс KnowledgeSource ---
-    def fingerprint(self) -> str:
-        if self._kb is None:
-            return "fallback:" + self.fallback.fingerprint()
-        return "sheet:" + self._kb.version
-
-    def load(self) -> KnowledgeBase:
-        return self._kb if self._kb is not None else self.fallback.load()
-
-    # --- синхронизация ---
     def urls(self) -> list[str]:
         return [sheet_csv_url(self.sheet_id, tab) for tab in self.tabs]
 
-    def _apply(self, kb: KnowledgeBase) -> bool:
-        changed = self._kb is None or self._kb.version != kb.version
-        self._kb = kb
-        self.last_error = None
-        if changed:
-            self._save_snapshot(kb)
-        logger.info(
-            "knowledge_sheet_synced",
-            extra={"kb_version": kb.version, "facts": len(kb.facts), "changed": changed},
-        )
-        return changed
-
-    def _fail(self, exc: Exception) -> None:
-        self.last_error = f"{type(exc).__name__}: {exc}"
-        logger.error("knowledge_sheet_sync_failed", extra={"error": self.last_error})
+    def new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True)
 
     @staticmethod
     def _check(r: httpx.Response) -> str:
@@ -231,66 +201,24 @@ class SheetKnowledgeSource:
             raise SheetError(f"http {r.status_code} for sheet tab")
         return r.text
 
-    def new_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True)
-
-    async def _fetch_all(self, client: httpx.AsyncClient) -> list[str]:
-        responses = await asyncio.wait_for(
-            asyncio.gather(*(client.get(u) for u in self.urls())), timeout=self.timeout_s
-        )
-        return [self._check(r) for r in responses]
-
-    async def sync(self, client: httpx.AsyncClient) -> bool:
-        """Загружает все вкладки параллельно (общий таймаут timeout_s). True — база обновлена."""
+    async def fetch(self, client: httpx.AsyncClient) -> KnowledgeBase:
+        """База из таблицы. Любая проблема (сеть, таймаут, HTML, заголовки, пустые факты,
+        дубли id) → SheetError."""
         try:
-            texts = await self._fetch_all(client)
-            self._apply(kb_from_csv(*texts))
-            return True
-        except TimeoutError:
-            self._fail(SheetError(f"timeout {self.timeout_s}s loading sheet tabs"))
-            return False
-        except (httpx.HTTPError, SheetError, ValueError) as exc:
-            self._fail(exc)
-            return False
+            responses = await asyncio.wait_for(
+                asyncio.gather(*(client.get(u) for u in self.urls())), timeout=self.timeout_s
+            )
+            return kb_from_csv(*(self._check(r) for r in responses))
+        except TimeoutError as exc:
+            raise SheetError(f"timeout {self.timeout_s}s loading sheet tabs") from exc
+        except httpx.HTTPError as exc:
+            raise SheetError(f"{type(exc).__name__}: {exc}") from exc
 
-    def sync_blocking(self) -> bool:
+    def fetch_blocking(self) -> KnowledgeBase:
         """Синхронная обёртка для CLI (вне event loop)."""
 
-        async def once() -> bool:
+        async def once() -> KnowledgeBase:
             async with self.new_client() as client:
-                return await self.sync(client)
+                return await self.fetch(client)
 
         return asyncio.run(once())
-
-    async def run_periodic(self, interval_s: float, client: httpx.AsyncClient) -> None:
-        """Синк сразу после старта, затем раз в interval_s (interval_s <= 0 — только один раз)."""
-        while True:
-            await self.sync(client)
-            if interval_s <= 0:
-                return
-            await asyncio.sleep(interval_s)
-
-    # --- снимок ---
-    def _save_snapshot(self, kb: KnowledgeBase) -> None:
-        try:
-            self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.snapshot_path.with_suffix(".tmp")
-            tmp.write_text(kb.model_dump_json(), encoding="utf-8")
-            os.replace(tmp, self.snapshot_path)
-        except OSError as exc:
-            logger.warning("knowledge_snapshot_write_failed", extra={"error": str(exc)})
-
-    def load_snapshot(self) -> bool:
-        try:
-            kb = KnowledgeBase.model_validate_json(self.snapshot_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
-        self._kb = kb
-        logger.warning("knowledge_from_snapshot", extra={"kb_version": kb.version})
-        return True
-
-    def initial_load(self) -> None:
-        """Старт без сети: снимок, иначе YAML. Таблица подтянется фоновой синхронизацией."""
-        if self.load_snapshot():
-            return
-        logger.warning("knowledge_sheet_no_snapshot_using_yaml")

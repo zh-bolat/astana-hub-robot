@@ -74,7 +74,9 @@ def test_access_log_has_client_ip(client):
 def test_dockerfile_data_volume_and_trusted_proxies():
     df = (BACKEND_DIR / "Dockerfile").read_text(encoding="utf-8")
     assert "mkdir -p /data && chown app:app /data" in df
-    assert "DATABASE_URL=sqlite:////data/" in df
+    assert "DATABASE_URL=sqlite" not in df  # БД — Postgres, URL задаёт compose
+    assert "COPY migrations ./migrations" in df
+    assert "COPY alembic.ini" in df
     assert "KNOWLEDGE_SNAPSHOT_PATH=/data/" in df
     assert "TTS_CACHE_DIR=/data/" in df
     assert not re.search(r"forwarded-allow-ips[\"', ]+\*", df)
@@ -85,7 +87,9 @@ def test_local_defaults_stay_in_backend_data():
     s = Settings(_env_file=None)
     assert s.knowledge_snapshot_path == BACKEND_DIR / "data" / "knowledge_snapshot.json"
     assert s.tts_cache_dir == BACKEND_DIR / "data" / "tts_cache"
-    assert s.database_url == f"sqlite:///{BACKEND_DIR / 'data' / 'questions.db'}"
+    assert s.database_url.startswith("postgresql+psycopg://")
+    assert s.db_auto_migrate is True
+    assert s.kb_seed_yaml_if_empty is True
     assert s.question_log_retention_days == 180
     assert s.trusted_proxies == "172.16.0.0/12,127.0.0.1"
     assert s.sentry_dsn is None

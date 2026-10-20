@@ -3,7 +3,12 @@ from __future__ import annotations
 import io
 import time
 
+import pytest
+
 from app.db import QuestionLogRepo, make_engine
+from app.knowledge.pg import KnowledgeRepo
+from app.knowledge.source import YamlKnowledgeSource
+from app.knowledge.sync import seed_yaml
 from tests.conftest import AUTH, ask_body
 
 
@@ -36,45 +41,63 @@ def test_quick_questions(client):
     assert r.status_code == 400
 
 
-def _touch_write(path, text):
-    path.write_text(text, encoding="utf-8")
-    # гарантируем новый mtime даже на ФС с грубым разрешением
-    t = time.time() + 2
-    import os
+def _wait(predicate, timeout_s: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
 
-    os.utime(path, (t, t))
 
-
-def test_knowledge_hot_reload(client, knowledge_dir):
+def test_knowledge_hot_reload_from_db(client, knowledge_dir, db):
+    """Правка базы (YAML → kb seed-yaml / синк таблицы) подхватывается сервером без перезапуска."""
     q = ask_body("Есть ли у вас спортзал?")
-    assert client.post("/v1/ask", json=q, headers=AUTH).json()["found"] is False
-    etag_before = client.get("/v1/places", headers=AUTH).headers["etag"]
+    with client:  # lifespan: фоновая сверка kb_sync.version
+        assert client.post("/v1/ask", json=q, headers=AUTH).json()["found"] is False
+        etag_before = client.get("/v1/places", headers=AUTH).headers["etag"]
 
-    facts = knowledge_dir / "facts.yaml"
-    _touch_write(
-        facts,
-        facts.read_text(encoding="utf-8")
-        + """
+        facts = knowledge_dir / "facts.yaml"
+        facts.write_text(
+            facts.read_text(encoding="utf-8")
+            + """
   - id: gym
     keywords: [спортзал, тренажер, gym]
     answer:
       ru: Спортзал находится на третьем этаже.
       en: The gym is on the third floor.
 """,
-    )
-    body = client.post("/v1/ask", json=q, headers=AUTH).json()
-    assert body["found"] is True
-    assert body["sources"] == ["fact:gym"]
+            encoding="utf-8",
+        )
+        places = knowledge_dir / "places.yaml"
+        places.write_text(
+            places.read_text(encoding="utf-8").replace("кафешка", "кофейка"), encoding="utf-8"
+        )
+        result = seed_yaml(KnowledgeRepo(db), YamlKnowledgeSource(knowledge_dir))
+        assert result.status == "ok"
+        store = client.app.state.store
+        assert _wait(lambda: store.get().version == result.version)
+        body = client.post("/v1/ask", json=q, headers=AUTH).json()
+        assert body["found"] is True
+        assert body["sources"] == ["fact:gym"]
+        assert client.get("/v1/places", headers=AUTH).headers["etag"] != etag_before
 
-    places = knowledge_dir / "places.yaml"
-    _touch_write(places, places.read_text(encoding="utf-8").replace("кафешка", "кофейка"))
-    assert client.get("/v1/places", headers=AUTH).headers["etag"] != etag_before
 
-
-def test_broken_knowledge_keeps_previous_version(client, knowledge_dir):
-    _touch_write(knowledge_dir / "facts.yaml", "facts: [ {broken")
+def test_broken_yaml_seed_keeps_previous_version(client, knowledge_dir, db):
+    (knowledge_dir / "facts.yaml").write_text("facts: [ {broken", encoding="utf-8")
+    with pytest.raises(Exception):  # noqa: B017 — ошибка YAML
+        seed_yaml(KnowledgeRepo(db), YamlKnowledgeSource(knowledge_dir))
+    assert KnowledgeRepo(db).sync_log(1)[0].status == "error"
+    client.app.state.knowledge.source.refresh()
     body = client.post("/v1/ask", json=ask_body("Где кафе?"), headers=AUTH).json()
     assert body["found"] is True
+
+
+def test_startup_seeds_empty_db_from_yaml_once(client, db):
+    repo = KnowledgeRepo(db)
+    assert len(repo.load_active().facts) == 13
+    assert client.app.state.knowledge.source.from_db is True
+    assert [r.source for r in repo.sync_log()] == ["yaml"]
 
 
 def test_export_csv(client, settings):
