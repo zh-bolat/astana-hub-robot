@@ -1,0 +1,22 @@
+# Локальная разработка — поверх docker-compose.yml, только на ноутбуке (не на сервере):
+#   cd infra
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres   # только БД
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build       # БД + api с hot reload
+#
+# - postgres публикуется на 127.0.0.1:5432 (psql, DBeaver, `uv run uvicorn` вне Docker);
+# - api перезапускается при изменении backend/app (исходники смонтированы read-only).
+#   Новые зависимости (pyproject.toml/uv.lock) или миграции — пересборка: up --build.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  api:
+    volumes:
+      - ../backend/app:/app/app:ro
+    command:
+      - sh
+      - -c
+      - >-
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+        --proxy-headers --forwarded-allow-ips "$$TRUSTED_PROXIES"

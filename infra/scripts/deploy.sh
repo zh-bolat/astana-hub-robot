@@ -91,10 +91,13 @@ ENV_FILE="$APP_DIR/infra/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   log "infra/.env из шаблона"
   install -m 600 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/infra/.env.example" "$ENV_FILE"
-  sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=prod,postgres/' "$ENV_FILE"
+  # Postgres (pgvector) поднимается всегда; профиль prod добавляет caddy.
+  sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=prod/' "$ENV_FILE"
+  # Заменяет dev-пароль из шаблона. DATABASE_URL пустой — compose соберёт его из POSTGRES_*.
   pg_pass="$(openssl rand -hex 24)"
   sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${pg_pass}/" "$ENV_FILE"
-  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+psycopg://hub:${pg_pass}@postgres:5432/hub|" "$ENV_FILE"
+  sed -i 's/^DATABASE_URL=.*/DATABASE_URL=/' "$ENV_FILE"
+  sed -i 's/^DB_AUTO_MIGRATE=.*/DB_AUTO_MIGRATE=true/' "$ENV_FILE"
   token="$(openssl rand -hex 32)"
   sed -i "s/^ROBOT_TOKEN=.*/ROBOT_TOKEN=${token}/" "$ENV_FILE"
   echo "Сгенерирован ROBOT_TOKEN (тот же нужен в android-app/secrets.properties):"
@@ -107,5 +110,7 @@ cat <<MSG
   2. Заполните $ENV_FILE: DOMAIN, ACME_EMAIL, GEMINI_API_KEY, ...
   3. DNS: A-запись DOMAIN -> IP этого сервера.
   4. sudo -u $DEPLOY_USER bash -c 'cd $APP_DIR/infra && docker compose up -d --build'
+     (api ждёт healthy postgres и применяет миграции Alembic при старте)
   5. curl -fsS https://<DOMAIN>/v1/health
+  6. Бэкапы: cron с infra/scripts/backup.sh (см. infra/README.md)
 MSG

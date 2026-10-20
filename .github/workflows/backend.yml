@@ -21,6 +21,21 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Postgres 16 + pgvector — тот же образ, что в infra/docker-compose.yml.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg16-bookworm@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+        env:
+          POSTGRES_USER: hub
+          POSTGRES_PASSWORD: hub
+          POSTGRES_DB: hub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U hub -d hub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -46,6 +61,8 @@ jobs:
         env:
           # Тесты не должны ходить во внешние LLM: ключи пустые.
           DATABASE_URL: sqlite:///./test.db
+          # Postgres-тесты (миграции, pgvector); без переменной они пропускаются.
+          TEST_POSTGRES_URL: postgresql+psycopg://hub:hub@localhost:5432/hub_test
           ROBOT_TOKEN: test-token
         # exit 5 = тесты не найдены (пока backend пустой) — не падаем.
         run: uv run pytest -q || [ $? -eq 5 ]

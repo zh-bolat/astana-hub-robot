@@ -1,12 +1,13 @@
 # Astana Hub Robot — backend stack.
 #
-# Профили (COMPOSE_PROFILES в infra/.env или --profile):
-#   (без профиля)  только api на 127.0.0.1:8000 — локальная разработка, SQLite
+# Сервисы: api + postgres (PostgreSQL 16 + pgvector) всегда; профиль prod добавляет caddy.
+#   (без профиля)  api на 127.0.0.1:8000 + postgres — локальная разработка
 #   prod           + caddy (HTTPS по $DOMAIN, порты 80/443)
-#   postgres       + postgres 16 (когда backend перейдёт с SQLite)
 #
 # Локально:   cd infra && docker compose up --build
+#             (+ порт БД на 127.0.0.1:5432 и hot reload: -f docker-compose.yml -f docker-compose.dev.yml)
 # Сервер:     COMPOSE_PROFILES=prod в infra/.env → docker compose up -d
+# Схему БД создаёт api при старте (Alembic, DB_AUTO_MIGRATE) — см. docs/db-schema.md.
 name: astana-hub-robot
 
 # Логи всех сервисов с ротацией (иначе json-file растёт без предела).
@@ -32,7 +33,11 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/questions.db}
+      # Пароль в URL должен быть URL-safe (deploy.sh генерирует hex).
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-hub}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-hub}}
+      # Миграции Alembic при старте api (до приёма запросов). false — только вручную:
+      #   docker compose run --rm api python -m app.cli db upgrade
+      DB_AUTO_MIGRATE: ${DB_AUTO_MIGRATE:-true}
     volumes:
       - api-data:/data
     # Публикуется только на localhost: снаружи доступ лишь через caddy.
@@ -43,29 +48,43 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # Запас на миграции Alembic при старте.
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
-        required: false
 
   postgres:
-    image: postgres:16-alpine
-    profiles: ["postgres"]
+    # PostgreSQL 16 + pgvector 0.8.7 (Debian bookworm). Тег и digest закреплены;
+    # обновление — сменой обоих (hub.docker.com/r/pgvector/pgvector/tags), затем бэкап и up -d.
+    image: pgvector/pgvector:0.8.7-pg16-bookworm@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     restart: unless-stopped
     logging: *logging
     mem_limit: 1g
+    shm_size: 256m
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-hub}
       POSTGRES_USER: ${POSTGRES_USER:-hub}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}  # postgres не стартует с пустым паролем
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    # POSTGRES_PASSWORD обязателен. `${POSTGRES_PASSWORD:?}` нельзя по той же причине,
+    # что и ACME_EMAIL (сломал бы `docker compose config` без .env) — проверка на старте.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        [ -n "$$POSTGRES_PASSWORD" ] || { echo "POSTGRES_PASSWORD is required (infra/.env, см. infra/.env.example)" >&2; exit 1; };
+        exec docker-entrypoint.sh postgres
     volumes:
       - pg-data:/var/lib/postgresql/data
+    # Порт наружу не публикуется; для доступа с ноутбука — docker-compose.dev.yml (127.0.0.1:5432).
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      # -h 127.0.0.1: во время первичной инициализации временный сервер слушает только сокет,
+      # поэтому healthy наступает лишь после того, как БД реально готова.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   caddy:
     image: caddy:2-alpine
