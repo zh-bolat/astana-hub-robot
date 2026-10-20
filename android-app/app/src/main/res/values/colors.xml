@@ -26,5 +26,8 @@
     <color name="hub_amber_fg">#8A4B00</color>
     <color name="hub_shadow_blue">#661F4FFF</color>
     <color name="hub_shadow_ink">#55111827</color>
+    <color name="hub_box_line">#143C64C8</color>
+    <color name="hub_box_line_selected">#591F4FFF</color>
+    <color name="hub_shadow_soft">#401E3C8C</color>
     <color name="hub_scrim">#8C0A101E</color>
 </resources>

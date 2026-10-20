@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Плитка «что это?»: двухцветная иконка (светло-голубая заливка, синий акцент, тонкий тёмно-синий контур). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp" android:height="40dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M4.5,7.5h3l1.6,-2.3h5.8l1.6,2.3h3a2,2 0 0,1 2,2v8.5a2,2 0 0,1 -2,2h-15a2,2 0 0,1 -2,-2V9.5a2,2 0 0,1 2,-2z"
+        android:fillColor="#BFD3FF"
+        android:strokeColor="#2A4A9A"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path android:pathData="M8.1,13.6a3.9,3.9 0 1,0 7.8,0a3.9,3.9 0 1,0 -7.8,0Z"
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2A4A9A"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path android:pathData="M9.8,13.6a2.2,2.2 0 1,0 4.4,0a2.2,2.2 0 1,0 -4.4,0Z"
+        android:fillColor="#3D7BFF" />
+    <path android:pathData="M17.5,10.3a0.5,0.5 0 1,0 1,0a0.5,0.5 0 1,0 -1,0Z"
+        android:fillColor="#2A4A9A" />
+</vector>

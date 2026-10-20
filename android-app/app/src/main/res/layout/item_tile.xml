@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Плитка на приветствии: иконка сверху, подпись снизу (до 2 строк). Тень — elevation, нажатие — «проседает». -->
+<!-- Плитка на приветствии: иконка в голубом скруглённом квадрате слева, подпись справа (до 2 строк).
+     Все плитки одного размера; выбранная (isSelected) подсвечена. Тень — elevation, нажатие — «проседает». -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="0dp"
@@ -9,30 +10,32 @@
     android:clickable="true"
     android:elevation="@dimen/elev_card"
     android:focusable="true"
-    android:orientation="vertical"
-    android:paddingStart="28dp"
-    android:paddingTop="24dp"
-    android:paddingEnd="28dp"
-    android:paddingBottom="22dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:outlineAmbientShadowColor="@color/hub_shadow_soft"
+    android:outlineSpotShadowColor="@color/hub_shadow_soft"
+    android:paddingStart="24dp"
+    android:paddingTop="20dp"
+    android:paddingEnd="24dp"
+    android:paddingBottom="20dp"
     android:stateListAnimator="@animator/press_sink">
 
     <ImageView
         android:id="@+id/tileIcon"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
+        android:layout_width="@dimen/tile_icon_box"
+        android:layout_height="@dimen/tile_icon_box"
+        android:background="@drawable/bg_tile_icon"
         android:contentDescription="@null"
-        android:tint="@color/hub_primary"
-        tools:src="@drawable/ic_hub_chat" />
-
-    <Space
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:duplicateParentState="true"
+        android:padding="12dp"
+        tools:src="@drawable/ic_tile_help" />
 
     <TextView
         android:id="@+id/tileLabel"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="20dp"
+        android:layout_weight="1"
         android:ellipsize="end"
         android:fontFamily="@font/nunito_semibold"
         android:lineSpacingMultiplier="1.0"

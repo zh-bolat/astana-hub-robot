@@ -43,9 +43,11 @@ import kz.astanahub.robot.security.DiagAccess
 import kz.astanahub.robot.ui.DiagPinDialog
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
+import kz.astanahub.robot.ui.MoodEmoji
 import kz.astanahub.robot.ui.Phase
 import kz.astanahub.robot.ui.Screen
 import kz.astanahub.robot.ui.SubtitlePacer
+import kz.astanahub.robot.ui.TileIcons
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.ui.setOnHoldListener
 
@@ -82,6 +84,9 @@ class MainActivity : AppCompatActivity() {
     /** Что уже нарисовано (перерисовываем плитки и строки вопросов только при изменении). */
     private var renderedTiles: Any? = null
     private var renderedFaq: Any? = null
+
+    /** Плитка, которую нажал посетитель (подсвечена, пока не ушли с приветствия). */
+    private var selectedTile: String? = null
 
     /** «Показать полностью» в ответе и в раскрытом вопросе — состояние экрана, сбрасывается с новым ответом. */
     private var answerExpanded = false
@@ -148,13 +153,16 @@ class MainActivity : AppCompatActivity() {
         binding.exitButton.setOnClickListener { askExit() }
         // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
         if (container.diagnostics.access != DiagAccess.DISABLED) {
-            binding.brandText.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
+            binding.brandLogo.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
         }
 
         // Нижняя полоса.
         binding.homeButton.setOnClickListener { viewModel.goHome() }
         binding.hintButton.setOnClickListener { listenOnce() }
-        binding.stopButton.setOnClickListener { viewModel.stop() }
+        binding.stopButton.setOnClickListener {
+            viewModel.stop()
+            showSubtitles(false)
+        }
         binding.guideButton.setOnClickListener { viewModel.guideToOffered() }
         binding.faqMoreButton.setOnClickListener { viewModel.faqNextPage() }
         binding.lookButton.setOnClickListener { viewModel.lookAround() }
@@ -248,7 +256,11 @@ class MainActivity : AppCompatActivity() {
         binding.heardText.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
         renderSubtitles(state)
 
-        // Справа: один из трёх экранов.
+        // Справа: один из трёх экранов. Ушли с приветствия — подсветка нажатой плитки снимается.
+        if (state.screen != Screen.HOME && selectedTile != null) {
+            selectedTile = null
+            renderedTiles = null
+        }
         binding.homePanel.isVisible = state.screen == Screen.HOME
         binding.answerPanel.isVisible = state.screen == Screen.ANSWER
         binding.faqPanel.isVisible = state.screen == Screen.FAQ
@@ -318,15 +330,15 @@ class MainActivity : AppCompatActivity() {
         binding.greetTitle.text = str(R.string.greet_title, lang)
         binding.greetSub.text = str(R.string.greet_sub, lang)
         val enabled = !state.processing
-        val key = Triple(lang, state.quickQuestions, enabled)
+        val key = listOf(lang, state.quickQuestions, enabled, selectedTile)
         if (renderedTiles == key) return
         renderedTiles = key
 
-        data class Tile(val icon: Int, val label: String, val faq: Boolean = false, val onClick: () -> Unit)
+        data class Tile(val icon: Int, val label: String, val onClick: () -> Unit)
         val tiles = state.quickQuestions.take(HOME_QUESTION_TILES).map { q ->
-            Tile(R.drawable.ic_hub_chat, q.text) { viewModel.submit(q.text) }
-        } + Tile(R.drawable.ic_hub_help, str(R.string.tile_faq, lang), faq = true) { viewModel.openFaq() } +
-            Tile(R.drawable.ic_hub_camera, str(R.string.action_look, lang)) { viewModel.lookAround() }
+            Tile(TileIcons.kindFor(q.text).res, q.text) { viewModel.submit(q.text) }
+        } + Tile(R.drawable.ic_tile_help, str(R.string.tile_faq, lang)) { viewModel.openFaq() } +
+            Tile(R.drawable.ic_tile_camera, str(R.string.action_look, lang)) { viewModel.lookAround() }
 
         val rows = listOf(binding.tilesRow1, binding.tilesRow2)
         rows.forEach { it.removeAllViews() }
@@ -337,11 +349,15 @@ class MainActivity : AppCompatActivity() {
                 val b = ItemTileBinding.inflate(inflater, row, false)
                 b.tileIcon.setImageResource(tile.icon)
                 b.tileLabel.text = tile.label
-                if (tile.faq) b.root.setBackgroundResource(R.drawable.bg_tile_faq)
+                b.root.isSelected = tile.label == selectedTile
                 setEnabled(b.root, enabled)
                 b.root.setOnClickListener {
-                    // Блокируем сразу, не дожидаясь нового состояния (двойной тап).
-                    rows.forEach { rr -> for (c in 0 until rr.childCount) rr.getChildAt(c).isEnabled = false }
+                    // Подсвечиваем только нажатую плитку и блокируем все сразу, не дожидаясь нового состояния (двойной тап).
+                    rows.forEach { rr ->
+                        for (c in 0 until rr.childCount) rr.getChildAt(c).apply { isEnabled = false; isSelected = false }
+                    }
+                    b.root.isSelected = true
+                    selectedTile = tile.label
                     renderedTiles = null
                     tile.onClick()
                 }
@@ -430,12 +446,15 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------------------------------------
     // Субтитры: облачко под лицом, пока робот говорит. Произнесённые слова тёмные, следующие — бледные.
+    // Договорил — в конце эмодзи настроения, облачко остаётся max(8 с, 60 мс/символ) или до следующего действия.
     // ---------------------------------------------------------------------------------------------
 
     private val pacer = SubtitlePacer()
     private var subtitlePlan: List<SubtitlePacer.Word> = emptyList()
     private var subtitleFor: String? = null
     private var subtitleStarted = 0L
+    private var subtitleLingering = false
+    private var subtitleScreen: Screen? = null
 
     private val subtitleTick = object : Runnable {
         override fun run() {
@@ -451,9 +470,11 @@ class MainActivity : AppCompatActivity() {
     private fun renderSubtitles(state: MainUiState) {
         val text = state.answer
         if (state.phase == Phase.SPEAKING && !text.isNullOrBlank()) {
-            handler.removeCallbacks(subtitleHide)
-            if (text != subtitleFor || !binding.subtitleBox.isVisible) {
+            if (text != subtitleFor || !binding.subtitleBox.isVisible || subtitleLingering) {
+                handler.removeCallbacks(subtitleHide)
                 subtitleFor = text
+                subtitleLingering = false
+                subtitleScreen = state.screen
                 subtitlePlan = pacer.plan(text)
                 subtitleStarted = SystemClock.uptimeMillis()
                 handler.removeCallbacks(subtitleTick)
@@ -461,18 +482,30 @@ class MainActivity : AppCompatActivity() {
                 subtitleTick.run()
             }
         } else if (binding.subtitleBox.isVisible) {
-            handler.removeCallbacks(subtitleTick)
-            handler.removeCallbacks(subtitleHide)
-            // Договорил — последний кусок ещё мгновение на экране; «Стоп» и уход с экрана — тоже плавно.
-            pacer.frameAt(subtitlePlan, Long.MAX_VALUE)?.let { binding.subtitleText.text = subtitleSpan(it) }
-            handler.postDelayed(subtitleHide, SUBTITLE_LINGER_MS)
+            // Следующее действие (слушает, думает, ведёт, другой экран) — облачко больше не нужно.
+            val interrupted = state.phase != Phase.IDLE || state.screen != subtitleScreen
+            if (interrupted) showSubtitles(false) else if (!subtitleLingering) finishSubtitles()
         }
+    }
+
+    /** Договорил: вся последняя фраза тёмная, в конце — эмодзи настроения; иногда робот подмигивает. */
+    private fun finishSubtitles() {
+        handler.removeCallbacks(subtitleTick)
+        subtitleLingering = true
+        pacer.frameAt(subtitlePlan, Long.MAX_VALUE)?.let {
+            binding.subtitleText.text = SpannableStringBuilder(subtitleSpan(it)).append(' ').append(MoodEmoji.forText(subtitleFor))
+        }
+        if (Math.random() < SUBTITLE_WINK_CHANCE) binding.face.wink()
+        val linger = maxOf(SUBTITLE_LINGER_MIN_MS, SUBTITLE_LINGER_PER_CHAR_MS * subtitleFor.orEmpty().length)
+        handler.postDelayed(subtitleHide, linger)
     }
 
     private fun showSubtitles(show: Boolean) {
         if (!show) {
             subtitleFor = null
+            subtitleLingering = false
             handler.removeCallbacks(subtitleTick)
+            handler.removeCallbacks(subtitleHide)
         }
         binding.subtitleBox.isVisible = show
         // Пока есть облачко, подпись статуса и «что слышу» не нужны: место под лицом одно.
@@ -583,7 +616,9 @@ class MainActivity : AppCompatActivity() {
         const val FAQ_LINES = 2
         const val FAQ_EXPANDED_LINES = 8
         const val SUBTITLE_TICK_MS = 60L
-        const val SUBTITLE_LINGER_MS = 900L
+        const val SUBTITLE_LINGER_MIN_MS = 8_000L
+        const val SUBTITLE_LINGER_PER_CHAR_MS = 60L
+        const val SUBTITLE_WINK_CHANCE = 0.5
         const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L
         const val DISABLED_ALPHA = 0.55f
     }

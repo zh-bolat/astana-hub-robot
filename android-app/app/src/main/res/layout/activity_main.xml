@@ -42,19 +42,17 @@
                 tools:text="Назад"
                 tools:visibility="visible" />
 
-            <TextView
-                android:id="@+id/brandText"
+            <!-- Логотип Astana Hub (удержание 3 с — диагностика) -->
+            <ImageView
+                android:id="@+id/brandLogo"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="@font/nunito_extrabold"
+                android:layout_height="@dimen/brand_logo_height"
+                android:adjustViewBounds="true"
+                android:contentDescription="@string/title"
                 android:paddingStart="4dp"
                 android:paddingEnd="4dp"
-                android:shadowColor="#FFFFFFFF"
-                android:shadowDy="1"
-                android:shadowRadius="1"
-                android:text="@string/title"
-                android:textColor="@color/hub_primary"
-                android:textSize="30sp" />
+                android:scaleType="fitCenter"
+                android:src="@drawable/astana_hub_logo" />
 
             <Space
                 android:layout_width="0dp"
@@ -358,6 +356,8 @@
                             android:clipToPadding="false"
                             android:elevation="@dimen/elev_card"
                             android:orientation="vertical"
+                            android:outlineAmbientShadowColor="@color/hub_shadow_soft"
+                            android:outlineSpotShadowColor="@color/hub_shadow_soft"
                             android:paddingStart="36dp"
                             android:paddingTop="32dp"
                             android:paddingEnd="36dp"

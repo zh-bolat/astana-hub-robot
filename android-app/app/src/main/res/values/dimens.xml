@@ -17,6 +17,8 @@
     <dimen name="face_size">280dp</dimen>
     <dimen name="tile_height">156dp</dimen>
     <dimen name="tile_gap">24dp</dimen>
+    <dimen name="tile_icon_box">64dp</dimen>
+    <dimen name="brand_logo_height">60dp</dimen>
     <dimen name="btn_height">96dp</dimen>
     <dimen name="btn_primary_height">104dp</dimen>
     <dimen name="top_btn_height">64dp</dimen>
