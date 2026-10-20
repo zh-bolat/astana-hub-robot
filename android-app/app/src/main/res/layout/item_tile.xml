@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Плитка на приветствии: иконка сверху, подпись снизу (до 2 строк). Тень — elevation, нажатие — «проседает». -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:background="@drawable/bg_tile"
+    android:clickable="true"
+    android:elevation="@dimen/elev_card"
+    android:focusable="true"
+    android:orientation="vertical"
+    android:paddingStart="28dp"
+    android:paddingTop="24dp"
+    android:paddingEnd="28dp"
+    android:paddingBottom="22dp"
+    android:stateListAnimator="@animator/press_sink">
+
+    <ImageView
+        android:id="@+id/tileIcon"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:contentDescription="@null"
+        android:tint="@color/hub_primary"
+        tools:src="@drawable/ic_hub_chat" />
+
+    <Space
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <TextView
+        android:id="@+id/tileLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="@font/nunito_semibold"
+        android:lineSpacingMultiplier="1.0"
+        android:maxLines="2"
+        android:textColor="@color/hub_ink"
+        android:textSize="@dimen/text_tile"
+        tools:text="Частые вопросы" />
+</LinearLayout>

@@ -32,4 +32,23 @@
     <string name="mic_off_badge">Микрофон выключен: нет разрешения</string>
     <string name="tech_pause_title" translatable="false">Техническая пауза · Техникалық үзіліс · Technical pause</string>
     <string name="tech_pause_hint" translatable="false">Робот скоро снова будет готов помочь.\nРобот жақында қайта көмектесуге дайын болады.\nThe robot will be back shortly.</string>
+    <!-- Главный экран (вариант А): приветствие, частые вопросы, навигация -->
+    <string name="greet_title">Здравствуйте! Чем помочь?</string>
+    <string name="greet_sub">Спросите голосом или выберите тему</string>
+    <string name="hint_voice">Просто скажите вопрос, я слушаю</string>
+    <string name="tile_faq">Частые вопросы</string>
+    <string name="faq_title">Частые вопросы</string>
+    <string name="faq_more">Ещё вопросы (%1$d/%2$d)</string>
+    <string name="action_home">В начало</string>
+    <string name="action_back">Назад</string>
+    <string name="action_guide_short">Проводить</string>
+    <string name="action_show_more">Показать полностью</string>
+    <string name="action_show_less">Свернуть</string>
+    <string name="guide_title">Иду к: %1$s</string>
+    <string name="guide_follow">Следуйте за мной</string>
+    <string name="exit_label">Выйти из приложения</string>
+    <string name="exit_question">Выйти из приложения?</string>
+    <string name="exit_sub">Робот перестанет отвечать посетителям.</string>
+    <string name="exit_yes">Выйти</string>
+    <string name="exit_no">Остаться</string>
 </resources>

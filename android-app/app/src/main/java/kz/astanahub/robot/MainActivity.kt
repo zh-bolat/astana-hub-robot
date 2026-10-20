@@ -5,38 +5,55 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
-import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.Space
+import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
-import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.databinding.ActivityMainBinding
+import kz.astanahub.robot.databinding.ItemFaqRowBinding
+import kz.astanahub.robot.databinding.ItemTileBinding
+import kz.astanahub.robot.places.WayFinder
+import kz.astanahub.robot.security.DiagAccess
+import kz.astanahub.robot.ui.DiagPinDialog
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
 import kz.astanahub.robot.ui.Phase
-import kz.astanahub.robot.security.DiagAccess
-import kz.astanahub.robot.ui.DiagPinDialog
+import kz.astanahub.robot.ui.Screen
+import kz.astanahub.robot.ui.SubtitlePacer
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.ui.setOnHoldListener
 
-/** Главный экран-киоск (шаг 1.6). Вся логика — в [MainViewModel]. */
+/**
+ * Главный экран-киоск, вариант А (прототип: docs/design/robot-mvp.html).
+ * Вся логика разговора и навигации по экранам — в [MainViewModel]; здесь только отрисовка состояния,
+ * субтитры (темп — оценка, см. [SubtitlePacer]) и подтверждение выхода.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -60,7 +77,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private var renderedQuick: Pair<Lang, List<QuickQuestion>>? = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Что уже нарисовано (перерисовываем плитки и строки вопросов только при изменении). */
+    private var renderedTiles: Any? = null
+    private var renderedFaq: Any? = null
+
+    /** «Показать полностью» в ответе и в раскрытом вопросе — состояние экрана, сбрасывается с новым ответом. */
+    private var answerExpanded = false
+    private var answerExpandedFor: String? = null
+    private var faqExpanded = false
+    private var faqExpandedFor: String? = null
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         timber.log.Timber.i("RECORD_AUDIO granted=%s", granted)
@@ -107,52 +134,61 @@ class MainActivity : AppCompatActivity() {
         )
 
         // Текстовый ввод — основной способ на эмуляторе; на роботе — голос, поле скрыто.
-        val showTextInput = !BuildConfig.IS_ROBOT
-        binding.inputLayout.visibility = if (showTextInput) View.VISIBLE else View.GONE
-        binding.sendButton.visibility = if (showTextInput) View.VISIBLE else View.GONE
-
+        binding.inputRow.isVisible = !BuildConfig.IS_ROBOT
         binding.sendButton.setOnClickListener { sendTyped() }
         binding.inputText.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendTyped(); true } else false
         }
-        binding.lookButton.setOnClickListener { viewModel.lookAround() }
-        // Микрофон: одна фраза через серверный STT (на эмуляторе — микрофон хоста).
-        binding.micButton.setOnClickListener {
-            if (hasMicPermission()) {
-                container.voice.stopSpeaking()
-                container.voice.pushToTalk()
-            } else {
-                // Посетителям системный диалог не показываем: бейдж «микрофон выключен» уже на экране.
-                timber.log.Timber.w("mic button: RECORD_AUDIO not granted")
-                renderMicBadge()
-            }
-        }
+
+        // Верхняя полоса.
+        binding.backButton.setOnClickListener { viewModel.back() }
+        binding.langRu.setOnClickListener { viewModel.selectLanguage(Lang.RU) }
+        binding.langKk.setOnClickListener { viewModel.selectLanguage(Lang.KK) }
+        binding.langEn.setOnClickListener { viewModel.selectLanguage(Lang.EN) }
+        binding.exitButton.setOnClickListener { askExit() }
         // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
         if (container.diagnostics.access != DiagAccess.DISABLED) {
             binding.brandText.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
         }
-        // Киоск: «Назад» на главном экране ничего не делает.
-        onBackPressedDispatcher.addCallback(this) { }
-        requestMicPermissionOnce()
+
+        // Нижняя полоса.
+        binding.homeButton.setOnClickListener { viewModel.goHome() }
+        binding.hintButton.setOnClickListener { listenOnce() }
         binding.stopButton.setOnClickListener { viewModel.stop() }
         binding.guideButton.setOnClickListener { viewModel.guideToOffered() }
-        binding.screensaver.setOnClickListener { viewModel.wake() }
-
-        binding.langGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (!isChecked) return@addOnButtonCheckedListener
-            val lang = when (checkedId) {
-                R.id.langKk -> Lang.KK
-                R.id.langEn -> Lang.EN
-                else -> Lang.RU
-            }
-            if (lang != viewModel.state.value.lang) viewModel.selectLanguage(lang)
+        binding.faqMoreButton.setOnClickListener { viewModel.faqNextPage() }
+        binding.lookButton.setOnClickListener { viewModel.lookAround() }
+        binding.showMoreButton.setOnClickListener {
+            answerExpanded = !answerExpanded
+            render(viewModel.state.value)
         }
+
+        // Слои поверх экрана.
+        binding.guideStopButton.setOnClickListener { viewModel.stop() }
+        binding.screensaver.setOnClickListener { viewModel.wake() }
+        binding.exitOverlay.setOnClickListener { stayIn() } // касание мимо карточки = «Остаться»
+        binding.exitNoButton.setOnClickListener { stayIn() }
+        binding.exitYesButton.setOnClickListener { exitApp() }
+
+        // Системная «Назад»: закрыть подтверждение выхода или вернуться на экран назад. На приветствии — ничего (киоск).
+        onBackPressedDispatcher.addCallback(this) {
+            when {
+                binding.exitOverlay.isVisible -> stayIn()
+                viewModel.state.value.canGoBack -> viewModel.back()
+            }
+        }
+        requestMicPermissionOnce()
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.state.collect(::render)
             }
         }
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     private fun openDiagnostics() {
@@ -174,71 +210,336 @@ class MainActivity : AppCompatActivity() {
         binding.inputText.text = null
     }
 
-    private fun render(state: MainUiState) {
-        val lang = state.lang
-        val t = container.text
-
-        val langId = when (lang) { Lang.RU -> R.id.langRu; Lang.KK -> R.id.langKk; Lang.EN -> R.id.langEn }
-        if (binding.langGroup.checkedButtonId != langId) binding.langGroup.check(langId)
-
-        val (statusRes, colorRes) = when (state.phase) {
-            Phase.IDLE -> R.string.status_idle to R.color.hub_idle
-            Phase.LISTENING -> R.string.status_listening to R.color.hub_listening
-            Phase.THINKING -> R.string.status_thinking to R.color.hub_thinking
-            Phase.LOOKING -> R.string.status_looking to R.color.hub_thinking
-            Phase.SPEAKING -> R.string.status_speaking to R.color.hub_speaking
-            Phase.NAVIGATING -> R.string.status_navigating to R.color.hub_listening
+    /** «Просто скажите вопрос»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
+    private fun listenOnce() {
+        if (hasMicPermission()) {
+            container.voice.stopSpeaking()
+            container.voice.pushToTalk()
+        } else {
+            // Посетителям системный диалог не показываем: бейдж «микрофон выключен» уже на экране.
+            timber.log.Timber.w("mic button: RECORD_AUDIO not granted")
+            renderMicBadge()
         }
-        binding.statusText.text = t.get(statusRes, lang)
-        binding.statusDot.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this, colorRes))
-
-        val question = state.partialQuestion ?: state.question
-        binding.questionText.text = question?.let { "«$it»" }.orEmpty()
-        binding.answerText.text = state.answer
-            ?: if (state.processing) t.get(statusRes, lang) else t.get(R.string.hint_idle, lang)
-
-        // Пока идёт запрос — кнопки вопросов неактивны (защита от многократного нажатия).
-        val enabled = !state.processing
-        for (i in 0 until binding.quickContainer.childCount) binding.quickContainer.getChildAt(i).isEnabled = enabled
-        binding.sendButton.isEnabled = enabled
-        binding.lookButton.isEnabled = enabled
-        binding.offlineBadge.text = t.get(R.string.offline_badge, lang)
-        binding.offlineBadge.visibility = if (state.offline) View.VISIBLE else View.GONE
-        binding.micOffBadge.text = t.get(R.string.mic_off_badge, lang)
-
-        binding.quickTitle.text = t.get(R.string.quick_questions_title, lang)
-        binding.inputLayout.hint = t.get(R.string.input_hint, lang)
-        binding.sendButton.text = t.get(R.string.action_send, lang)
-        binding.lookButton.text = t.get(R.string.action_look, lang)
-        binding.stopButton.text = t.get(R.string.action_stop, lang)
-        val target = state.guideTarget
-        binding.guideButton.visibility = if (target != null && state.guidingTo == null) View.VISIBLE else View.GONE
-        if (target != null) {
-            binding.guideButton.text = t.get(R.string.action_guide, lang, kz.astanahub.robot.places.WayFinder.displayName(target, lang))
-        }
-        binding.screensaver.visibility = if (state.screensaver) View.VISIBLE else View.GONE
-        binding.micButton.text = t.get(R.string.action_mic, lang)
-
-        renderQuickQuestions(lang, state.quickQuestions, enabled)
     }
 
-    private fun renderQuickQuestions(lang: Lang, items: List<QuickQuestion>, enabled: Boolean) {
-        if (renderedQuick == lang to items) return
-        renderedQuick = lang to items
-        val parent = binding.quickContainer
-        parent.removeAllViews()
-        val inflater = LayoutInflater.from(this)
-        items.forEach { q ->
-            val button = inflater.inflate(R.layout.item_quick_question, parent, false) as Button
-            button.text = q.text
-            button.isEnabled = enabled
-            button.setOnClickListener {
-                // Блокируем сразу, не дожидаясь нового состояния (двойной тап).
-                for (i in 0 until parent.childCount) parent.getChildAt(i).isEnabled = false
-                viewModel.submit(q.text)
-            }
-            parent.addView(button)
+    private fun str(id: Int, lang: Lang): String = container.text.get(id, lang)
+
+    // ---------------------------------------------------------------------------------------------
+    // Отрисовка
+    // ---------------------------------------------------------------------------------------------
+
+    private fun render(state: MainUiState) {
+        val lang = state.lang
+
+        // Верхняя полоса.
+        binding.backButton.isVisible = state.canGoBack
+        binding.backButton.text = str(R.string.action_back, lang)
+        binding.langRu.isSelected = lang == Lang.RU
+        binding.langKk.isSelected = lang == Lang.KK
+        binding.langEn.isSelected = lang == Lang.EN
+        binding.exitButton.contentDescription = str(R.string.exit_label, lang)
+        binding.offlineBar.isVisible = state.offline
+        binding.offlineText.text = str(R.string.offline_badge, lang)
+        binding.micOffBadge.text = str(R.string.mic_off_badge, lang)
+
+        // Слева: лицо, статус, что слышу, субтитры.
+        binding.face.phase = state.phase
+        binding.statusText.text = str(statusRes(state.phase), lang)
+        binding.heardText.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
+        renderSubtitles(state)
+
+        // Справа: один из трёх экранов.
+        binding.homePanel.isVisible = state.screen == Screen.HOME
+        binding.answerPanel.isVisible = state.screen == Screen.ANSWER
+        binding.faqPanel.isVisible = state.screen == Screen.FAQ
+        when (state.screen) {
+            Screen.HOME -> renderHome(state)
+            Screen.ANSWER -> renderAnswer(state)
+            Screen.FAQ -> renderFaq(state)
         }
+        binding.inputLayout.hint = str(R.string.input_hint, lang)
+        binding.sendButton.text = str(R.string.action_send, lang)
+        binding.sendButton.isEnabled = !state.processing
+
+        renderBottom(state)
+
+        // Слои.
+        val guiding = state.guidingTo
+        binding.guideOverlay.isVisible = guiding != null
+        if (guiding != null) {
+            binding.guideTitle.text = container.text.get(R.string.guide_title, lang, guiding)
+            binding.guideSub.text = str(R.string.guide_follow, lang)
+            binding.guideStopButton.text = str(R.string.action_stop, lang)
+        }
+        binding.screensaver.isVisible = state.screensaver
+        if (state.screensaver && binding.exitOverlay.isVisible) stayIn(wake = false)
+        renderExitTexts(lang)
+    }
+
+    private fun statusRes(phase: Phase): Int = when (phase) {
+        Phase.IDLE -> R.string.status_idle
+        Phase.LISTENING -> R.string.status_listening
+        Phase.THINKING -> R.string.status_thinking
+        Phase.LOOKING -> R.string.status_looking
+        Phase.SPEAKING -> R.string.status_speaking
+        Phase.NAVIGATING -> R.string.status_navigating
+    }
+
+    private fun renderBottom(state: MainUiState) {
+        val lang = state.lang
+        val busy = state.processing || state.phase == Phase.SPEAKING
+        val target = state.guideTarget
+        val showGuide = !busy && state.screen == Screen.ANSWER && target != null && state.guidingTo == null
+        val showMore = !busy && state.screen == Screen.FAQ && state.faqPageCount > 1
+
+        binding.homeButton.isVisible = state.screen != Screen.HOME
+        binding.homeButton.text = str(R.string.action_home, lang)
+
+        binding.stopButton.isVisible = busy
+        binding.stopButton.text = str(R.string.action_stop, lang)
+        binding.guideButton.isVisible = showGuide
+        if (showGuide && target != null) {
+            binding.guideButton.text = container.text.get(R.string.action_guide, lang, WayFinder.displayName(target, lang))
+        }
+        binding.faqMoreButton.isVisible = showMore
+        binding.faqMoreButton.text = container.text.get(R.string.faq_more, lang, state.faqPage + 1, state.faqPageCount)
+        binding.hintButton.isVisible = !busy && !showGuide && !showMore
+        binding.hintButton.text = str(R.string.hint_voice, lang)
+
+        // «Что это?» на приветствии — плитка, внизу дублировать не нужно.
+        binding.lookButton.isVisible = state.screen != Screen.HOME
+        binding.lookButton.text = str(R.string.action_look, lang)
+        setEnabled(binding.lookButton, !state.processing)
+    }
+
+    /** Приветствие: до 4 частых вопросов плитками + «Частые вопросы» (весь список) + «Что это?». */
+    private fun renderHome(state: MainUiState) {
+        val lang = state.lang
+        binding.greetTitle.text = str(R.string.greet_title, lang)
+        binding.greetSub.text = str(R.string.greet_sub, lang)
+        val enabled = !state.processing
+        val key = Triple(lang, state.quickQuestions, enabled)
+        if (renderedTiles == key) return
+        renderedTiles = key
+
+        data class Tile(val icon: Int, val label: String, val faq: Boolean = false, val onClick: () -> Unit)
+        val tiles = state.quickQuestions.take(HOME_QUESTION_TILES).map { q ->
+            Tile(R.drawable.ic_hub_chat, q.text) { viewModel.submit(q.text) }
+        } + Tile(R.drawable.ic_hub_help, str(R.string.tile_faq, lang), faq = true) { viewModel.openFaq() } +
+            Tile(R.drawable.ic_hub_camera, str(R.string.action_look, lang)) { viewModel.lookAround() }
+
+        val rows = listOf(binding.tilesRow1, binding.tilesRow2)
+        rows.forEach { it.removeAllViews() }
+        val inflater = LayoutInflater.from(this)
+        tiles.chunked(TILES_PER_ROW).take(rows.size).forEachIndexed { r, rowTiles ->
+            val row = rows[r]
+            rowTiles.forEachIndexed { i, tile ->
+                val b = ItemTileBinding.inflate(inflater, row, false)
+                b.tileIcon.setImageResource(tile.icon)
+                b.tileLabel.text = tile.label
+                if (tile.faq) b.root.setBackgroundResource(R.drawable.bg_tile_faq)
+                setEnabled(b.root, enabled)
+                b.root.setOnClickListener {
+                    // Блокируем сразу, не дожидаясь нового состояния (двойной тап).
+                    rows.forEach { rr -> for (c in 0 until rr.childCount) rr.getChildAt(c).isEnabled = false }
+                    renderedTiles = null
+                    tile.onClick()
+                }
+                (b.root.layoutParams as LinearLayout.LayoutParams).marginEnd =
+                    if (i < TILES_PER_ROW - 1) resources.getDimensionPixelSize(R.dimen.tile_gap) else 0
+                row.addView(b.root)
+            }
+            // Неполный ряд: пустые места, чтобы плитки не растягивались.
+            repeat(TILES_PER_ROW - rowTiles.size) { k ->
+                row.addView(Space(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, 0, 1f).apply {
+                        if (rowTiles.size + k < TILES_PER_ROW - 1) marginEnd = resources.getDimensionPixelSize(R.dimen.tile_gap)
+                    }
+                })
+            }
+        }
+    }
+
+    private fun renderAnswer(state: MainUiState) {
+        val lang = state.lang
+        binding.questionText.text = state.question?.let { "«$it»" }.orEmpty()
+        binding.questionText.isVisible = state.question != null
+        val answer = state.answer
+        if (answer != answerExpandedFor) {
+            answerExpandedFor = answer
+            answerExpanded = false
+        }
+        binding.answerText.text = answer ?: str(statusRes(state.phase), lang)
+        binding.answerText.setTextColor(color(if (answer == null) R.color.hub_muted2 else R.color.hub_ink))
+        binding.answerText.maxLines = if (answerExpanded) Int.MAX_VALUE else ANSWER_LINES
+        binding.showMoreButton.text = str(if (answerExpanded) R.string.action_show_less else R.string.action_show_more, lang)
+        binding.answerText.post { binding.showMoreButton.isVisible = answer != null && (answerExpanded || isEllipsized(binding.answerText)) }
+        if (!answerExpanded) binding.answerScroll.scrollTo(0, 0)
+    }
+
+    /** Частые вопросы: аккордеон, раскрыт не больше одного вопроса. */
+    private fun renderFaq(state: MainUiState) {
+        val lang = state.lang
+        binding.faqTitle.text = str(R.string.faq_title, lang)
+        val openItem = state.faqPageItems.firstOrNull { it.id == state.faqOpenId }
+        val answer = state.answer.takeIf { openItem != null && state.question == openItem.text.trim() }
+        if (answer != faqExpandedFor) {
+            faqExpandedFor = answer
+            faqExpanded = false
+        }
+        val key = listOf(lang, state.faqPageItems, state.faqOpenId, answer, state.phase, state.guideTarget, faqExpanded)
+        if (renderedFaq == key) return
+        renderedFaq = key
+
+        val list = binding.faqList
+        list.removeAllViews()
+        val inflater = LayoutInflater.from(this)
+        state.faqPageItems.forEach { item ->
+            val row = ItemFaqRowBinding.inflate(inflater, list, false)
+            val open = item.id == state.faqOpenId
+            row.rowQuestion.text = item.text
+            row.rowHeader.setOnClickListener { viewModel.faqToggle(item) }
+            row.rowHeader.contentDescription = item.text
+            if (open) {
+                row.root.setBackgroundResource(R.drawable.bg_row_open)
+                row.root.elevation = resources.getDimension(R.dimen.elev_card)
+                row.rowQuestion.typeface = ResourcesCompat.getFont(this, R.font.nunito_bold)
+                row.rowChevron.rotation = 180f
+                row.rowChevron.imageTintList = ColorStateList.valueOf(color(R.color.hub_primary))
+                row.rowBody.isVisible = true
+                row.rowAnswer.text = answer ?: str(statusRes(if (state.processing) state.phase else Phase.THINKING), lang)
+                row.rowAnswer.setTextColor(color(if (answer == null) R.color.hub_muted2 else R.color.hub_ink))
+                row.rowAnswer.maxLines = if (faqExpanded) FAQ_EXPANDED_LINES else FAQ_LINES
+                val target = state.guideTarget
+                row.rowGuide.isVisible = answer != null && target != null && state.guidingTo == null
+                row.rowGuide.text = str(R.string.action_guide_short, lang)
+                row.rowGuide.setOnClickListener { viewModel.guideToOffered() }
+                row.rowMore.text = str(if (faqExpanded) R.string.action_show_less else R.string.action_show_more, lang)
+                row.rowMore.setOnClickListener {
+                    faqExpanded = !faqExpanded
+                    render(viewModel.state.value)
+                }
+                row.rowAnswer.post {
+                    row.rowMore.isVisible = answer != null && (faqExpanded || isEllipsized(row.rowAnswer))
+                    row.rowActions.isVisible = row.rowGuide.isVisible || row.rowMore.isVisible
+                }
+            }
+            list.addView(row.root)
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Субтитры: облачко под лицом, пока робот говорит. Произнесённые слова тёмные, следующие — бледные.
+    // ---------------------------------------------------------------------------------------------
+
+    private val pacer = SubtitlePacer()
+    private var subtitlePlan: List<SubtitlePacer.Word> = emptyList()
+    private var subtitleFor: String? = null
+    private var subtitleStarted = 0L
+
+    private val subtitleTick = object : Runnable {
+        override fun run() {
+            val elapsed = SystemClock.uptimeMillis() - subtitleStarted
+            val frame = pacer.frameAt(subtitlePlan, elapsed) ?: return
+            binding.subtitleText.text = subtitleSpan(frame)
+            if (elapsed < pacer.durationMillis(subtitlePlan)) handler.postDelayed(this, SUBTITLE_TICK_MS)
+        }
+    }
+
+    private val subtitleHide = Runnable { showSubtitles(false) }
+
+    private fun renderSubtitles(state: MainUiState) {
+        val text = state.answer
+        if (state.phase == Phase.SPEAKING && !text.isNullOrBlank()) {
+            handler.removeCallbacks(subtitleHide)
+            if (text != subtitleFor || !binding.subtitleBox.isVisible) {
+                subtitleFor = text
+                subtitlePlan = pacer.plan(text)
+                subtitleStarted = SystemClock.uptimeMillis()
+                handler.removeCallbacks(subtitleTick)
+                showSubtitles(true)
+                subtitleTick.run()
+            }
+        } else if (binding.subtitleBox.isVisible) {
+            handler.removeCallbacks(subtitleTick)
+            handler.removeCallbacks(subtitleHide)
+            // Договорил — последний кусок ещё мгновение на экране; «Стоп» и уход с экрана — тоже плавно.
+            pacer.frameAt(subtitlePlan, Long.MAX_VALUE)?.let { binding.subtitleText.text = subtitleSpan(it) }
+            handler.postDelayed(subtitleHide, SUBTITLE_LINGER_MS)
+        }
+    }
+
+    private fun showSubtitles(show: Boolean) {
+        if (!show) {
+            subtitleFor = null
+            handler.removeCallbacks(subtitleTick)
+        }
+        binding.subtitleBox.isVisible = show
+        // Пока есть облачко, подпись статуса и «что слышу» не нужны: место под лицом одно.
+        binding.statusText.isVisible = !show
+        binding.heardText.isVisible = !show
+    }
+
+    private fun subtitleSpan(frame: SubtitlePacer.Frame): CharSequence {
+        val sb = SpannableStringBuilder()
+        val spoken = color(R.color.hub_ink)
+        val upcoming = color(R.color.hub_sub_upcoming)
+        frame.words.forEachIndexed { i, w ->
+            if (i > 0) sb.append(' ')
+            val start = sb.length
+            sb.append(w)
+            sb.setSpan(ForegroundColorSpan(if (i < frame.spoken) spoken else upcoming), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return sb
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Выход: крестик → подтверждение. Никто не ответил за 15 с — окно закрывается, робот работает дальше.
+    // ---------------------------------------------------------------------------------------------
+
+    private val exitTimeout = Runnable { stayIn() }
+
+    private fun askExit() {
+        viewModel.stop()
+        renderExitTexts(viewModel.state.value.lang)
+        binding.exitOverlay.isVisible = true
+        handler.removeCallbacks(exitTimeout)
+        handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
+    }
+
+    private fun renderExitTexts(lang: Lang) {
+        binding.exitQuestion.text = str(R.string.exit_question, lang)
+        binding.exitSub.text = str(R.string.exit_sub, lang)
+        binding.exitNoButton.text = str(R.string.exit_no, lang)
+        binding.exitYesButton.text = str(R.string.exit_yes, lang)
+    }
+
+    private fun stayIn(wake: Boolean = true) {
+        handler.removeCallbacks(exitTimeout)
+        binding.exitOverlay.isVisible = false
+        if (wake) viewModel.wake()
+    }
+
+    private fun exitApp() {
+        handler.removeCallbacks(exitTimeout)
+        timber.log.Timber.i("exit requested from the screen")
+        viewModel.stop()
+        finishAndRemoveTask()
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    private fun color(id: Int) = ContextCompat.getColor(this, id)
+
+    private fun setEnabled(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else DISABLED_ALPHA
+    }
+
+    private fun isEllipsized(view: TextView): Boolean {
+        val layout = view.layout ?: return false
+        val lines = layout.lineCount
+        return lines > 0 && (layout.getEllipsisCount(lines - 1) > 0 || lines > view.maxLines)
     }
 
     /** Любое касание экрана — активность посетителя (таймер заставки). */
@@ -276,5 +577,14 @@ class MainActivity : AppCompatActivity() {
         const val DIAG_HOLD_MILLIS = 3_000L
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
+        const val HOME_QUESTION_TILES = 4
+        const val TILES_PER_ROW = 3
+        const val ANSWER_LINES = 3
+        const val FAQ_LINES = 2
+        const val FAQ_EXPANDED_LINES = 8
+        const val SUBTITLE_TICK_MS = 60L
+        const val SUBTITLE_LINGER_MS = 900L
+        const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L
+        const val DISABLED_ALPHA = 0.55f
     }
 }

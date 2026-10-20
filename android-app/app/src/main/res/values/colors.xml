@@ -13,4 +13,18 @@
     <color name="hub_idle">#9CA3AF</color>
     <color name="hub_offline">#DC2626</color>
     <color name="ic_launcher_background">#1F4FFF</color>
+
+    <!-- Экран-киоск (MVP, вариант А): синий не меняем, глубина — тени и градиенты -->
+    <color name="hub_ink">#111827</color>
+    <color name="hub_muted2">#5B6475</color>
+    <color name="hub_line">#DDE3EE</color>
+    <color name="hub_card_line">#E1E6F0</color>
+    <color name="hub_tint">#E8EEFF</color>
+    <color name="hub_on_tint">#12257A</color>
+    <color name="hub_sub_upcoming">#9AA3B5</color>
+    <color name="hub_amber_bg">#FFF4DB</color>
+    <color name="hub_amber_fg">#8A4B00</color>
+    <color name="hub_shadow_blue">#661F4FFF</color>
+    <color name="hub_shadow_ink">#55111827</color>
+    <color name="hub_scrim">#8C0A101E</color>
 </resources>

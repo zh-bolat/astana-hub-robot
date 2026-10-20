@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Главная синяя кнопка: выпуклая -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <gradient android:angle="270" android:startColor="#4C74FF" android:centerColor="#1F4FFF" android:endColor="#173ED6" />
+                    <stroke android:width="2dp" android:color="#1A44E6" />
+                    <corners android:radius="52dp" />
+                </shape>
+            </item>
+            <item android:left="30dp" android:right="30dp" android:top="2dp" android:gravity="top">
+                <shape android:shape="rectangle">
+                    <solid android:color="#4DFFFFFF" />
+                    <size android:height="2dp" />
+                    <corners android:radius="1dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item android:state_pressed="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <gradient android:angle="270" android:startColor="#173ED6" android:centerColor="#1C47EE" android:endColor="#2A58FF" />
+                    <stroke android:width="2dp" android:color="#1A44E6" />
+                    <corners android:radius="52dp" />
+                </shape>
+            </item>
+            <item android:left="30dp" android:right="30dp" android:top="2dp" android:gravity="top">
+                <shape android:shape="rectangle">
+                    <solid android:color="#4DFFFFFF" />
+                    <size android:height="2dp" />
+                    <corners android:radius="1dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item android:state_selected="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <gradient android:angle="270" android:startColor="#173ED6" android:centerColor="#1C47EE" android:endColor="#2A58FF" />
+                    <stroke android:width="2dp" android:color="#1A44E6" />
+                    <corners android:radius="52dp" />
+                </shape>
+            </item>
+            <item android:left="30dp" android:right="30dp" android:top="2dp" android:gravity="top">
+                <shape android:shape="rectangle">
+                    <solid android:color="#4DFFFFFF" />
+                    <size android:height="2dp" />
+                    <corners android:radius="1dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <gradient android:angle="270" android:startColor="#4C74FF" android:centerColor="#1F4FFF" android:endColor="#173ED6" />
+                    <stroke android:width="2dp" android:color="#1A44E6" />
+                    <corners android:radius="52dp" />
+                </shape>
+            </item>
+            <item android:left="30dp" android:right="30dp" android:top="2dp" android:gravity="top">
+                <shape android:shape="rectangle">
+                    <solid android:color="#4DFFFFFF" />
+                    <size android:height="2dp" />
+                    <corners android:radius="1dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</selector>

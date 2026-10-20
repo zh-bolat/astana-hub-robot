@@ -8,6 +8,33 @@
     <dimen name="text_answer">40sp</dimen>
     <dimen name="text_button">24sp</dimen>
     <dimen name="text_label">20sp</dimen>
-    <dimen name="avatar_size">220dp</dimen>
     <dimen name="button_height">72dp</dimen>
+
+    <!-- Вариант А. Сетка 1600 dp по ширине (UiScale): размеры совпадают с HTML-прототипом в px. -->
+    <dimen name="top_bar_height">88dp</dimen>
+    <dimen name="bottom_bar_height">120dp</dimen>
+    <dimen name="left_column_width">560dp</dimen>
+    <dimen name="face_size">280dp</dimen>
+    <dimen name="tile_height">156dp</dimen>
+    <dimen name="tile_gap">24dp</dimen>
+    <dimen name="btn_height">96dp</dimen>
+    <dimen name="btn_primary_height">104dp</dimen>
+    <dimen name="top_btn_height">64dp</dimen>
+    <dimen name="row_min_height">104dp</dimen>
+    <dimen name="chip_height">72dp</dimen>
+    <dimen name="text_greet">52sp</dimen>
+    <dimen name="text_greet_sub">28sp</dimen>
+    <dimen name="text_tile">30sp</dimen>
+    <dimen name="text_btn">30sp</dimen>
+    <dimen name="text_btn_primary">32sp</dimen>
+    <dimen name="text_top">28sp</dimen>
+    <dimen name="text_faq_title">44sp</dimen>
+    <dimen name="text_faq_row">30sp</dimen>
+    <dimen name="text_faq_answer">32sp</dimen>
+    <dimen name="text_subtitle">30sp</dimen>
+    <dimen name="text_overlay_big">72sp</dimen>
+    <dimen name="text_overlay_small">34sp</dimen>
+    <dimen name="elev_card">6dp</dimen>
+    <dimen name="elev_btn">4dp</dimen>
+    <dimen name="elev_primary">10dp</dimen>
 </resources>

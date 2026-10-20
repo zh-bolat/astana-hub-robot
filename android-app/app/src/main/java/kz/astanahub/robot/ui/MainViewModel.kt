@@ -43,6 +43,9 @@ import timber.log.Timber
 /** Индикатор на экране. */
 enum class Phase { IDLE, LISTENING, THINKING, LOOKING, SPEAKING, NAVIGATING }
 
+/** Что показано в правой части экрана: приветствие с плитками, ответ или список частых вопросов. */
+enum class Screen { HOME, ANSWER, FAQ }
+
 data class MainUiState(
     val lang: Lang = Lang.RU,
     val phase: Phase = Phase.IDLE,
@@ -59,7 +62,25 @@ data class MainUiState(
     val guidingTo: String? = null,
     /** Заставка после бездействия. */
     val screensaver: Boolean = false,
+    val screen: Screen = Screen.HOME,
+    /** Страница частых вопросов (по [FAQ_PAGE_SIZE] на странице). */
+    val faqPage: Int = 0,
+    /** Раскрытый вопрос в списке частых вопросов (id), null — все свёрнуты. */
+    val faqOpenId: String? = null,
 ) {
+    /** Кнопка «Назад» видна везде, кроме приветствия. */
+    val canGoBack: Boolean get() = screen != Screen.HOME
+
+    val faqPageCount: Int get() = ((quickQuestions.size + FAQ_PAGE_SIZE - 1) / FAQ_PAGE_SIZE).coerceAtLeast(1)
+
+    /** Вопросы текущей страницы. */
+    val faqPageItems: List<QuickQuestion>
+        get() = quickQuestions.drop(faqPage.coerceIn(0, faqPageCount - 1) * FAQ_PAGE_SIZE).take(FAQ_PAGE_SIZE)
+
+    companion object {
+        const val FAQ_PAGE_SIZE = 3
+    }
+
     /** Идёт запрос (думаю / смотрю): кнопки вопросов заблокированы. */
     val processing: Boolean get() = phase == Phase.THINKING || phase == Phase.LOOKING
 }
@@ -88,6 +109,16 @@ class MainViewModel(
     private var navJob: Job? = null
     private var idleJob: Job? = null
     private var busy = false
+
+    /** Экраны, на которые возвращает «Назад» (только устойчивые: приветствие, ответ, страница вопросов). */
+    private data class Snapshot(
+        val screen: Screen,
+        val faqPage: Int,
+        val question: String?,
+        val answer: String?,
+        val guideTarget: Place?,
+    )
+    private val history = ArrayDeque<Snapshot>()
 
     /** Язык выбран кнопкой — тогда передаём его серверу; иначе сервер определяет сам. */
     private var langChosenExplicitly = false
@@ -209,8 +240,10 @@ class MainViewModel(
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null,
                 guideTarget = null, offline = false, screensaver = true,
+                screen = Screen.HOME, faqPage = 0, faqOpenId = null,
             )
         }
+        history.clear()
         if (langChanged) {
             voice.setLanguage(Lang.RU)
             loadQuickQuestions()
@@ -226,8 +259,10 @@ class MainViewModel(
         loadQuickQuestions()
     }
 
-    /** Вопрос текстом (поле ввода на эмуляторе, кнопка частого вопроса) или финальный ASR. */
-    fun submit(text: String) {
+    /** Вопрос текстом (поле ввода на эмуляторе, плитка вопроса) или финальный ASR: ответ — на экране ответа. */
+    fun submit(text: String) = submitInternal(text, faqId = null)
+
+    private fun submitInternal(text: String, faqId: String?) {
         val question = text.trim()
         if (question.isEmpty()) return
         // Повторное нажатие той же кнопки, пока ответ ещё готовится, — игнорируем (на роботе жали 6 раз подряд).
@@ -240,6 +275,13 @@ class MainViewModel(
         wake()
         voice.stopSpeaking()
         requestJob?.cancel()
+        if (faqId == null) {
+            // Вопрос из любого места → экран ответа; прежний экран запоминаем для «Назад».
+            remember()
+            _state.update { it.copy(screen = Screen.ANSWER, faqOpenId = null) }
+        } else {
+            _state.update { it.copy(screen = Screen.FAQ, faqOpenId = faqId) }
+        }
         requestJob = viewModelScope.launch {
             _state.update { it.copy(question = question, partialQuestion = null, answer = null, guideTarget = null) }
             val routed = IntentRouter.route(question)
@@ -347,6 +389,83 @@ class MainViewModel(
             say(text, offline = _state.value.offline)
             restartIdleTimer()
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Навигация по экранам: частые вопросы, «Назад», «В начало».
+    // ---------------------------------------------------------------------------------------------
+
+    /** Плитка «Частые вопросы»: список вопросов-аккордеон, первая страница. */
+    fun openFaq() {
+        wake()
+        if (_state.value.screen == Screen.FAQ) return
+        stopActivity()
+        remember()
+        _state.update { it.copy(screen = Screen.FAQ, faqPage = 0, faqOpenId = null) }
+    }
+
+    /** «Ещё вопросы»: следующая страница (по кругу). Текущую страницу можно вернуть кнопкой «Назад». */
+    fun faqNextPage() {
+        wake()
+        val s = _state.value
+        if (s.screen != Screen.FAQ || s.faqPageCount < 2) return
+        stopActivity()
+        remember()
+        _state.update { it.copy(faqPage = (s.faqPage + 1) % s.faqPageCount, faqOpenId = null, question = null, answer = null, guideTarget = null) }
+    }
+
+    /** Нажатие на вопрос в списке: раскрыть (и спросить сервер) или свернуть уже раскрытый. */
+    fun faqToggle(item: QuickQuestion) {
+        wake()
+        if (_state.value.faqOpenId == item.id) {
+            stopActivity()
+            _state.update { it.copy(faqOpenId = null, question = null, answer = null, guideTarget = null) }
+            return
+        }
+        submitInternal(item.text, faqId = item.id)
+    }
+
+    /** «Назад»: на предыдущий экран без повторной озвучки; истории нет — на приветствие. */
+    fun back() {
+        wake()
+        stopActivity()
+        val prev = history.removeLastOrNull() ?: return goHome()
+        _state.update {
+            it.copy(
+                screen = prev.screen, faqPage = prev.faqPage, faqOpenId = null,
+                question = prev.question, answer = prev.answer, guideTarget = prev.guideTarget, partialQuestion = null,
+            )
+        }
+    }
+
+    /** «В начало»: приветствие, история сбрасывается. */
+    fun goHome() {
+        wake()
+        stopActivity()
+        history.clear()
+        _state.update {
+            it.copy(
+                screen = Screen.HOME, faqPage = 0, faqOpenId = null,
+                question = null, answer = null, guideTarget = null, partialQuestion = null,
+            )
+        }
+    }
+
+    /** Запомнить текущий экран для «Назад» (повтор того же экрана не копим). */
+    private fun remember() {
+        val s = _state.value
+        val snap = Snapshot(s.screen, s.faqPage, s.question.takeIf { s.screen == Screen.ANSWER }, s.answer.takeIf { s.screen == Screen.ANSWER }, s.guideTarget.takeIf { s.screen == Screen.ANSWER })
+        if (snap.screen == Screen.ANSWER && snap.answer == null) return // ответ ещё не пришёл — возвращаться некуда
+        if (history.lastOrNull() == snap) return
+        history.addLast(snap)
+        while (history.size > MAX_HISTORY) history.removeFirst()
+    }
+
+    /** Остановить запрос и речь при уходе с экрана. Поездку не трогаем: её останавливает только «Стоп». */
+    private fun stopActivity() {
+        requestJob?.cancel()
+        voice.stopSpeaking()
+        setBusy(null)
     }
 
     /** Кнопка «Что это?». */
@@ -522,6 +641,7 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+        private const val MAX_HISTORY = 20
         const val NO_CONNECTION_REPEAT_MILLIS = 60_000L
         private const val PLACE_LOOKUP_TIMEOUT_MILLIS = 1_000L
         private const val MAX_QUICK_BUTTONS = 8
