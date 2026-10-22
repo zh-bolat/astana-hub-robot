@@ -67,6 +67,7 @@
 
 - [`docs/api-contract.md`](docs/api-contract.md): контракт робот ↔ сервер. Это источник истины для обеих сторон.
 - [`docs/architecture.md`](docs/architecture.md): компоненты, сценарии, варианты сборки, провайдеры.
+- [`docs/frontend-chat.md`](docs/frontend-chat.md): чат на экране, голос и прерывания — как приложению работать с сервером.
 - [`docs/robot-setup.md`](docs/robot-setup.md): как подключить робота, поставить APK и проверить его через экран диагностики.
 - [`docs/stack.md`](docs/stack.md): утверждённый стек и причины выбора.
 - [`docs/roadmap.md`](docs/roadmap.md): этапы и шаги с критериями готовности.
