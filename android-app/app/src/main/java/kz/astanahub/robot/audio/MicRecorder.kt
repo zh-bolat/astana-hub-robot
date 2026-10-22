@@ -78,6 +78,43 @@ class MicRecorder(
             }
         }
 
+    /**
+     * Live-распознавание: отдаёт звук кусками по [chunkMillis] (PCM16 LE, mono), пока корутина не отменена.
+     * Конец фразы здесь не ищем — его находит сервер. @return сообщение об ошибке или null.
+     */
+    @SuppressLint("MissingPermission")
+    suspend fun stream(
+        sampleRate: Int = 16_000,
+        chunkMillis: Int = 100,
+        onLevel: (Float) -> Unit = {},
+        onChunk: (ByteArray) -> Unit,
+    ): String? = withContext(Dispatchers.IO) {
+        if (!hasPermission()) return@withContext "RECORD_AUDIO not granted"
+        val opened = open(sampleRate) ?: return@withContext "AudioRecord init failed"
+        val record = opened.record
+        val channels = if (opened.stereo) 2 else 1
+        val raw = ShortArray(sampleRate * chunkMillis / 1000 * channels)
+        try {
+            record.startRecording()
+            while (currentCoroutineContext().isActive) {
+                var filled = 0
+                while (filled < raw.size) {
+                    val n = record.read(raw, filled, raw.size - filled)
+                    if (n < 0) return@withContext "AudioRecord.read=$n"
+                    filled += n
+                }
+                val mono = leftChannel(raw, channels)
+                onLevel((EnergyVad.rms(mono) / Short.MAX_VALUE).toFloat().coerceIn(0f, 1f))
+                onChunk(toLittleEndian(mono))
+            }
+            null
+        } finally {
+            runCatching { record.stop() }
+            record.release()
+            onLevel(0f)
+        }
+    }
+
     /** Только уровень сигнала (для экрана диагностики), пока корутина не отменена. */
     @SuppressLint("MissingPermission")
     suspend fun monitorLevel(sampleRate: Int = 16_000, onLevel: (Float) -> Unit): Boolean =
@@ -132,5 +169,15 @@ class MicRecorder(
         /** Интерливинг L R L R … → левый канал. Для mono — копия. */
         fun leftChannel(samples: ShortArray, channels: Int): ShortArray =
             if (channels == 1) samples.copyOf() else ShortArray(samples.size / channels) { samples[it * channels] }
+
+        fun toLittleEndian(samples: ShortArray): ByteArray {
+            val out = ByteArray(samples.size * 2)
+            for (i in samples.indices) {
+                val s = samples[i].toInt()
+                out[2 * i] = (s and 0xFF).toByte()
+                out[2 * i + 1] = (s shr 8 and 0xFF).toByte()
+            }
+            return out
+        }
     }
 }

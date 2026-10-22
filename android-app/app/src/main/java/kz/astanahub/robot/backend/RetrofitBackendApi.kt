@@ -34,10 +34,10 @@ data class BackendTimeouts(
  * Стриминг SSE (`Accept: text/event-stream`) — шаг 4.4, здесь только JSON.
  */
 class RetrofitBackendApi(
-    baseUrl: String,
+    private val baseUrl: String,
     private val token: String,
     private val timeouts: BackendTimeouts = BackendTimeouts(),
-    client: OkHttpClient = defaultClient(),
+    private val client: OkHttpClient = defaultClient(),
 ) : BackendApi {
 
     private val service: HubService = Retrofit.Builder()
@@ -107,6 +107,9 @@ class RetrofitBackendApi(
     override suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray> =
         call(timeouts.ttsMillis, check = ::rejectFakeSpeech) { service.tts(TtsRequestDto(text, lang.code)) }
             .map { body -> body.use { it.bytes() } }
+
+    override fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession =
+        OkHttpLiveSttSession(client, baseUrl, token, lang, sessionId)
 
     /** Сервер с FakeSpeechProvider отдаёт тишину и `X-Speech-Provider: fake` — считаем TTS недоступным. */
     private fun rejectFakeSpeech(response: Response<*>): BackendError? =

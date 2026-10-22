@@ -229,7 +229,8 @@ class RoutingVoiceGateway(
     override fun setLanguage(lang: Lang) {
         builtinAsr.setLanguage(lang)
         if (builtinTts !== builtinAsr) builtinTts.setLanguage(lang)
-        // Серверному STT язык не навязываем: автоопределение ru/kk/en (подсказка — экран диагностики).
+        // Серверному STT — язык экрана: без подсказки live-распознавание путает казахский с турецким.
+        server.setLanguage(lang)
     }
 
     override fun setSessionId(id: String) {

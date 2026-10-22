@@ -148,6 +148,7 @@ class MainViewModel(
         viewModelScope.launch {
             voice.connection.collect { up -> if (up) onConnectionRestored() else onConnectionLost() }
         }
+        voice.setLanguage(_state.value.lang) // подсказка языка серверному STT — с первой фразы
         loadQuickQuestions()
         wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
         restartIdleTimer()
