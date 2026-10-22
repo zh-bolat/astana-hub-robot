@@ -24,4 +24,22 @@
     <string name="phrase_one_moment">Бір сәт…</string>
     <string name="phrase_camera_unavailable">Кешіріңіз, камера қазір қолжетімсіз.</string>
     <string name="mic_off_badge">Микрофон өшірулі: рұқсат жоқ</string>
+    <string name="greet_title">Сәлеметсіз бе! Қалай көмектесейін?</string>
+    <string name="greet_sub">Дауыспен сұраңыз немесе тақырып таңдаңыз</string>
+    <string name="hint_voice">Сұрағыңызды айтыңыз, мен тыңдап тұрмын</string>
+    <string name="tile_faq">Жиі қойылатын сұрақтар</string>
+    <string name="faq_title">Жиі қойылатын сұрақтар</string>
+    <string name="faq_more">Басқа сұрақтар (%1$d/%2$d)</string>
+    <string name="action_home">Басына</string>
+    <string name="action_back">Артқа</string>
+    <string name="action_guide_short">Апарып салу</string>
+    <string name="action_show_more">Толығырақ</string>
+    <string name="action_show_less">Жасыру</string>
+    <string name="guide_title">Бағытымыз: %1$s</string>
+    <string name="guide_follow">Менің артымнан жүріңіз</string>
+    <string name="exit_label">Қолданбадан шығу</string>
+    <string name="exit_question">Қолданбадан шығу керек пе?</string>
+    <string name="exit_sub">Робот келушілерге жауап беруді тоқтатады.</string>
+    <string name="exit_yes">Шығу</string>
+    <string name="exit_no">Қалу</string>
 </resources>

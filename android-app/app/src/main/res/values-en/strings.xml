@@ -23,4 +23,22 @@
     <string name="phrase_one_moment">One moment…</string>
     <string name="phrase_camera_unavailable">Sorry, the camera is not available right now.</string>
     <string name="mic_off_badge">Microphone off: no permission</string>
+    <string name="greet_title">Hello! How can I help?</string>
+    <string name="greet_sub">Ask by voice or pick a topic</string>
+    <string name="hint_voice">Just say your question, I am listening</string>
+    <string name="tile_faq">Common questions</string>
+    <string name="faq_title">Common questions</string>
+    <string name="faq_more">More questions (%1$d/%2$d)</string>
+    <string name="action_home">Home</string>
+    <string name="action_back">Back</string>
+    <string name="action_guide_short">Take me there</string>
+    <string name="action_show_more">Show more</string>
+    <string name="action_show_less">Show less</string>
+    <string name="guide_title">Heading to: %1$s</string>
+    <string name="guide_follow">Follow me</string>
+    <string name="exit_label">Exit the app</string>
+    <string name="exit_question">Exit the app?</string>
+    <string name="exit_sub">The robot will stop answering visitors.</string>
+    <string name="exit_yes">Exit</string>
+    <string name="exit_no">Stay</string>
 </resources>

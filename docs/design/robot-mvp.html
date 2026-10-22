@@ -1,0 +1,713 @@
+<title>Робот-гид Astana Hub</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: page = short header + robot screen (fixed 1600x900 dp stage, scaled to width) + demo panel. Stage is always light: it mirrors the real robot screen. */
+:root {
+  --page-bg: #EEF1F7; --page-fg: #141A26; --page-muted: #5A6375; --page-card: #FFFFFF; --page-line: #D6DCE8; --page-accent: #1F4FFF;
+  /* robot screen tokens (single light look, by design) */
+  --bg: #F5F7FB; --card: #FFFFFF; --ink: #111827; --muted: #5B6475; --line: #DDE3EE;
+  --blue: #1F4FFF; --blue-press: #1638C7; --tint: #E8EEFF; --amber-bg: #FFF4DB; --amber-fg: #8A4B00; --red: #C62828;
+  --font: "Nunito", "Roboto", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --page-bg: #10141C; --page-fg: #E8ECF4; --page-muted: #9AA4B6; --page-card: #1A2030; --page-line: #2C3446; --page-accent: #7D9BFF; color-scheme: dark } }
+:root[data-theme="dark"] { --page-bg: #10141C; --page-fg: #E8ECF4; --page-muted: #9AA4B6; --page-card: #1A2030; --page-line: #2C3446; --page-accent: #7D9BFF; color-scheme: dark }
+
+[hidden] { display: none !important; }
+body { background: var(--page-bg); color: var(--page-fg); font-family: var(--font); }
+.page { max-width: 1240px; margin: 0 auto; padding-block: 20px 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 16px; }
+.page h1 { font-size: 20px; font-weight: 700; margin: 0; text-wrap: balance; }
+.page p.lead { margin: 0; color: var(--page-muted); font-size: 14px; line-height: 1.5; max-width: 70ch; }
+
+.frame { width: 100%; position: relative; border-radius: 18px; overflow: hidden; box-shadow: 0 0 0 10px #1B1F27, 0 10px 40px rgba(0,0,0,.25); margin: 10px 0; }
+.stage { width: 1600px; height: 900px; position: absolute; left: 0; top: 0; transform-origin: 0 0; background: var(--bg); color: var(--ink); font-family: var(--font); overflow: hidden; user-select: none; -webkit-tap-highlight-color: transparent; }
+
+/* top bar */
+.top { position: absolute; inset: 0 0 auto 0; height: 88px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px 0 24px; background: var(--card); border-bottom: 1px solid var(--line); z-index: 5; }
+.brand { font-size: 30px; font-weight: 700; color: var(--blue); letter-spacing: .2px; }
+.langs { display: flex; gap: 12px; }
+.top-l, .top-r { display: flex; align-items: center; gap: 20px; }
+.top-r { gap: 28px; }
+.back { height: 64px; padding: 0 28px 0 16px; border-radius: 32px; border: 2px solid var(--line); background: var(--card); color: var(--ink); font: 500 28px var(--font); display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.back svg { width: 40px; height: 40px; fill: var(--blue); }
+.exit { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--line); background: var(--card); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.exit svg { width: 38px; height: 38px; fill: currentColor; }
+.top-sep { width: 2px; height: 44px; background: var(--line); }
+.lang { min-width: 96px; height: 60px; border-radius: 28px; border: 2px solid var(--line); background: var(--card); color: var(--ink); font: 500 26px var(--font); cursor: pointer; }
+.lang[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+.offline { position: absolute; left: 0; right: 0; top: 88px; height: 64px; background: var(--amber-bg); color: var(--amber-fg); display: flex; align-items: center; gap: 16px; padding: 0 40px; font-size: 26px; font-weight: 500; z-index: 4; border-bottom: 1px solid #F0D9A8; }
+.offline svg { width: 32px; height: 32px; fill: currentColor; }
+
+/* main zones */
+.main { position: absolute; top: 88px; bottom: 120px; left: 0; right: 0; display: grid; grid-template-columns: 560px 1fr; }
+.stage.is-offline .main { top: 152px; }
+.left { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 36px; padding: 0 32px; }
+.state-label { font-size: 30px; color: var(--muted); display: flex; align-items: center; gap: 12px; min-height: 40px; }
+/* subtitles: speech bubble under the face, tail points up to it; spoken words dark, upcoming words faded */
+.sub { position: relative; width: 480px; min-height: 132px; padding: 24px 30px; border-radius: 28px; background: linear-gradient(180deg, #FFFFFF 0%, #F4F7FD 100%); border: 2px solid #E1E6F0; box-shadow: inset 0 2px 0 #fff, 0 4px 8px rgba(17,24,39,.08), 0 16px 36px rgba(31,79,255,.14); display: flex; align-items: center; justify-content: center; animation: subIn .2s ease-out; }
+.sub::before { content: ""; position: absolute; top: -15px; left: 50%; width: 28px; height: 28px; margin-left: -14px; background: #FFFFFF; border-left: 2px solid #E1E6F0; border-top: 2px solid #E1E6F0; border-radius: 6px 0 0 0; transform: rotate(45deg); }
+.sub p { margin: 0; font-size: 30px; line-height: 1.35; text-align: center; color: var(--ink); }
+.sub p span { color: #9AA3B5; transition: color .15s; }
+.sub p span.on { color: var(--ink); }
+@keyframes subIn { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+.left.subs .heard, .left.subs .state-label { display: none; }
+.left.subs { gap: 40px; }
+.heard { font-size: 26px; color: var(--muted); text-align: center; min-height: 72px; max-width: 460px; line-height: 1.35; }
+.right { padding: 32px 48px 24px 24px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+
+/* indicator */
+.ind { --lvl: 0; position: relative; width: 280px; height: 280px; }
+.ind .ring { position: absolute; inset: 0; border-radius: 50%; border: 6px solid var(--blue); opacity: 0; transform: scale(1); transition: transform .12s linear, opacity .2s; }
+.ind .face { position: absolute; inset: 0; border-radius: 50%; background: var(--blue); display: flex; align-items: center; justify-content: center; gap: 64px; transition: transform .25s ease; }
+.ind .eye { width: 40px; height: 52px; border-radius: 50%; background: #fff; transition: transform .25s ease; }
+.ind .arc { position: absolute; inset: -18px; border-radius: 50%; border: 6px solid transparent; border-top-color: var(--blue); opacity: 0; }
+.ind .q { position: absolute; right: -6px; top: -6px; width: 72px; height: 72px; border-radius: 50%; background: var(--card); border: 3px solid var(--blue); color: var(--blue); font: 700 44px/66px var(--font); text-align: center; opacity: 0; transform: scale(.6); transition: .25s; }
+.ind.blink .eye { animation: blink .18s ease-in-out 1; }
+@keyframes blink { 50% { transform: scaleY(.1); } }
+.ind.listen .ring { opacity: calc(.15 + var(--lvl) * .5); transform: scale(calc(1.06 + var(--lvl) * .22)); }
+.ind.listen .ring.r2 { opacity: calc(.08 + var(--lvl) * .3); transform: scale(calc(1.14 + var(--lvl) * .36)); }
+.ind.think .eye { transform: translateY(-26px); }
+.ind.think .arc { opacity: 1; animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ind.speak .face { transform: scale(calc(1 + var(--lvl) * .05)); }
+.ind.guide .eye { transform: translateX(30px); }
+.ind.unclear .face { transform: rotate(-10deg); }
+.ind.unclear .q { opacity: 1; transform: scale(1); }
+.ind.look .eye { transform: scale(1.15); }
+
+/* greeting */
+.stage .greet-title { font-size: 52px; font-weight: 700; margin: 0 0 8px; line-height: 1.15; }
+.greet-sub { font-size: 28px; color: var(--muted); margin: 0 0 36px; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.tile { height: 156px; border-radius: 24px; background: var(--card); border: 2px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; padding: 24px 28px; text-align: left; font: 500 30px/1.2 var(--font); color: var(--ink); cursor: pointer; transition: transform .08s, background .08s, border-color .08s; }
+.tile svg { width: 48px; height: 48px; fill: var(--blue); flex: none; }
+.tile.faq { border-color: var(--blue); background: var(--tint); }
+
+/* pressed feedback for everything tappable */
+.tap:active, .tap.pressed { transform: scale(.97); filter: brightness(.94); }
+
+/* conversation */
+.q-line { font-size: 28px; color: var(--muted); margin: 0 0 20px; line-height: 1.3; }
+.answer { background: var(--card); border: 2px solid var(--line); border-radius: 24px; padding: 32px 36px; display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+.answer-text { font-size: 40px; line-height: 1.3; margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.answer-text.full { display: block; -webkit-line-clamp: unset; overflow: auto; max-height: 360px; }
+.dots { display: inline-flex; gap: 12px; padding: 12px 0; }
+.dots i { width: 18px; height: 18px; border-radius: 50%; background: var(--blue); opacity: .3; animation: dot 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes dot { 40% { opacity: 1; } }
+.chips { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; }
+.chip { height: 88px; padding: 0 36px; border-radius: 44px; border: 2px solid transparent; background: var(--tint); color: #12257A; font: 500 28px var(--font); cursor: pointer; display: inline-flex; align-items: center; gap: 12px; }
+.chip svg { width: 32px; height: 32px; fill: currentColor; }
+.link-btn { align-self: flex-start; height: 72px; padding: 0 28px; border-radius: 36px; border: 2px solid var(--line); background: var(--card); color: var(--ink); font: 500 26px var(--font); cursor: pointer; }
+.snap { width: 360px; height: 220px; border-radius: 20px; background: repeating-linear-gradient(135deg, #DDE3EE 0 18px, #E8ECF4 18px 36px); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 24px; gap: 12px; }
+.snap svg { width: 40px; height: 40px; fill: currentColor; }
+
+/* FAQ accordion */
+.faq-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.stage .faq-head h2 { font-size: 44px; margin: 0; font-weight: 700; }
+.faq-list { display: flex; flex-direction: column; gap: 16px; }
+.row { border-radius: 20px; background: var(--card); border: 2px solid var(--line); overflow: hidden; }
+.row.open { border-color: var(--blue); border-width: 3px; background: #F7F9FF; }
+.row-btn { width: 100%; min-height: 104px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 32px; background: none; border: 0; text-align: left; font: 400 30px var(--font); color: var(--ink); cursor: pointer; }
+.row.open .row-btn { font-weight: 700; min-height: 88px; }
+.row-btn svg { width: 44px; height: 44px; fill: var(--muted); flex: none; transition: transform .25s; }
+.row.open .row-btn svg { transform: rotate(180deg); fill: var(--blue); }
+.row-body { padding: 0 32px 24px; display: flex; flex-direction: column; gap: 16px; }
+.row-body p { font-size: 32px; line-height: 1.3; margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.row-body p.full { display: block; }
+.row-actions { display: flex; gap: 20px; flex-wrap: wrap; }
+.row-actions .chip, .row-actions .link-btn { height: 72px; }
+.faq-foot { display: flex; justify-content: center; margin-top: 20px; }
+
+/* bottom bar */
+.bottom { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 40px; gap: 24px; }
+.bottom > div { display: flex; }
+#b-right { justify-content: flex-end; }
+.btn { height: 96px; padding: 0 40px; border-radius: 48px; border: 2px solid var(--line); background: var(--card); color: var(--ink); font: 500 30px var(--font); display: inline-flex; align-items: center; gap: 16px; cursor: pointer; }
+.btn svg { width: 40px; height: 40px; fill: currentColor; }
+.btn.primary { height: 104px; padding: 0 56px; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; font-size: 32px; }
+.btn.primary.stop { background: var(--ink); border-color: var(--ink); }
+.hint { display: inline-flex; align-items: center; gap: 16px; font-size: 28px; color: var(--muted); height: 96px; padding: 0 36px; border-radius: 48px; border: 2px dashed var(--line); background: transparent; cursor: pointer; font-family: var(--font); }
+.hint svg { width: 40px; height: 40px; fill: var(--blue); }
+
+/* overlays */
+.layer { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 40px; background: var(--bg); text-align: center; }
+.layer .big { font-size: 72px; font-weight: 700; line-height: 1.15; margin: 0; }
+.layer .small { font-size: 34px; color: var(--muted); margin: 0; }
+.idle-ind { transform: scale(1.3); margin-bottom: 30px; }
+.guide-arrow { width: 220px; height: 220px; fill: var(--blue); animation: nudge 1.6s ease-in-out infinite; }
+@keyframes nudge { 50% { transform: translateY(-14px); } }
+.guide-layer .btn.primary { margin-top: 20px; }
+.exit-layer { z-index: 9; background: rgba(17,24,39,.55); }
+.exit-card { background: var(--card); border-radius: 32px; padding: 56px 64px; display: flex; flex-direction: column; align-items: center; gap: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.exit-card .big { font-size: 52px; }
+.exit-card .small { font-size: 30px; }
+.exit-actions { display: flex; gap: 24px; margin-top: 16px; }
+.closed-layer { z-index: 10; background: #1B1F27; color: #E8ECF4; }
+.closed-layer .small { color: #9AA4B6; }
+
+/* demo panel (outside the robot screen) */
+.demo { background: var(--page-card); border: 1px solid var(--page-line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.demo h2 { font-size: 15px; margin: 0; }
+.demo-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.demo label { font-size: 14px; color: var(--page-muted); display: inline-flex; align-items: center; gap: 8px; }
+.demo select, .demo button { font: 500 14px var(--font); height: 38px; border-radius: 10px; border: 1px solid var(--page-line); background: var(--page-bg); color: var(--page-fg); padding: 0 12px; cursor: pointer; max-width: 100%; }
+.demo button.on { background: var(--page-accent); border-color: var(--page-accent); color: #fff; }
+.demo button:focus-visible, .demo select:focus-visible, .stage button:focus-visible { outline: 3px solid #FFB020; outline-offset: 3px; }
+.demo .note { font-size: 13px; color: var(--page-muted); margin: 0; line-height: 1.5; }
+
+/* depth: light comes from the top-left; raised things get a highlight on top and a soft shadow below, recessed areas get darker */
+.stage {
+  --sh-1: 0 1px 2px rgba(17,24,39,.06), 0 2px 6px rgba(17,24,39,.06);
+  --sh-2: 0 2px 4px rgba(17,24,39,.06), 0 8px 20px rgba(17,24,39,.08);
+  --sh-3: 0 4px 8px rgba(17,24,39,.08), 0 16px 36px rgba(17,24,39,.12);
+  --hi: inset 0 2px 0 rgba(255,255,255,.9);
+  background:
+    radial-gradient(900px 700px at 18% 45%, #FFFFFF 0%, rgba(255,255,255,0) 60%),
+    linear-gradient(180deg, #F3F6FC 0%, #E9EEF7 100%);
+}
+.top { background: linear-gradient(180deg, #FFFFFF 0%, #F6F8FC 100%); border-bottom-color: #D9E0EC; box-shadow: 0 2px 10px rgba(17,24,39,.07); }
+.brand { text-shadow: 0 1px 0 #fff; }
+.back, .exit, .lang { background: linear-gradient(180deg, #FFFFFF 0%, #EEF2F8 100%); box-shadow: var(--hi), 0 1px 3px rgba(17,24,39,.10); }
+.lang[aria-pressed="true"] { background: linear-gradient(180deg, #4A72FF 0%, #1F4FFF 55%, #183FD8 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 3px 8px rgba(31,79,255,.35); }
+
+/* recessed lit area behind the robot face */
+.left { background: radial-gradient(360px 360px at 50% 44%, rgba(31,79,255,.10) 0%, rgba(31,79,255,0) 70%); }
+.ind .face {
+  background: radial-gradient(circle at 34% 28%, #6E8FFF 0%, #2F5CFF 38%, #1F4FFF 58%, #1236C2 100%);
+  box-shadow: inset 0 -14px 28px rgba(8,22,90,.35), inset 0 10px 22px rgba(255,255,255,.25), 0 22px 40px rgba(31,79,255,.30), 0 6px 12px rgba(17,24,39,.15);
+}
+.ind .face::after { content: ""; position: absolute; left: 22%; top: 9%; width: 34%; height: 20%; border-radius: 50%; background: radial-gradient(closest-side, rgba(255,255,255,.55), rgba(255,255,255,0)); transform: rotate(-24deg); pointer-events: none; }
+.ind .eye { background: radial-gradient(circle at 40% 32%, #FFFFFF 0%, #FFFFFF 55%, #DCE4FF 100%); box-shadow: inset 0 -3px 5px rgba(10,30,120,.18), 0 2px 4px rgba(8,22,90,.25); }
+.ind .q { box-shadow: var(--sh-2); }
+.ind .ring { box-shadow: 0 0 24px rgba(31,79,255,.25); }
+
+/* raised cards */
+.tile { background: linear-gradient(180deg, #FFFFFF 0%, #F6F8FC 100%); border-color: #E1E6F0; box-shadow: var(--hi), var(--sh-2); transition: transform .08s, box-shadow .12s, background .08s; }
+.tile svg { filter: drop-shadow(0 2px 3px rgba(31,79,255,.25)); }
+.tile.faq { background: linear-gradient(180deg, #F1F5FF 0%, #DFE8FF 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.8), 0 2px 4px rgba(31,79,255,.10), 0 10px 24px rgba(31,79,255,.16); }
+.answer, .row { border-color: #E1E6F0; box-shadow: var(--hi), var(--sh-2); }
+.answer { background: linear-gradient(180deg, #FFFFFF 0%, #FAFBFE 100%); }
+.row.open { background: linear-gradient(180deg, #FFFFFF 0%, #F2F6FF 100%); box-shadow: var(--hi), 0 4px 8px rgba(31,79,255,.08), 0 14px 32px rgba(31,79,255,.14); }
+.snap { box-shadow: inset 0 3px 10px rgba(17,24,39,.12); }
+
+/* buttons */
+.btn, .link-btn { background: linear-gradient(180deg, #FFFFFF 0%, #EEF2F8 100%); border-color: #D9E0EC; box-shadow: var(--hi), var(--sh-1); }
+.btn.primary { background: linear-gradient(180deg, #4C74FF 0%, #1F4FFF 50%, #173ED6 100%); border-color: #1A44E6; box-shadow: inset 0 2px 0 rgba(255,255,255,.30), inset 0 -3px 0 rgba(8,22,90,.25), 0 6px 14px rgba(31,79,255,.35), 0 14px 30px rgba(31,79,255,.22); text-shadow: 0 1px 1px rgba(8,22,90,.35); }
+.btn.primary.stop { background: linear-gradient(180deg, #3A4253 0%, #1B2130 55%, #0E121B 100%); border-color: #0E121B; box-shadow: inset 0 2px 0 rgba(255,255,255,.15), 0 6px 14px rgba(17,24,39,.30), 0 14px 30px rgba(17,24,39,.18); }
+.chip { background: linear-gradient(180deg, #F2F6FF 0%, #DCE6FF 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.8), 0 2px 6px rgba(31,79,255,.14); }
+.hint { background: rgba(255,255,255,.55); box-shadow: inset 0 2px 6px rgba(17,24,39,.06); }
+
+/* pressed: the element sinks, shadow shrinks and turns inward */
+.tap:active, .tap.pressed { transform: translateY(2px) scale(.985); filter: brightness(.96); box-shadow: inset 0 3px 8px rgba(17,24,39,.18) !important; }
+
+/* bottom bar sits on a slightly darker floor */
+.bottom { background: linear-gradient(180deg, rgba(233,238,247,0) 0%, rgba(214,222,236,.65) 100%); }
+
+/* overlays */
+.layer { background: radial-gradient(1000px 700px at 50% 40%, #FFFFFF 0%, #EDF1F8 60%, #DEE5F1 100%); }
+.exit-layer { background: rgba(10,16,30,.55); backdrop-filter: blur(4px); }
+.exit-card { background: linear-gradient(180deg, #FFFFFF 0%, #F5F7FB 100%); box-shadow: inset 0 2px 0 #fff, 0 10px 24px rgba(0,0,0,.18), 0 30px 80px rgba(0,0,0,.30); }
+.closed-layer { background: radial-gradient(900px 600px at 50% 40%, #2A3142 0%, #151A24 70%, #0D1017 100%); }
+.guide-arrow { filter: drop-shadow(0 12px 18px rgba(31,79,255,.35)); }
+.offline { background: linear-gradient(180deg, #FFF7E3 0%, #FFEFCB 100%); box-shadow: 0 2px 8px rgba(138,75,0,.10); }
+
+@media (prefers-reduced-motion: reduce) { .stage *, .stage *::before, .stage *::after { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="page">
+  <h1>Робот-гид Astana Hub: прототип экрана</h1>
+  <p class="lead">Вариант А: индикатор слева, разговор справа. Нажимайте на экран робота как на сенсорный. Голос здесь имитируется: кнопка «Просто скажите вопрос» или панель ниже «произносит» фразу за посетителя.</p>
+
+  <div class="frame" id="frame">
+    <div class="stage" id="stage">
+      <header class="top">
+        <div class="top-l">
+          <button class="back tap" id="backBtn" data-act="back" hidden></button>
+          <div class="brand">Astana Hub</div>
+        </div>
+        <div class="top-r">
+        <div class="langs" id="langs">
+          <button class="lang tap" data-lang="ru" aria-pressed="true">RU</button>
+          <button class="lang tap" data-lang="kk" aria-pressed="false">KZ</button>
+          <button class="lang tap" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <div class="top-sep"></div>
+        <button class="exit tap" id="exitBtn" data-act="exit"></button>
+        </div>
+      </header>
+      <div class="offline" id="offline" hidden><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg><span data-t="offline"></span></div>
+      <div class="main">
+        <aside class="left">
+          <div class="ind" id="ind"><div class="ring"></div><div class="ring r2"></div><div class="arc"></div><div class="face"><div class="eye"></div><div class="eye"></div></div><div class="q">?</div></div>
+          <div class="state-label" id="stateLabel"></div>
+          <div class="heard" id="heard"></div>
+          <div class="sub" id="sub" hidden aria-live="polite"><p id="subText"></p></div>
+        </aside>
+        <section class="right" id="right"></section>
+      </div>
+      <footer class="bottom"><div id="b-left"></div><div id="b-center"></div><div id="b-right"></div></footer>
+
+      <div class="layer" id="idleLayer" hidden>
+        <div class="ind idle-ind" id="ind2"><div class="ring"></div><div class="ring r2"></div><div class="arc"></div><div class="face"><div class="eye"></div><div class="eye"></div></div><div class="q">?</div></div>
+        <p class="big">Здравствуйте! Сәлеметсіз бе! Hello!</p>
+        <p class="small">Подойдите и спросите · Жақындап, сұраңыз · Come closer and ask</p>
+      </div>
+
+      <div class="layer guide-layer" id="guideLayer" hidden>
+        <svg class="guide-arrow" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+        <p class="big" id="guideTitle"></p>
+        <p class="small" id="guideSub"></p>
+        <button class="btn primary stop tap" id="guideStop"></button>
+      </div>
+
+      <div class="layer exit-layer" id="exitLayer" hidden role="dialog" aria-modal="true" aria-labelledby="exitQ">
+        <div class="exit-card">
+          <p class="big" id="exitQ" data-t="exitQ"></p>
+          <p class="small" data-t="exitSub"></p>
+          <div class="exit-actions">
+            <button class="btn primary tap" data-act="exitNo" data-t="exitNo"></button>
+            <button class="btn tap" data-act="exitYes" data-t="exitYes"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer closed-layer" id="closedLayer" hidden>
+        <p class="big" data-t="closedT"></p>
+        <p class="small" data-t="closedSub"></p>
+        <button class="btn tap" data-act="reopen" data-t="reopen"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo">
+    <h2>Панель демо (на роботе её нет)</h2>
+    <div class="demo-row">
+      <label for="say">Посетитель говорит:</label>
+      <select id="say">
+        <option value="Где здесь можно выпить кофе?">«Где здесь можно выпить кофе?»</option>
+        <option value="Как подключиться к Wi-Fi?">«Как подключиться к Wi-Fi?»</option>
+        <option value="Расскажи про Astana Hub">«Расскажи про Astana Hub»</option>
+        <option value="Проводи меня до коворкинга">«Проводи меня до коворкинга»</option>
+        <option value="__noise">(шум, ничего не разобрать)</option>
+      </select>
+      <button id="sayBtn">Сказать</button>
+    </div>
+    <div class="demo-row">
+      <button id="offBtn" aria-pressed="false">Нет связи: выкл</button>
+      <button id="idleBtn">Показать заставку</button>
+      <button id="soundBtn" aria-pressed="false">Озвучка: выкл</button>
+    </div>
+    <p class="note">Тексты ответов, места и расстояния здесь примерные, не данные хаба. На роботе ответы приходят с сервера. Через 20 с без действий после ответа экран сам возвращается к приветствию, через 60 с на приветствии включается заставка.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+const IC = {
+  place: 'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z',
+  event: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11z',
+  info: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
+  wifi: 'M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4l2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z',
+  help: 'M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z',
+  camera: 'M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4zM9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z',
+  home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+  mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
+  stop: 'M6 6h12v12H6z',
+  nav: 'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z',
+  more: 'M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z',
+  back: 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z',
+  close: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z'
+};
+const svg = k => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${IC[k]}"/></svg>`;
+
+const T = {
+  ru: { greetTitle: 'Здравствуйте! Чем помочь?', greetSub: 'Спросите голосом или выберите тему', hint: 'Просто скажите вопрос, я слушаю',
+    where: 'Где что находится', events: 'Мероприятия', about: 'Об Astana Hub', wifi: 'Wi-Fi и сервисы', faq: 'Частые вопросы', look: 'Что это?',
+    ready: 'Готов помочь', listen: 'Слушаю…', think: 'Думаю…', speak: 'Говорю…', looking: 'Смотрю…', guiding: 'Веду вас', unclear: 'Не расслышал',
+    home: 'В начало', stop: 'Стоп', guide: 'Проводить', showMore: 'Показать полностью', showLess: 'Свернуть', close: 'Закрыть', moreQ: 'Ещё вопросы',
+    faqTitle: 'Частые вопросы', faqIntro: 'Вот частые вопросы. Нажмите на любой или спросите свой.',
+    goTo: 'Иду к: ', follow: 'Следуйте за мной', arrived: 'Мы на месте!', arrivedSub: 'Если нужно что-то ещё, просто спросите.',
+    offline: 'Нет связи с сервером. Дорогу подскажу и без интернета.', miss1: 'Не расслышал. Повторите, пожалуйста.', miss2: 'Давайте так: выберите тему на экране.',
+    whereAsk: 'Куда вас проводить? Выберите место или назовите его.', snapshot: 'снимок с камеры', page: 'стр.',
+    back: 'Назад', exit: 'Выйти из приложения', exitQ: 'Выйти из приложения?', exitSub: 'Робот перестанет отвечать посетителям.', exitYes: 'Выйти', exitNo: 'Остаться', closedT: 'Приложение закрыто', closedSub: 'На роботе здесь будет обычный экран Android.', reopen: 'Открыть снова' },
+  kk: { greetTitle: 'Сәлеметсіз бе! Қалай көмектесейін?', greetSub: 'Дауыспен сұраңыз немесе тақырып таңдаңыз', hint: 'Сұрағыңызды айтыңыз, мен тыңдап тұрмын',
+    where: 'Не қайда орналасқан', events: 'Іс-шаралар', about: 'Astana Hub туралы', wifi: 'Wi-Fi және қызметтер', faq: 'Жиі қойылатын сұрақтар', look: 'Бұл не?',
+    ready: 'Көмектесуге дайынмын', listen: 'Тыңдап тұрмын…', think: 'Ойланып жатырмын…', speak: 'Сөйлеп тұрмын…', looking: 'Қарап тұрмын…', guiding: 'Бастап барамын', unclear: 'Естімей қалдым',
+    home: 'Басына', stop: 'Тоқта', guide: 'Апарып салу', showMore: 'Толығырақ', showLess: 'Жасыру', close: 'Жабу', moreQ: 'Басқа сұрақтар',
+    faqTitle: 'Жиі қойылатын сұрақтар', faqIntro: 'Міне, жиі қойылатын сұрақтар. Кез келгенін басыңыз немесе өз сұрағыңызды қойыңыз.',
+    goTo: 'Бағытымыз: ', follow: 'Менің артымнан жүріңіз', arrived: 'Келдік!', arrivedSub: 'Тағы бірдеңе керек болса, сұраңыз.',
+    offline: 'Серверге қосылым жоқ. Жолды интернетсіз де көрсетемін.', miss1: 'Естімей қалдым. Қайталаңызшы.', miss2: 'Онда экраннан тақырып таңдаңыз.',
+    whereAsk: 'Сізді қайда апарайын? Орынды таңдаңыз немесе атаңыз.', snapshot: 'камерадан сурет', page: 'бет',
+    back: 'Артқа', exit: 'Қолданбадан шығу', exitQ: 'Қолданбадан шығу керек пе?', exitSub: 'Робот келушілерге жауап беруді тоқтатады.', exitYes: 'Шығу', exitNo: 'Қалу', closedT: 'Қолданба жабылды', closedSub: 'Роботта мұнда кәдімгі Android экраны болады.', reopen: 'Қайта ашу' },
+  en: { greetTitle: 'Hello! How can I help?', greetSub: 'Ask by voice or pick a topic', hint: 'Just say your question, I am listening',
+    where: 'Find a place', events: 'Events', about: 'About Astana Hub', wifi: 'Wi-Fi & services', faq: 'Common questions', look: 'What is this?',
+    ready: 'Ready to help', listen: 'Listening…', think: 'Thinking…', speak: 'Speaking…', looking: 'Looking…', guiding: 'Leading the way', unclear: 'Didn’t catch that',
+    home: 'Home', stop: 'Stop', guide: 'Take me there', showMore: 'Show more', showLess: 'Show less', close: 'Close', moreQ: 'More questions',
+    faqTitle: 'Common questions', faqIntro: 'Here are common questions. Tap any of them or ask your own.',
+    goTo: 'Heading to: ', follow: 'Follow me', arrived: 'We are here!', arrivedSub: 'If you need anything else, just ask.',
+    offline: 'No connection to the server. I can still show you the way.', miss1: 'Sorry, I didn’t catch that. Please say it again.', miss2: 'Let’s try this: pick a topic on the screen.',
+    whereAsk: 'Where should I take you? Pick a place or say its name.', snapshot: 'camera snapshot', page: 'page',
+    back: 'Back', exit: 'Exit the app', exitQ: 'Exit the app?', exitSub: 'The robot will stop answering visitors.', exitYes: 'Exit', exitNo: 'Stay', closedT: 'App closed', closedSub: 'On the robot, the regular Android screen appears here.', reopen: 'Open again' }
+};
+
+const PLACES = {
+  cafe: { ru: 'Кафе', kk: 'Кафе', en: 'Café', a: { ru: 'Кафе на первом этаже: от меня прямо и направо, около 25 метров.', kk: 'Кафе бірінші қабатта: менен тура жүріп, оңға бұрылыңыз, шамамен 25 метр.', en: 'The café is on the ground floor: straight ahead and to the right, about 25 meters.' } },
+  reception: { ru: 'Ресепшен', kk: 'Ресепшн', en: 'Reception', a: { ru: 'Ресепшен у главного входа, слева от меня, около 10 метров.', kk: 'Ресепшн басты кіреберісте, менен солға қарай, шамамен 10 метр.', en: 'Reception is by the main entrance, to my left, about 10 meters.' } },
+  cowork: { ru: 'Коворкинг', kk: 'Коворкинг', en: 'Coworking', a: { ru: 'Коворкинг на втором этаже. Лифт прямо за мной.', kk: 'Коворкинг екінші қабатта. Лифт дәл менің артымда.', en: 'The coworking space is on the first floor up. The lift is right behind me.' } },
+  hall: { ru: 'Конференц-зал', kk: 'Конференц-зал', en: 'Conference hall', a: { ru: 'Конференц-зал в конце коридора справа, около 40 метров.', kk: 'Конференц-зал дәліздің соңында оң жақта, шамамен 40 метр.', en: 'The conference hall is at the end of the corridor on the right, about 40 meters.' } },
+  wc: { ru: 'Туалет', kk: 'Дәретхана', en: 'Restrooms', a: { ru: 'Прямо по коридору, вторая дверь слева.', kk: 'Дәлізбен тура жүріңіз, сол жақтағы екінші есік.', en: 'Straight down the corridor, second door on the left.' } }
+};
+
+const LONG_ABOUT = {
+  ru: 'Astana Hub — международный технопарк IT-стартапов в Астане. Здесь работают стартапы и IT-компании, проходят акселерационные программы, митапы и хакатоны. Резиденты получают налоговые льготы и помощь в выходе на зарубежные рынки. Подробнее о программах можно узнать на ресепшене или на сайте astanahub.com.',
+  kk: 'Astana Hub — Астанадағы IT-стартаптардың халықаралық технопаркі. Мұнда стартаптар мен IT-компаниялар жұмыс істейді, акселерация бағдарламалары, митаптар және хакатондар өтеді. Резиденттер салық жеңілдіктерін және шетел нарықтарына шығуға көмек алады. Толығырақ ресепшнде немесе astanahub.com сайтында білуге болады.',
+  en: 'Astana Hub is an international tech park for IT startups in Astana. Startups and IT companies work here, and it runs accelerator programs, meetups and hackathons. Residents get tax benefits and help entering foreign markets. Ask at reception or visit astanahub.com to learn more about the programs.'
+};
+
+const FAQ = [
+  { q: { ru: 'Где можно выпить кофе?', kk: 'Қай жерде кофе ішуге болады?', en: 'Where can I get a coffee?' }, a: PLACES.cafe.a, place: 'cafe' },
+  { q: { ru: 'Как подключиться к Wi-Fi?', kk: 'Wi-Fi-ға қалай қосылуға болады?', en: 'How do I connect to Wi-Fi?' }, a: { ru: 'Сеть «AstanaHub_Guest». Пароль на стойке ресепшена у входа.', kk: '«AstanaHub_Guest» желісі. Құпиясөз кіреберістегі ресепшнде.', en: 'Network “AstanaHub_Guest”. The password is at the reception desk by the entrance.' }, place: 'reception' },
+  { q: { ru: 'Когда ближайшие мероприятия?', kk: 'Жақын арадағы іс-шаралар қашан?', en: 'What events are coming up?' }, a: { ru: 'Сегодня в 15:00 митап в конференц-зале. Полное расписание на сайте astanahub.com.', kk: 'Бүгін 15:00-де конференц-залда митап. Толық кесте astanahub.com сайтында.', en: 'Today at 15:00 there is a meetup in the conference hall. The full schedule is on astanahub.com.' }, place: 'hall' },
+  { q: { ru: 'Где туалет?', kk: 'Дәретхана қайда?', en: 'Where are the restrooms?' }, a: PLACES.wc.a, place: 'wc' },
+  { q: { ru: 'Что такое Astana Hub?', kk: 'Astana Hub деген не?', en: 'What is Astana Hub?' }, a: LONG_ABOUT },
+  { q: { ru: 'Где коворкинг?', kk: 'Коворкинг қайда?', en: 'Where is the coworking space?' }, a: PLACES.cowork.a, place: 'cowork' },
+  { q: { ru: 'Как стать резидентом?', kk: 'Қалай резидент болуға болады?', en: 'How do I become a resident?' }, a: { ru: 'Подайте заявку на сайте astanahub.com в разделе «Резидентство». Заявку рассматривают после проверки документов, статус приходит на почту. Если есть вопросы, на ресепшене подскажут, к кому обратиться.', kk: 'astanahub.com сайтындағы «Резиденттік» бөлімінде өтінім беріңіз. Өтінім құжаттар тексерілгеннен кейін қаралады, мәртебесі поштаға келеді. Сұрақтар болса, ресепшнде кімге жүгіну керегін айтады.', en: 'Apply on astanahub.com in the “Residency” section. Applications are reviewed after a document check and the status is sent by email. Reception can tell you who to talk to if you have questions.' } },
+  { q: { ru: 'Можно ли здесь провести встречу?', kk: 'Мұнда кездесу өткізуге бола ма?', en: 'Can I hold a meeting here?' }, a: { ru: 'Да, переговорную можно забронировать на ресепшене.', kk: 'Иә, келіссөз бөлмесін ресепшнде брондауға болады.', en: 'Yes, you can book a meeting room at reception.' }, place: 'reception' }
+];
+const PER_PAGE = 3;
+
+const SAMPLES = {
+  'Где здесь можно выпить кофе?': { a: PLACES.cafe.a, place: 'cafe', chips: ['wc', 'cowork'] },
+  'Как подключиться к Wi-Fi?': { a: FAQ[1].a, place: 'reception' },
+  'Расскажи про Astana Hub': { a: LONG_ABOUT },
+  'Проводи меня до коворкинга': { guideNow: 'cowork' }
+};
+
+const stage = document.getElementById('stage'), frame = document.getElementById('frame');
+const right = document.getElementById('right'), bL = document.getElementById('b-left'), bC = document.getElementById('b-center'), bR = document.getElementById('b-right');
+const ind = document.getElementById('ind'), ind2 = document.getElementById('ind2'), stateLabel = document.getElementById('stateLabel'), heard = document.getElementById('heard');
+const idleLayer = document.getElementById('idleLayer'), guideLayer = document.getElementById('guideLayer');
+const exitLayer = document.getElementById('exitLayer'), closedLayer = document.getElementById('closedLayer');
+const backBtn = document.getElementById('backBtn'), exitBtn = document.getElementById('exitBtn');
+
+const S = { mode: 'home', lang: 'ru', offline: false, sound: false, faqPage: 0, faqOpen: -1, faqLoading: false, faqFull: false, ans: null, full: false, miss: 0, speaking: false };
+let timers = [], idleTimer = null, lvlRaf = null, exitTimer = null;
+let hist = []; // screens to return to with «Назад»
+const t = k => T[S.lang][k];
+const L = o => (o && typeof o === 'object') ? (o[S.lang] || o.ru) : o;
+const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.push(id); return id; };
+const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+
+function fit() { const s = frame.clientWidth / 1600; stage.style.transform = `scale(${s})`; frame.style.height = (900 * s) + 'px'; }
+window.addEventListener('resize', fit); fit();
+
+/* indicator */
+function setInd(cls, label) {
+  ind.className = 'ind ' + (cls || '');
+  stateLabel.textContent = label || '';
+  cancelAnimationFrame(lvlRaf);
+  if (cls === 'listen' || cls === 'speak') {
+    const loop = () => { const v = cls === 'listen' ? Math.random() * .9 : .4 + Math.random() * .6; ind.style.setProperty('--lvl', v.toFixed(2)); lvlRaf = setTimeout(() => requestAnimationFrame(loop), 120); };
+    loop();
+  } else ind.style.setProperty('--lvl', 0);
+}
+setInterval(() => { [ind, ind2].forEach(el => { if (/listen|think|unclear/.test(el.className)) return; el.classList.remove('blink'); void el.offsetWidth; el.classList.add('blink'); }); }, 4200);
+
+/* voice output (optional) */
+/* subtitles: text split into short phrases (one phrase at a time in the bubble), words light up as they are spoken */
+const leftCol = document.querySelector('.left'), subBox = document.getElementById('sub'), subText = document.getElementById('subText');
+let subWords = [], subIdx = -1, subByVoice = false;
+function subsStart(text, ms) {
+  const words = []; let pos = 0;
+  text.split(/\s+/).filter(Boolean).forEach(w => { const at = text.indexOf(w, pos); words.push({ w, at }); pos = at + w.length; });
+  // phrases of up to 7 words, also broken after sentence ends
+  let phrase = 0, n = 0;
+  words.forEach(o => { o.p = phrase; n++; if (n >= 7 || /[.!?:;]$/.test(o.w)) { phrase++; n = 0; } });
+  subWords = words; subIdx = -1; subByVoice = false;
+  leftCol.classList.add('subs'); subBox.hidden = false;
+  subsShow(0);
+  // timer pacing, proportional to word length; real voice boundary events take over when they arrive
+  const total = text.length || 1; let tAcc = 0;
+  words.forEach((o, i) => { later(() => { if (!subByVoice) subsShow(i); }, tAcc); tAcc += ms * 0.92 * (o.w.length + 1) / total; });
+}
+function subsShow(i) {
+  if (!subWords.length || i < 0 || i >= subWords.length) return;
+  subIdx = i; const p = subWords[i].p;
+  subText.innerHTML = subWords.filter(o => o.p === p).map(o => `<span class="${subWords.indexOf(o) <= i ? 'on' : ''}">${o.w}</span>`).join(' ');
+}
+function subsBoundary(charIndex) { subByVoice = true; let i = 0; while (i + 1 < subWords.length && subWords[i + 1].at <= charIndex) i++; subsShow(i); }
+function subsHide() { subWords = []; subBox.hidden = true; leftCol.classList.remove('subs'); }
+
+function say(text, done) {
+  S.speaking = true;
+  const ms = Math.max(2200, text.length * 55);
+  subsStart(text, ms);
+  if (S.sound && 'speechSynthesis' in window) {
+    try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = { ru: 'ru-RU', kk: 'kk-KZ', en: 'en-US' }[S.lang]; u.onend = () => fin(); u.onboundary = e => { if (e.name === 'word' || e.name === undefined) subsBoundary(e.charIndex); }; speechSynthesis.speak(u); } catch (e) {}
+  }
+  let ended = false; const fin = () => { if (ended) return; ended = true; S.speaking = false; subsShow(subWords.length - 1); setTimeout(() => { if (!S.speaking) subsHide(); }, 900); done && done(); };
+  later(fin, ms);
+}
+function stopSpeech() { try { speechSynthesis.cancel(); } catch (e) {} S.speaking = false; subsHide(); }
+
+/* inactivity */
+function armIdle() {
+  clearTimeout(idleTimer);
+  if (S.mode === 'home') idleTimer = setTimeout(() => goIdle(), 60000);
+  else if (['answer', 'faq', 'unclear'].includes(S.mode) && !S.speaking) idleTimer = setTimeout(() => goHome(), 20000);
+}
+stage.addEventListener('pointerdown', () => armIdle(), true);
+
+/* screens */
+function bottom(left, center, rightEl) { bL.innerHTML = left || ''; bC.innerHTML = center || ''; bR.innerHTML = rightEl || ''; refreshTop(); }
+function refreshTop() {
+  backBtn.hidden = S.mode === 'home' || S.mode === 'idle';
+  backBtn.innerHTML = svg('back') + t('back');
+  exitBtn.innerHTML = svg('close'); exitBtn.setAttribute('aria-label', t('exit'));
+}
+
+/* back navigation: remember stable screens (home, faq page, answer), skip transient ones (listen, think, unclear) */
+function snapNow() {
+  if (S.mode === 'home') return { m: 'home' };
+  if (S.mode === 'faq') return { m: 'faq', page: S.faqPage };
+  if (S.mode === 'answer' && S.ans) return { m: 'answer', ans: S.ans };
+  return null;
+}
+function remember() { const x = snapNow(); if (x) hist.push(x); }
+function goBack() {
+  clearTimers(); stopSpeech();
+  const x = hist.pop();
+  if (!x || x.m === 'home') return goHome();
+  heard.textContent = ''; setInd('', t('ready'));
+  if (x.m === 'faq') { S.mode = 'faq'; S.faqPage = x.page; S.faqOpen = -1; S.faqLoading = false; S.faqFull = false; renderFaq(); renderFaqBottom(); }
+  else { S.mode = 'answer'; S.ans = x.ans; S.full = false; renderAnswer(); renderAnswerBottom(); }
+  armIdle();
+}
+
+/* exit: the X opens a confirmation, so a visitor can't close the app by accident */
+function askExit() {
+  clearTimers(); stopSpeech(); clearTimeout(idleTimer);
+  exitLayer.hidden = false;
+  clearTimeout(exitTimer); exitTimer = setTimeout(stayIn, 15000); // nobody answered: keep working
+}
+function stayIn() {
+  clearTimeout(exitTimer); exitLayer.hidden = true;
+  if (S.mode === 'faq') { S.faqLoading = false; setInd('', t('ready')); renderFaq(); renderFaqBottom(); armIdle(); }
+  else if (S.mode === 'answer') { setInd('', t('ready')); renderAnswerBottom(); armIdle(); }
+  else goHome();
+}
+function exitApp() {
+  clearTimeout(exitTimer); clearTimers(); stopSpeech(); clearTimeout(idleTimer);
+  exitLayer.hidden = true; closedLayer.hidden = false; S.mode = 'closed';
+}
+function reopen() { closedLayer.hidden = true; setLang('ru', true); goHome(); }
+const homeBtn = () => `<button class="btn tap" data-act="home">${svg('home')}${t('home')}</button>`;
+const lookBtn = () => `<button class="btn tap" data-act="look">${svg('camera')}${t('look')}</button>`;
+const hintBtn = () => `<button class="hint tap" data-act="voice">${svg('mic')}${t('hint')}</button>`;
+
+function goHome(msg) {
+  clearTimers(); stopSpeech();
+  S.mode = 'home'; S.ans = null; S.full = false; S.faqOpen = -1; hist = [];
+  idleLayer.hidden = true; guideLayer.hidden = true;
+  setInd('', t('ready')); heard.textContent = msg || '';
+  right.innerHTML = `<h1 class="greet-title">${t('greetTitle')}</h1><p class="greet-sub">${t('greetSub')}</p>
+  <div class="tiles">
+    ${tile('where', 'place')}${tile('events', 'event')}${tile('about', 'info')}
+    ${tile('wifi', 'wifi')}${tile('faq', 'help', 'faq')}${tile('look', 'camera')}
+  </div>`;
+  bottom('', hintBtn(), '');
+  armIdle();
+}
+const tile = (k, icon, extra) => `<button class="tile tap ${extra || ''}" data-act="tile" data-k="${k}">${svg(icon)}<span>${t(k)}</span></button>`;
+
+function goIdle() { clearTimers(); stopSpeech(); S.mode = 'idle'; hist = []; exitLayer.hidden = true; clearTimeout(exitTimer); setLang('ru', true); idleLayer.hidden = false; guideLayer.hidden = true; clearTimeout(idleTimer); }
+
+function listen(text) {
+  remember(); clearTimers(); stopSpeech(); idleLayer.hidden = true; guideLayer.hidden = true;
+  S.mode = 'listen'; setInd('listen', t('listen')); heard.textContent = '';
+  if (!['answer', 'listen', 'think'].includes(S.mode)) {}
+  bottom(homeBtn(), `<button class="btn primary stop tap" data-act="home">${svg('stop')}${t('stop')}</button>`, '');
+  if (text === '__noise') { heard.textContent = '…'; later(() => miss(), 1800); return; }
+  let i = 0; const words = text.split(' ');
+  const step = () => { i++; heard.textContent = '«' + words.slice(0, i).join(' ') + (i < words.length ? '' : '»'); if (i < words.length) later(step, 260); else later(() => think(text), 500); };
+  later(step, 400);
+}
+
+function miss() {
+  S.miss++;
+  if (S.miss >= 2) { S.miss = 0; goHome(); setInd('unclear', t('unclear')); heard.textContent = t('miss2'); say(t('miss2'), () => setInd('', t('ready'))); return; }
+  S.mode = 'unclear'; setInd('unclear', t('unclear')); heard.textContent = t('miss1');
+  say(t('miss1'), () => { armIdle(); });
+}
+
+function think(text) {
+  S.mode = 'think'; S.miss = 0; setInd('think', t('think'));
+  const s = SAMPLES[text];
+  if (s && s.guideNow) { later(() => startGuide(s.guideNow), 900); return; }
+  later(() => showAnswer({ q: text, a: s ? s.a : { ru: 'Хороший вопрос! На роботе здесь будет ответ с сервера.', kk: 'Жақсы сұрақ! Роботта мұнда серверден жауап болады.', en: 'Good question! On the robot, the server’s answer appears here.' }, place: s && s.place, chips: s && s.chips }), 1300);
+}
+
+function showAnswer(ans) {
+  clearTimers(); S.mode = 'answer'; S.ans = ans; S.full = false; idleLayer.hidden = true;
+  heard.textContent = '';
+  renderAnswer();
+  setInd('speak', t('speak'));
+  say(L(ans.a), () => { setInd('', t('ready')); renderAnswerBottom(); armIdle(); });
+  renderAnswerBottom();
+}
+function renderAnswer() {
+  const a = S.ans;
+  const chips = (a.chips || []).map(k => `<button class="chip tap" data-act="place" data-k="${k}">${svg('place')}${PLACES[k][S.lang]}</button>`).join('');
+  right.innerHTML = `${a.q ? `<p class="q-line">«${L(a.q)}»</p>` : ''}
+    <div class="answer">
+      ${a.snap ? `<div class="snap">${svg('camera')}${t('snapshot')}</div>` : ''}
+      <p class="answer-text ${S.full ? 'full' : ''}" id="ansText">${L(a.a)}</p>
+      <button class="link-btn tap" data-act="full" id="fullBtn" hidden>${S.full ? t('showLess') : t('showMore')}</button>
+    </div>
+    ${a.placeList ? `<div class="chips">${Object.keys(PLACES).map(k => `<button class="chip tap" data-act="place" data-k="${k}">${svg('place')}${PLACES[k][S.lang]}</button>`).join('')}</div>` : ''}
+    ${chips ? `<div class="chips">${chips}</div>` : ''}`;
+  const p = document.getElementById('ansText'), fb = document.getElementById('fullBtn');
+  requestAnimationFrame(() => { if (S.full || p.scrollHeight > p.clientHeight + 2) fb.hidden = false; });
+}
+function renderAnswerBottom() {
+  const a = S.ans; let center = '';
+  if (S.speaking) center = `<button class="btn primary stop tap" data-act="stop">${svg('stop')}${t('stop')}</button>`;
+  else if (a && a.place) center = `<button class="btn primary tap" data-act="guide" data-k="${a.place}">${svg('nav')}${t('guide')}: ${PLACES[a.place][S.lang]}</button>`;
+  bottom(homeBtn(), center, lookBtn());
+}
+
+/* FAQ */
+function openFaq() {
+  remember(); clearTimers(); stopSpeech(); S.mode = 'faq'; S.faqPage = 0; S.faqOpen = -1; S.faqFull = false;
+  setInd('speak', t('speak')); heard.textContent = '';
+  renderFaq();
+  say(t('faqIntro'), () => { if (S.mode === 'faq' && !S.faqLoading) { setInd('', t('ready')); renderFaqBottom(); armIdle(); } });
+  renderFaqBottom();
+}
+function renderFaq() {
+  const pages = Math.ceil(FAQ.length / PER_PAGE), start = S.faqPage * PER_PAGE;
+  const rows = FAQ.slice(start, start + PER_PAGE).map((f, j) => {
+    const i = start + j, open = S.faqOpen === i;
+    let body = '';
+    if (open) {
+      body = S.faqLoading ? `<div class="row-body"><span class="dots"><i></i><i></i><i></i></span></div>` :
+        `<div class="row-body"><p class="${S.faqFull ? 'full' : ''}" id="faqText">${L(f.a)}</p><div class="row-actions">
+          ${f.place ? `<button class="chip tap" data-act="guide" data-k="${f.place}">${svg('nav')}${t('guide')}</button>` : ''}
+          <button class="link-btn tap" data-act="faqfull" id="faqFullBtn" hidden>${S.faqFull ? t('showLess') : t('showMore')}</button></div></div>`;
+    }
+    return `<div class="row ${open ? 'open' : ''}"><button class="row-btn tap" data-act="faqrow" data-i="${i}" aria-expanded="${open}"><span>${L(f.q)}</span>${svg('more')}</button>${body}</div>`;
+  }).join('');
+  right.innerHTML = `<div class="faq-head"><h2>${t('faqTitle')}</h2></div>
+    <div class="faq-list">${rows}</div>`;
+  const p = document.getElementById('faqText'), fb = document.getElementById('faqFullBtn');
+  if (p && fb) requestAnimationFrame(() => { if (S.faqFull || p.scrollHeight > p.clientHeight + 2) fb.hidden = false; });
+}
+function renderFaqBottom() {
+  const pages = Math.ceil(FAQ.length / PER_PAGE);
+  let center = '';
+  if (S.speaking) center = `<button class="btn primary stop tap" data-act="stop">${svg('stop')}${t('stop')}</button>`;
+  else center = `<button class="btn tap" data-act="faqnext">${svg('more')}${t('moreQ')} (${S.faqPage + 1}/${pages})</button>`;
+  bottom(homeBtn(), center, '');
+}
+function faqTap(i) {
+  clearTimers(); stopSpeech();
+  if (S.faqOpen === i) { S.faqOpen = -1; S.faqLoading = false; setInd('', t('ready')); renderFaq(); renderFaqBottom(); armIdle(); return; }
+  S.faqOpen = i; S.faqLoading = true; S.faqFull = false; setInd('think', t('think')); renderFaq(); renderFaqBottom();
+  later(() => {
+    S.faqLoading = false; setInd('speak', t('speak')); renderFaq();
+    say(L(FAQ[i].a), () => { setInd('', t('ready')); renderFaqBottom(); armIdle(); });
+    renderFaqBottom();
+  }, 800);
+}
+
+/* guide */
+function startGuide(k) {
+  clearTimers(); stopSpeech(); S.mode = 'guide';
+  setInd('guide', t('guiding'));
+  document.getElementById('guideTitle').textContent = t('goTo') + PLACES[k][S.lang];
+  document.getElementById('guideSub').textContent = t('follow');
+  const gs = document.getElementById('guideStop'); gs.innerHTML = svg('stop') + t('stop'); gs.hidden = false;
+  guideLayer.hidden = false;
+  say(t('goTo') + PLACES[k][S.lang] + '. ' + t('follow'));
+  later(() => {
+    document.getElementById('guideTitle').textContent = t('arrived');
+    document.getElementById('guideSub').textContent = t('arrivedSub'); gs.hidden = true;
+    say(t('arrived'));
+    later(() => goHome(), 3500);
+  }, 7000);
+}
+
+/* look */
+function look() {
+  remember(); clearTimers(); stopSpeech(); S.mode = 'think'; setInd('look', t('looking')); heard.textContent = '';
+  right.innerHTML = `<div class="answer"><div class="snap">${svg('camera')}${t('snapshot')}</div><span class="dots"><i></i><i></i><i></i></span></div>`;
+  bottom(homeBtn(), `<button class="btn primary stop tap" data-act="home">${svg('stop')}${t('stop')}</button>`, '');
+  later(() => { setInd('think', t('think')); later(() => showAnswer({ q: { ru: 'Что это?', kk: 'Бұл не?', en: 'What is this?' }, snap: true, a: { ru: 'Похоже на стенд стартапа с роботом-манипулятором. Подойдите ближе, рядом есть табличка с описанием.', kk: 'Бұл робот-манипуляторы бар стартап стендіне ұқсайды. Жақынырақ келіңіз, жанында сипаттамасы бар тақта бар.', en: 'This looks like a startup stand with a robotic arm. Come closer, there is a sign with a description next to it.' } }), 1000); }, 1300);
+}
+
+/* tiles */
+function tileTap(k) {
+  if (k === 'faq') return openFaq();
+  if (k === 'look') return look();
+  const map = {
+    where: { q: { ru: 'Где что находится', kk: 'Не қайда орналасқан', en: 'Find a place' }, a: { ru: T.ru.whereAsk, kk: T.kk.whereAsk, en: T.en.whereAsk }, placeList: true },
+    events: { q: { ru: 'Мероприятия', kk: 'Іс-шаралар', en: 'Events' }, a: FAQ[2].a, place: 'hall' },
+    about: { q: { ru: 'Об Astana Hub', kk: 'Astana Hub туралы', en: 'About Astana Hub' }, a: LONG_ABOUT },
+    wifi: { q: { ru: 'Wi-Fi и сервисы', kk: 'Wi-Fi және қызметтер', en: 'Wi-Fi & services' }, a: FAQ[1].a, place: 'reception' }
+  };
+  remember(); clearTimers(); stopSpeech(); S.mode = 'think'; setInd('think', t('think')); refreshTop();
+  later(() => showAnswer(map[k]), 700);
+}
+
+/* language */
+function setLang(l, silent) {
+  S.lang = l;
+  document.querySelectorAll('.lang').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lang === l)));
+  document.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
+  refreshTop();
+  if (silent) return;
+  if (S.mode === 'home') goHome();
+  else if (S.mode === 'faq') { renderFaq(); renderFaqBottom(); stateLabel.textContent = t(S.speaking ? 'speak' : 'ready'); }
+  else if (S.mode === 'answer') { renderAnswer(); renderAnswerBottom(); stateLabel.textContent = t(S.speaking ? 'speak' : 'ready'); }
+}
+
+/* events */
+stage.addEventListener('click', e => {
+  const b = e.target.closest('[data-act], .lang');
+  if (!closedLayer.hidden) { if (b && b.dataset.act === 'reopen') reopen(); return; }
+  if (!exitLayer.hidden) { if (b && b.dataset.act === 'exitYes') exitApp(); else if (b && b.dataset.act === 'exitNo') stayIn(); else if (!e.target.closest('.exit-card')) stayIn(); return; }
+  if (!idleLayer.hidden && !e.target.closest('.lang')) { goHome(); return; }
+  if (!b) return;
+  if (b.classList.contains('lang')) return setLang(b.dataset.lang);
+  const act = b.dataset.act, k = b.dataset.k;
+  if (act === 'home') return goHome();
+  if (act === 'back') return goBack();
+  if (act === 'exit') return askExit();
+  if (act === 'tile') return tileTap(k);
+  if (act === 'voice') return listen(nextSample());
+  if (act === 'look') return look();
+  if (act === 'stop') { clearTimers(); stopSpeech(); setInd('', t('ready')); if (S.mode === 'faq') { S.faqLoading = false; renderFaqBottom(); } else renderAnswerBottom(); armIdle(); return; }
+  if (act === 'full') { S.full = !S.full; renderAnswer(); return; }
+  if (act === 'faqfull') { S.faqFull = !S.faqFull; renderFaq(); return; }
+  if (act === 'guide') return startGuide(k);
+  if (act === 'place') { remember(); clearTimers(); stopSpeech(); S.mode = 'think'; setInd('think', t('think')); later(() => showAnswer({ q: PLACES[k], a: PLACES[k].a, place: k }), 600); return; }
+  if (act === 'faqrow') return faqTap(Number(b.dataset.i));
+  if (act === 'faqnext') { remember(); const pages = Math.ceil(FAQ.length / PER_PAGE); S.faqPage = (S.faqPage + 1) % pages; S.faqOpen = -1; renderFaq(); renderFaqBottom(); return; }
+});
+document.getElementById('guideStop').addEventListener('click', e => { e.stopPropagation(); goHome(); });
+
+let sampleIdx = 0; const sampleKeys = Object.keys(SAMPLES);
+function nextSample() { const s = sampleKeys[sampleIdx % sampleKeys.length]; sampleIdx++; return s; }
+
+/* demo panel */
+document.getElementById('sayBtn').addEventListener('click', () => { idleLayer.hidden = true; listen(document.getElementById('say').value); });
+const offBtn = document.getElementById('offBtn');
+offBtn.addEventListener('click', () => { S.offline = !S.offline; document.getElementById('offline').hidden = !S.offline; stage.classList.toggle('is-offline', S.offline); offBtn.textContent = 'Нет связи: ' + (S.offline ? 'вкл' : 'выкл'); offBtn.classList.toggle('on', S.offline); offBtn.setAttribute('aria-pressed', String(S.offline)); document.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t)); });
+document.getElementById('idleBtn').addEventListener('click', goIdle);
+const soundBtn = document.getElementById('soundBtn');
+soundBtn.addEventListener('click', () => { S.sound = !S.sound; soundBtn.textContent = 'Озвучка: ' + (S.sound ? 'вкл' : 'выкл'); soundBtn.classList.toggle('on', S.sound); soundBtn.setAttribute('aria-pressed', String(S.sound)); if (!S.sound) stopSpeech(); });
+
+goHome();
+})();
+</script>
