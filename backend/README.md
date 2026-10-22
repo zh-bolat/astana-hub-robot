@@ -92,8 +92,8 @@ Eval использует провайдер из `.env`: без ключа — 
 | Переменная | По умолчанию | |
 |---|---|---|
 | `ROBOT_TOKEN` | — (обязательно) | Bearer-токен робота; без него сервер не стартует |
-| `LLM_PROVIDER` | `auto` | `gemini` / `deepseek` / `fake`; `auto` = gemini при наличии ключа, иначе fake |
-| `VISION_PROVIDER` | `auto` | `gemini` / `fake` (у DeepSeek нет vision) |
+| `LLM_PROVIDER` | `auto` | `gemini` / `openrouter` / `deepseek` / `fake`; `auto` = gemini → openrouter (у кого есть ключ) → fake |
+| `VISION_PROVIDER` | `auto` | `gemini` / `openrouter` / `fake` (у DeepSeek нет vision); `auto` — как у LLM |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | —, `gemini-3.1-flash-lite` | основная модель /ask и /look (быстрее, больший лимит бесплатного ключа) |
 | `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | резервные модели через запятую |
 | `GEMINI_THINKING_LEVEL` | `minimal` | размышления Gemini 3.x; `GEMINI_THINKING_BUDGET` — только для 2.5 |
@@ -166,6 +166,10 @@ Eval использует провайдер из `.env`: без ключа — 
 - SSE (`Accept: text/event-stream`): ответ модели стримится, событие `phrase` уходит, как только модель дописала
   предложение (`app/streaming.py` разбирает JSON на лету). `found=false` → стандартный отказ на языке вопроса.
   Повтор/резерв работают до первого куска ответа.
+- **OpenRouter** (`LLM_PROVIDER=openrouter`, `app/llm/openrouter.py`): та же Gemini через OpenAI-совместимый
+  `/chat/completions` — JSON-схема ответа, `reasoning: minimal`, настоящий SSE-стрим, кадр `/look` — data-URI.
+  Модели — `OPENROUTER_MODEL` / `OPENROUTER_FALLBACK_MODELS` / `OPENROUTER_VISION_MODEL`, повтор и резерв — тот же
+  `run_with_fallback`. С `STT_PROVIDER=openrouter` и `TTS_PROVIDER=openrouter` весь сервер работает на одном ключе.
 
 ## Голос через сервер (/v1/stt, /v1/tts)
 
@@ -173,8 +177,8 @@ STT и TTS выбираются раздельно (`app/speech/`):
 
 | | `auto` выбирает | Реализации |
 |---|---|---|
-| STT (`STT_PROVIDER`) | elevenlabs → gemini → fake | `GeminiSttProvider`, `ElevenLabsProvider` (Scribe), `YandexSpeechKitProvider`, `FakeSpeechProvider` |
-| TTS (`TTS_PROVIDER`) | elevenlabs → yandex → fake | `ElevenLabsProvider`, `YandexSpeechKitProvider`, `FakeSpeechProvider` |
+| STT (`STT_PROVIDER`) | elevenlabs → gemini → openrouter → fake | `GeminiSttProvider`, `OpenRouterSpeechProvider`, `ElevenLabsProvider` (Scribe), `YandexSpeechKitProvider`, `FakeSpeechProvider` |
+| TTS (`TTS_PROVIDER`) | elevenlabs → yandex → openrouter → fake | `ElevenLabsProvider`, `OpenRouterSpeechProvider`, `YandexSpeechKitProvider`, `FakeSpeechProvider` |
 
 Сейчас (есть только ключ Gemini): **STT = gemini, TTS = fake**. Все ответы `/v1/tts` несут заголовок
 `X-Speech-Provider: <имя>`; при `fake` тело — беззвучный MP3, и робот озвучивает фразу встроенным синтезом.
@@ -186,10 +190,28 @@ STT и TTS выбираются раздельно (`app/speech/`):
 - **Gemini STT**: `gemini-3.1-flash-lite` (резерв `gemini-3.5-flash`), JSON `{lang, text}` — транскрипт и язык
   одним запросом, ~2–3 с на фразу 2–3 с. `gemini-3.5-transcribe` не используем: нет JSON-режима и языка в ответе,
   в замерах часто 503 и до 18 с.
+- **OpenRouter STT**: та же Gemini (`google/gemini-3.1-flash-lite`, резерв `google/gemini-3.5-flash`) через
+  OpenAI-совместимый `/chat/completions` — аудио частью `input_audio` (base64 WAV), JSON-схема `{lang, text}`,
+  `reasoning: minimal`. Нужен, когда прямой доступ к Gemini недоступен. Инструкция идёт до аудио и дублируется
+  системным сообщением: иначе казахский на части записей приходит латиницей. ~2–4.5 с на фразу 4–5 с.
+- **OpenRouter TTS**: модели ElevenLabs через `POST /audio/speech` (`{model, input, voice, response_format: mp3}`
+  → `audio/mpeg`), свой ключ ElevenLabs не нужен. kk → `elevenlabs/eleven-v3`, ru/en →
+  `elevenlabs/eleven-flash-v2.5`; `voice` — voice_id ElevenLabs (`OPENROUTER_VOICE_RU/KK/EN`), без него 400.
+  ~0.7 с на ru/en, ~2.6–3 с на kk. Чат-модели с аудиовыходом (`openai/gpt-audio`) не подходят: на фразу-вопрос
+  они отвечают, а не читают её.
 - **ElevenLabs**: TTS `POST /v1/text-to-speech/{voice_id}` (`xi-api-key`, mp3): kk → `eleven_v3` (единственная
   модель с казахским), ru/en → `eleven_flash_v2_5`, `language_code` передаётся. STT — Scribe `scribe_v2`, сырой PCM
   (`file_format=pcm_s16le_16`), `language_code` при известном языке, иначе автоопределение; `confidence` =
   `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs).
+- **Запасной TTS** (`TTS_FALLBACK_PROVIDER`): при ошибке основного (кончились кредиты ElevenLabs, 5xx, сеть) фраза
+  синтезируется запасным — для мероприятия `TTS_PROVIDER=elevenlabs` + `TTS_FALLBACK_PROVIDER=openrouter` (те же
+  voice_id). Таймаут не переключает: время запроса уже вышло. В логе — событие `tts_fallback`.
+- **Live STT** (`WS /v1/stt/stream`, `app/speech/streaming.py`, протокол — `docs/api-contract.md`): приложение шлёт
+  PCM кадрами по ходу речи, сервер отвечает `partial` и одним `final`. `STT_STREAM_PROVIDER=auto`: при
+  `ELEVENLABS_API_KEY` — ElevenLabs Scribe v2 Realtime (`wss://api.elevenlabs.io/v1/speech-to-text/realtime`,
+  `commit_strategy=vad`, конец фразы — пауза `ELEVENLABS_REALTIME_SILENCE_S`); иначе или если realtime не открылся —
+  `buffered:<STT_PROVIDER>`: звук копится и распознаётся целиком после `end` от приложения. У OpenRouter realtime-STT
+  нет (проверено 2026-10-22: `/audio/transcriptions` только целым файлом, `stream` игнорируется).
 - **Yandex SpeechKit** (API v1): STT `stt:recognize` (`lpcm`, 16 кГц; без `lang` — параллельно ru/kk/en и выбор
   гипотезы, втрое дороже), TTS `tts:synthesize` (`mp3`, голоса jane / amira / john). Ключ сервисного аккаунта
   (`Api-Key`); API v1 доступен в регионе Россия Yandex Cloud.
@@ -261,7 +283,10 @@ YAML — ошибка команды (`kb_sync.status=error`), база в БД 
 ## Лог вопросов
 
 Каждый `/ask` и `/look` пишется в таблицу `question_log` (только текст: вопрос, ответ, язык, место, `found`,
-источники, задержка, провайдер и модель). Кадры камеры и аудио не сохраняются.
+источники, задержка, провайдер и модель). Кадры камеры и аудио не сохраняются. Туда же робот присылает локальные
+ответы («где X», «проводи», «где я») через `POST /v1/sessions/{id}/messages`. SSE-ответ, оборванный до `done`,
+пишется с `interrupted=true` и только с отправленными фразами. История разговора — `GET /v1/sessions/{id}/messages`
+(чат на экране, см. `docs/frontend-chat.md`). Колонку `interrupted` в старую базу `make_engine` добавляет сам.
 
 Запись идёт фоном (отдельный поток с ограниченной очередью): ответ роботу не ждёт БД, а зависшая или упавшая БД
 на `/ask` не влияет (в логе — `question_log_failed`, при переполнении очереди — `question_log_dropped`). Так же
@@ -297,13 +322,13 @@ app/
   prompts.py       промпты и тексты отказов
   lang.py          определение языка ru/kk/en
   text.py          очистка для TTS, разбиение на фразы ≤ 300 символов
-  llm/             LLMProvider: gemini.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
-  speech/          STT/TTS: gemini_stt.py, elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
-  speech_api.py    эндпоинты /v1/stt, /v1/tts
+  llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
+  speech/          STT/TTS: gemini_stt.py, openrouter.py, streaming.py (live STT), elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
+  speech_api.py    эндпоинты /v1/stt, /v1/tts, WebSocket /v1/stt/stream
   knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML
   db/              engine, модели всех таблиц (models.py), репозитории (repos.py), Alembic (migrate.py)
   cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|status, export-csv, openapi, check-kb
-migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md)
+migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted)
 knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
 eval/              questions.yaml + run_eval.py (шаг 3.8)
 tests/             pytest

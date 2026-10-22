@@ -24,10 +24,10 @@ class Settings(BaseSettings):
     # /docs, /redoc, /openapi.json: в проде выключены (схема — backend/openapi.json)
     expose_docs: bool = False
 
-    # LLM: auto = gemini, если задан GEMINI_API_KEY, иначе fake
-    llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = "auto"
-    # Vision (/look): auto = gemini при наличии ключа, иначе fake (у DeepSeek нет vision)
-    vision_provider: Literal["auto", "gemini", "fake"] = "auto"
+    # LLM: auto = gemini (GEMINI_API_KEY) → openrouter (OPENROUTER_API_KEY) → fake
+    llm_provider: Literal["auto", "gemini", "openrouter", "deepseek", "fake"] = "auto"
+    # Vision (/look): auto — так же; у DeepSeek vision нет
+    vision_provider: Literal["auto", "gemini", "openrouter", "fake"] = "auto"
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-3.1-flash-lite"
     # Резервные модели через запятую: при 503/429/таймауте/обрыве — повтор основной (если есть время), затем они
@@ -89,13 +89,30 @@ class Settings(BaseSettings):
     max_image_bytes: int = 1024 * 1024
 
     # Голос через сервер (/v1/stt, /v1/tts) — провайдеры раздельно.
-    # STT auto: elevenlabs (ELEVENLABS_API_KEY) → gemini (GEMINI_API_KEY) → fake
-    # TTS auto: elevenlabs (ELEVENLABS_API_KEY) → yandex (YANDEX_API_KEY) → fake
-    stt_provider: Literal["auto", "gemini", "elevenlabs", "yandex", "fake"] = "auto"
-    tts_provider: Literal["auto", "elevenlabs", "yandex", "fake"] = "auto"
+    # STT auto: elevenlabs (ELEVENLABS_API_KEY) → gemini (GEMINI_API_KEY) → openrouter (OPENROUTER_API_KEY) → fake
+    # TTS auto: elevenlabs (ELEVENLABS_API_KEY) → yandex (YANDEX_API_KEY) → openrouter (OPENROUTER_API_KEY) → fake
+    stt_provider: Literal["auto", "gemini", "openrouter", "elevenlabs", "yandex", "fake"] = "auto"
+    tts_provider: Literal["auto", "elevenlabs", "openrouter", "yandex", "fake"] = "auto"
+    # Запасной TTS при ошибке основного (кончились кредиты ElevenLabs и т. п.); пусто — без запасного
+    tts_fallback_provider: Literal["elevenlabs", "openrouter", "yandex"] | None = None
     # Gemini STT: модель + резервные (через запятую)
     gemini_stt_model: str = "gemini-3.1-flash-lite"
     gemini_stt_fallback_models: str = "gemini-3.5-flash"
+    # OpenRouter: текст, vision и STT — Gemini через OpenAI-совместимый API, TTS — модели ElevenLabs
+    openrouter_api_key: SecretStr | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Текст (/ask) и vision (/look); резервные модели через запятую — как у Gemini
+    openrouter_model: str = "google/gemini-3.1-flash-lite"
+    openrouter_fallback_models: str = "google/gemini-3.5-flash"
+    openrouter_vision_model: str | None = None  # по умолчанию = openrouter_model
+    openrouter_stt_model: str = "google/gemini-3.1-flash-lite"
+    openrouter_stt_fallback_models: str = "google/gemini-3.5-flash"
+    openrouter_tts_model_kk: str = "elevenlabs/eleven-v3"  # казахский умеет только v3
+    openrouter_tts_model_default: str = "elevenlabs/eleven-flash-v2.5"  # ru/en
+    # voice_id из библиотеки ElevenLabs; по умолчанию «George», как у прямого ElevenLabs
+    openrouter_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
+    openrouter_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
+    openrouter_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
     # ElevenLabs
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
@@ -107,6 +124,15 @@ class Settings(BaseSettings):
     elevenlabs_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
     elevenlabs_output_format: str = "mp3_44100_128"
     elevenlabs_stt_model: str = "scribe_v2"
+    # Live STT (WebSocket /v1/stt/stream): auto — ElevenLabs Scribe Realtime при ELEVENLABS_API_KEY,
+    # иначе buffered (звук копится, по концу фразы — обычный STT_PROVIDER)
+    stt_stream_provider: Literal["auto", "elevenlabs", "buffered"] = "auto"
+    elevenlabs_realtime_url: str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+    elevenlabs_realtime_model: str = "scribe_v2_realtime"
+    # Пауза, после которой VAD ElevenLabs считает фразу законченной
+    elevenlabs_realtime_silence_s: float = 0.8
+    # Посетитель так и не заговорил — сессия закрывается с пустым текстом
+    stt_stream_no_speech_s: float = 8.0
     # Тишина: пиковая амплитуда ниже порога → пустой текст без вызова провайдера
     stt_silence_peak: int = 500
     yandex_api_key: SecretStr | None = None
@@ -143,11 +169,14 @@ class Settings(BaseSettings):
         "gemini_thinking_level",
         "gemini_thinking_budget",
         "gemini_vision_model",
+        "openrouter_vision_model",
         "knowledge_sheet_id",
         "elevenlabs_api_key",
         "yandex_api_key",
         "gemini_api_key",
         "sentry_dsn",
+        "openrouter_api_key",
+        "tts_fallback_provider",
         mode="before",
     )
     @classmethod
@@ -160,29 +189,49 @@ class Settings(BaseSettings):
     def gemini_stt_fallback_list(self) -> list[str]:
         return _split(self.gemini_stt_fallback_models)
 
+    def openrouter_fallback_list(self) -> list[str]:
+        return _split(self.openrouter_fallback_models)
+
+    def openrouter_stt_fallback_list(self) -> list[str]:
+        return _split(self.openrouter_stt_fallback_models)
+
     def resolved_text_provider(self) -> str:
         if self.llm_provider != "auto":
             return self.llm_provider
-        return "gemini" if self.gemini_api_key else "fake"
+        return self._auto_llm()
+
+    def _auto_llm(self) -> str:
+        if self.gemini_api_key:
+            return "gemini"
+        return "openrouter" if self.openrouter_api_key else "fake"
 
     def resolved_stt_provider(self) -> str:
         if self.stt_provider != "auto":
             return self.stt_provider
         if self.elevenlabs_api_key:
             return "elevenlabs"
-        return "gemini" if self.gemini_api_key else "fake"
+        if self.gemini_api_key:
+            return "gemini"
+        return "openrouter" if self.openrouter_api_key else "fake"
 
     def resolved_tts_provider(self) -> str:
         if self.tts_provider != "auto":
             return self.tts_provider
         if self.elevenlabs_api_key:
             return "elevenlabs"
-        return "yandex" if self.yandex_api_key else "fake"
+        if self.yandex_api_key:
+            return "yandex"
+        return "openrouter" if self.openrouter_api_key else "fake"
+
+    def resolved_stt_stream_provider(self) -> str:
+        if self.stt_stream_provider != "auto":
+            return self.stt_stream_provider
+        return "elevenlabs" if self.elevenlabs_api_key else "buffered"
 
     def resolved_vision_provider(self) -> str:
         if self.vision_provider != "auto":
             return self.vision_provider
-        return "gemini" if self.gemini_api_key else "fake"
+        return self._auto_llm()
 
 
 def _split(value: str) -> list[str]:

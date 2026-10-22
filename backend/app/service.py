@@ -17,6 +17,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from dataclasses import dataclass, field
 
 from app.config import Settings
 from app.errors import ApiError, error_body, llm_timeout, llm_unavailable
@@ -46,6 +47,17 @@ DEFAULT_LOOK_QUESTION: dict[str, str] = {
 }
 
 ANSWERED = ("kb", "small_talk")
+
+
+@dataclass
+class _StreamState:
+    """Что успело уйти клиенту по SSE — для лога, если посетитель перебил робота."""
+
+    emitted: list[str] = field(default_factory=list)
+    category: str | None = None
+    lang: str | None = None
+    model: str | None = None
+    logged: bool = False
 
 
 def decide_category(category: str | None, found: bool | None, mode: str) -> str | None:
@@ -141,10 +153,11 @@ class AnswerService:
         category: str,
         provider_id: str,
         started: float,
+        interrupted: bool = False,
     ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            f"{endpoint}_answered",
+            f"{endpoint}_interrupted" if interrupted else f"{endpoint}_answered",
             extra={
                 "session_id": session_id,
                 "question": question,
@@ -155,6 +168,7 @@ class AnswerService:
                 "sources": resp.sources,
                 "provider": provider_id,
                 "latency_ms": latency_ms,
+                "interrupted": interrupted,
             },
         )
         # Фоном: ответ роботу не ждёт БД (зависшая/упавшая БД на /ask не влияет)
@@ -172,6 +186,7 @@ class AnswerService:
             sources=resp.sources,
             provider=provider_id,
             latency_ms=latency_ms,
+            interrupted=interrupted,
         )
 
     @staticmethod
@@ -230,7 +245,13 @@ class AnswerService:
         return resp
 
     async def _log_ask(
-        self, req: AskRequest, resp: AnswerResponse, category: str, provider_id: str, started
+        self,
+        req: AskRequest,
+        resp: AnswerResponse,
+        category: str,
+        provider_id: str,
+        started,
+        interrupted: bool = False,
     ) -> None:
         await self._log(
             endpoint="ask",
@@ -242,16 +263,22 @@ class AnswerService:
             category=category,
             provider_id=provider_id,
             started=started,
+            interrupted=interrupted,
         )
 
     async def ask_stream(self, req: AskRequest, request_id: str) -> AsyncIterator[tuple[str, dict]]:
         """SSE-версия /ask: события ("phrase", {text}) по мере готовности предложений,
         затем ("done", {...}) или ("error", {...}). Формат — docs/api-contract.md.
-        Любое непредвиденное исключение превращается в event: error (поток уже начат)."""
+        Любое непредвиденное исключение превращается в event: error (поток уже начат).
+
+        Клиент оборвал поток до done (посетитель перебил робота) → в лог идут вопрос и уже отправленные
+        фразы с interrupted=true. Ошибка LLM (event error) в лог не пишется, как и в JSON-режиме."""
+        started = time.perf_counter()
+        st = _StreamState()
         finished = False
         try:
             # aclosing: при отмене/обрыве SSE внутренний генератор (и стрим LLM) закрывается сразу
-            async with aclosing(self._ask_stream(req, request_id)) as events:
+            async with aclosing(self._ask_stream(req, request_id, st)) as events:
                 async for event, data in events:
                     if event in ("done", "error"):
                         finished = True
@@ -260,17 +287,36 @@ class AnswerService:
             logger.exception("ask_stream_failed")
             if not finished:
                 yield "error", error_body("internal_error", "Internal server error")
+        finally:
+            if not finished and not st.logged and st.emitted:
+                # _log не ждёт БД (запись фоном), поэтому отмена задачи обрыва его не прервёт
+                await self._log_ask(
+                    req,
+                    AnswerResponse(
+                        request_id=request_id,
+                        answer=" ".join(st.emitted),
+                        phrases=list(st.emitted),
+                        lang=resolve_lang(req.lang, st.lang, req.question),
+                        found=st.category in ANSWERED,
+                        sources=[],
+                    ),
+                    st.category or "out_of_scope",
+                    self._provider_id(self.text_llm, st.model),
+                    started,
+                    interrupted=True,
+                )
 
     async def _ask_stream(
-        self, req: AskRequest, request_id: str
+        self, req: AskRequest, request_id: str, st: _StreamState
     ) -> AsyncIterator[tuple[str, dict]]:
         started = time.perf_counter()
         quick = self._quick(req, request_id)
         if quick is not None:
+            st.logged = True  # короткий локальный ответ: пишем как полный
+            await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
             for phrase in quick.phrases:
                 yield "phrase", {"text": phrase}
             yield "done", _done(quick)
-            await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
             return
 
         if not hasattr(self.text_llm, "answer_stream"):
@@ -291,7 +337,7 @@ class AnswerService:
         loop = asyncio.get_running_loop()
         end = loop.time() + self.settings.ask_stream_total_s
         parser = AnswerStreamParser()
-        emitted: list[str] = []
+        emitted = st.emitted
         held: list[str] = []  # предложения, пришедшие раньше категории/found
         stream = self.text_llm.answer_stream(llm_req).__aiter__()  # type: ignore[attr-defined]
         first = True
@@ -326,6 +372,8 @@ class AnswerService:
                 first = False
                 sentences = parser.feed(chunk)
                 category = decide_category(parser.category, parser.found, self.mode)
+                st.category, st.lang = category, parser.lang
+                st.model = llm_req.info.get("model")
                 if category == "out_of_scope":
                     break  # отказ — дальше модель не слушаем
                 if category is None:
@@ -365,6 +413,7 @@ class AnswerService:
                 emitted.append(phrase)
                 yield "phrase", {"text": phrase}
         answer = " ".join(emitted)
+        st.logged = True  # до done: клиент может закрыть поток сразу после него
         resp = AnswerResponse(
             request_id=request_id,
             answer=answer,
@@ -373,7 +422,6 @@ class AnswerService:
             found=category in ANSWERED,
             sources=sources,
         )
-        yield "done", _done(resp)
         await self._log_ask(
             req,
             resp,
@@ -381,6 +429,7 @@ class AnswerService:
             self._provider_id(self.text_llm, llm_req.info.get("model")),
             started,
         )
+        yield "done", _done(resp)
 
     async def look(self, meta: LookMeta, image: bytes, request_id: str) -> AnswerResponse:
         started = time.perf_counter()

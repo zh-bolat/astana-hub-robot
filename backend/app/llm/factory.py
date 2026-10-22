@@ -24,10 +24,26 @@ def _gemini(settings: Settings) -> LLMProvider:
     )
 
 
+def _openrouter(settings: Settings) -> LLMProvider:
+    from app.llm.openrouter import OpenRouterProvider
+
+    if not settings.openrouter_api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is required for the openrouter provider")
+    return OpenRouterProvider(
+        api_key=settings.openrouter_api_key.get_secret_value(),
+        model=settings.openrouter_model,
+        vision_model=settings.openrouter_vision_model,
+        fallback_models=settings.openrouter_fallback_list(),
+        base_url=settings.openrouter_base_url,
+    )
+
+
 def build_text_provider(settings: Settings) -> LLMProvider:
     name = settings.resolved_text_provider()
     if name == "gemini":
         return _gemini(settings)
+    if name == "openrouter":
+        return _openrouter(settings)
     if name == "deepseek":
         from app.llm.deepseek import DeepSeekProvider
 
@@ -48,4 +64,8 @@ def build_vision_provider(settings: Settings, text_provider: LLMProvider) -> LLM
         if getattr(text_provider, "name", "") == "gemini":
             return text_provider
         return _gemini(settings)
+    if name == "openrouter":
+        if getattr(text_provider, "name", "") == "openrouter":
+            return text_provider
+        return _openrouter(settings)
     return FakeProvider()

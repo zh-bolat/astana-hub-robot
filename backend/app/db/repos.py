@@ -33,6 +33,7 @@ CSV_FIELDS = [
     "sources",
     "provider",
     "latency_ms",
+    "interrupted",
 ]
 
 
@@ -66,6 +67,17 @@ class QuestionLogRepo:
             stmt = stmt.where(QuestionLog.found.is_(False))
         with Session(self.engine) as s:
             return list(s.scalars(stmt))
+
+    def session_history(self, session_id: str, limit: int) -> list[QuestionLog]:
+        """Последние `limit` обменов разговора, по порядку (старые первыми)."""
+        stmt = (
+            select(QuestionLog)
+            .where(QuestionLog.session_id == session_id)
+            .order_by(QuestionLog.id.desc())
+            .limit(limit)
+        )
+        with Session(self.engine) as s:
+            return list(reversed(list(s.scalars(stmt))))
 
     def export_csv(self, out: IO[str], only_unanswered: bool = False) -> int:
         writer = csv.DictWriter(out, fieldnames=CSV_FIELDS)
