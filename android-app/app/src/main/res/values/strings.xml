@@ -51,4 +51,8 @@
     <string name="exit_sub">Робот перестанет отвечать посетителям.</string>
     <string name="exit_yes">Выйти</string>
     <string name="exit_no">Остаться</string>
+    <string name="phrase_greeting">Здравствуйте! Я помощник Astana Hub. Спросите меня о хабе или куда пройти.</string>
+    <string name="action_menu">Меню</string>
+    <string name="action_face">К роботу</string>
+    <string name="face_hint">Скажите вопрос, я слушаю</string>
 </resources>

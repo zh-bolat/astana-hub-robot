@@ -1,5 +1,9 @@
 package kz.astanahub.robot.backend
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kz.astanahub.robot.chat.ChatEvent
+import kz.astanahub.robot.chat.ChatRequest
 import kz.astanahub.robot.core.Lang
 
 /** Клиент backend по docs/api-contract.md (v1). Все методы не бросают исключений. */
@@ -24,4 +28,36 @@ interface BackendApi {
 
     /** Live-распознавание одной фразы (WS /v1/stt/stream); null — не поддерживается (заглушки). */
     fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession? = null
+
+    /**
+     * `POST /v1/chat` (SSE). Поток заканчивается [ChatEvent.Done] или [ChatEvent.Error];
+     * отмена сборщика обрывает соединение (посетитель перебил).
+     */
+    fun chat(request: ChatRequest): Flow<ChatEvent> =
+        flowOf(ChatEvent.Error(BackendError(ErrorKind.NOT_CONFIGURED, message = "chat is not supported")))
+
+    /** `POST /v1/chat/{turn_id}/frame` — кадр по запросу агента (`action: look`). */
+    suspend fun chatFrame(turnId: String, jpeg: ByteArray): ApiResult<Unit> =
+        ApiResult.Failure(BackendError(ErrorKind.NOT_CONFIGURED))
+
+    /** `POST /v1/sessions/{session_id}/messages` — ответ, который робот дал сам (история и лог). */
+    suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =
+        ApiResult.Failure(BackendError(ErrorKind.NOT_CONFIGURED))
+}
+
+/** Локальный ответ робота для истории разговора. [kind]: `where_is` / `guide_to` / `where_am_i`. */
+data class LocalMessage(
+    val kind: String,
+    val question: String,
+    val answer: String,
+    val lang: Lang,
+    val placeId: String? = null,
+    val found: Boolean = true,
+    val interrupted: Boolean = false,
+) {
+    companion object {
+        const val KIND_WHERE_IS = "where_is"
+        const val KIND_GUIDE_TO = "guide_to"
+        const val KIND_WHERE_AM_I = "where_am_i"
+    }
 }

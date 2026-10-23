@@ -4,7 +4,9 @@ import android.app.Application
 import android.os.HandlerThread
 import com.ainirobot.coreservice.client.RobotApi
 import com.ainirobot.coreservice.client.module.ModuleCallbackApi
+import kz.astanahub.robot.robotapi.PersonApiGateway
 import kz.astanahub.robot.robotapi.RobotApiGateway
+import kz.astanahub.robot.robotapi.RobotHeadGateway
 import kz.astanahub.robot.robotapi.SurfaceShareCameraGateway
 import kz.astanahub.robot.robotos.SkillVoiceGateway
 import timber.log.Timber
@@ -43,6 +45,8 @@ object FlavorGateways {
             robot = robot,
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,
+            persons = PersonApiGateway(),
+            head = RobotHeadGateway(),
         )
     }
 }

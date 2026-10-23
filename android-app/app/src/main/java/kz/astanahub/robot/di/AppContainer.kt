@@ -32,6 +32,21 @@ import kz.astanahub.robot.voice.VoiceConfig
 import kz.astanahub.robot.voice.VoiceSource
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.voice.VoiceSettings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.shareIn
+import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.chat.ChatSettings
+import kz.astanahub.robot.presence.PersonGateway
+import kz.astanahub.robot.presence.PresenceConfig
+import kz.astanahub.robot.presence.PresenceEvent
+import kz.astanahub.robot.presence.PresenceSimulator
+import kz.astanahub.robot.presence.PresenceTracker
+import kz.astanahub.robot.robot.HeadController
+import kz.astanahub.robot.robot.HeadGateway
 
 /** Железо робота: реализация выбирается flavor-ом (FlavorGateways в src/emulator и src/robot). */
 class Gateways(
@@ -42,6 +57,11 @@ class Gateways(
     val camera: CameraGateway,
     /** Есть настоящее встроенное распознавание (robot/robotos) — на него откат без связи. */
     val builtinAsrAvailable: Boolean = false,
+    /** Люди перед роботом (PersonApi / заглушка); null — пробуждения по человеку нет. */
+    val persons: PersonGateway? = null,
+    val head: HeadGateway? = null,
+    /** Эмулятор: «подошёл / ушёл» с экрана диагностики. */
+    val presenceSimulator: PresenceSimulator? = null,
 )
 
 /** Ручной DI: один экземпляр на приложение, создаётся в [kz.astanahub.robot.AstanaHubApp]. */
@@ -53,6 +73,19 @@ class AppContainer(app: Application) {
     val robot: RobotGateway get() = gateways.robot
     val camera: CameraGateway get() = gateways.camera
     val builtinMic: BuiltinMicControl get() = gateways.builtinMic
+    val presenceSimulator: PresenceSimulator? get() = gateways.presenceSimulator
+
+    /** Голова: один контроллер на приложение (слежение, сброс, кивки). */
+    val head: HeadController? = gateways.head?.let { HeadController(it) }
+
+    /** События «подошёл / ушёл»; трекер один на приложение — анти-спам переживает пересоздание экрана. */
+    val presence: Flow<PresenceEvent>? = gateways.persons?.let { persons ->
+        PresenceTracker(PresenceConfig()).track(persons.persons)
+            .shareIn(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), SharingStarted.WhileSubscribed(), 0)
+    }
+
+    /** Режим разговора: agent (`/v1/chat`) или legacy; меняется на экране диагностики. */
+    val chatSettings = ChatSettings(app, ChatMode.fromCode(BuildConfig.CHAT_MODE) ?: ChatMode.AGENT)
 
     /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
     val backendUrlPolicy = BackendUrlPolicy.fromBuildConfig(

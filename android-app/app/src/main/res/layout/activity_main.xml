@@ -93,6 +93,16 @@
                 android:layout_marginEnd="28dp"
                 android:background="@color/hub_line" />
 
+            <!-- Из меню обратно к лицу робота (только режим agent) -->
+            <TextView
+                android:id="@+id/faceButton"
+                style="@style/Hub.TopBtn"
+                android:layout_marginEnd="20dp"
+                android:drawableStart="@drawable/ic_sparkle"
+                android:visibility="gone"
+                tools:text="К роботу"
+                tools:visibility="visible" />
+
             <!-- Выход из приложения: сначала подтверждение (exitOverlay) -->
             <ImageButton
                 android:id="@+id/exitButton"
@@ -554,6 +564,251 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!--
+      Лицо-тамагочи на весь экран (режим agent): разговор лицом к лицу.
+      Сверху — логотип, «слушаю / думаю / говорю», языки; в центре — лицо; снизу — что слышу, крупные субтитры,
+      кнопки частых вопросов (запасной ввод), «Меню» (или жест вверх) и «Стоп».
+    -->
+    <LinearLayout
+        android:id="@+id/faceLayer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_screen"
+        android:clickable="true"
+        android:clipChildren="false"
+        android:elevation="12dp"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/top_bar_height"
+            android:clipChildren="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp">
+
+            <ImageView
+                android:id="@+id/faceLogo"
+                android:layout_width="wrap_content"
+                android:layout_height="@dimen/brand_logo_height"
+                android:adjustViewBounds="true"
+                android:contentDescription="@string/title"
+                android:scaleType="fitCenter"
+                android:src="@drawable/astana_hub_logo" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/faceStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="@dimen/chip_height"
+                android:background="@drawable/bg_chip"
+                android:drawablePadding="12dp"
+                android:fontFamily="@font/nunito_bold"
+                android:gravity="center"
+                android:paddingStart="32dp"
+                android:paddingEnd="32dp"
+                android:textColor="@color/hub_on_tint"
+                android:textSize="32sp"
+                tools:text="Слушаю…" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/faceLangRu"
+                style="@style/Hub.LangBtn"
+                android:text="RU"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:id="@+id/faceLangKk"
+                style="@style/Hub.LangBtn"
+                android:text="KZ"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:id="@+id/faceLangEn"
+                style="@style/Hub.LangBtn"
+                android:text="EN"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="false">
+
+            <View
+                android:layout_width="820dp"
+                android:layout_height="820dp"
+                android:layout_gravity="center"
+                android:background="@drawable/bg_spot" />
+
+            <kz.astanahub.robot.ui.RobotFaceView
+                android:id="@+id/bigFace"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- Офлайн: мелко, чтобы не пугать посетителя -->
+            <TextView
+                android:id="@+id/faceOffline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|center_horizontal"
+                android:background="@drawable/bg_offline"
+                android:paddingStart="24dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="24dp"
+                android:paddingBottom="8dp"
+                android:textColor="@color/hub_offline"
+                android:textSize="24sp"
+                android:visibility="gone"
+                tools:text="Нет связи с сервером"
+                tools:visibility="visible" />
+        </FrameLayout>
+
+        <!-- Что робот слышит, пока посетитель говорит -->
+        <TextView
+            android:id="@+id/faceHeard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="start"
+            android:gravity="center"
+            android:maxLines="2"
+            android:paddingStart="80dp"
+            android:paddingEnd="80dp"
+            android:textColor="@color/hub_muted2"
+            android:textSize="34sp"
+            tools:text="«Где здесь можно выпить кофе»" />
+
+        <!-- Крупные субтитры: фраза, которую робот говорит сейчас -->
+        <TextView
+            android:id="@+id/faceSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginStart="64dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="64dp"
+            android:accessibilityLiveRegion="polite"
+            android:background="@drawable/bg_bubble"
+            android:elevation="@dimen/elev_card"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.12"
+            android:maxLines="3"
+            android:ellipsize="end"
+            android:outlineSpotShadowColor="@color/hub_shadow_blue"
+            android:paddingStart="40dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="24dp"
+            android:textColor="@color/hub_ink"
+            android:textSize="44sp"
+            android:visibility="gone"
+            tools:text="Коворкинг на втором этаже, справа от лифта."
+            tools:visibility="visible" />
+
+        <!-- Ввод текстом: только эмулятор -->
+        <LinearLayout
+            android:id="@+id/faceInputRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="160dp"
+            android:paddingEnd="160dp"
+            android:visibility="gone">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/faceInputLayout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/faceInputText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:imeOptions="actionSend"
+                    android:inputType="text"
+                    android:maxLength="500"
+                    android:textSize="22sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:id="@+id/faceSendButton"
+                style="@style/Hub.LinkBtn"
+                android:layout_marginStart="16dp"
+                tools:text="Спросить" />
+        </LinearLayout>
+
+        <!-- Низ: микрофон · частые вопросы (или «Стоп») · меню -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/bottom_bar_height"
+            android:clipChildren="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp">
+
+            <TextView
+                android:id="@+id/faceMicButton"
+                style="@style/Hub.Btn"
+                android:background="@drawable/bg_hint"
+                android:contentDescription="@string/action_mic"
+                android:drawableStart="@drawable/ic_hub_mic"
+                android:drawablePadding="0dp"
+                android:drawableTint="@color/hub_primary"
+                android:paddingStart="28dp"
+                android:paddingEnd="28dp" />
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="24dp"
+                android:layout_marginEnd="24dp"
+                android:layout_weight="1"
+                android:clipChildren="false">
+
+                <LinearLayout
+                    android:id="@+id/faceChips"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:clipChildren="false"
+                    android:gravity="center"
+                    android:orientation="horizontal" />
+
+                <TextView
+                    android:id="@+id/faceStopButton"
+                    style="@style/Hub.Btn.Primary.Stop"
+                    android:layout_gravity="center"
+                    android:drawableStart="@drawable/ic_hub_stop"
+                    android:visibility="gone"
+                    tools:text="Стоп" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/faceMenuButton"
+                style="@style/Hub.Btn"
+                android:drawableStart="@drawable/ic_hub_expand"
+                tools:text="Меню" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- «Веду вас»: на весь экран, пока робот едет -->
     <LinearLayout
         android:id="@+id/guideOverlay"
@@ -604,7 +859,7 @@
             tools:text="Стоп" />
     </LinearLayout>
 
-    <!-- Заставка после бездействия: касание или голос — назад к приветствию -->
+    <!-- Сон (SLEEP): никого нет — «спящее» лицо; подошёл человек, касание или голос — просыпается -->
     <LinearLayout
         android:id="@+id/screensaver"
         android:layout_width="match_parent"
