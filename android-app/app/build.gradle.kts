@@ -68,6 +68,8 @@ android {
         buildConfigField("String", "VOICE_TTS_KK", secret("VOICE_TTS_KK").ifEmpty { "server" }.asBuildConfigString())
         buildConfigField("String", "VOICE_TTS_EN", secret("VOICE_TTS_EN").ifEmpty { "builtin" }.asBuildConfigString())
         // Заставка и сброс сессии после N секунд бездействия (шаг 7.4); 0 — выключено.
+        // Разговор: agent — POST /v1/chat (агент на сервере), legacy — локальные правила + /v1/ask. Меняется в диагностике.
+        buildConfigField("String", "CHAT_MODE", secret("CHAT_MODE").ifEmpty { "agent" }.asBuildConfigString())
         buildConfigField("int", "SCREENSAVER_SECONDS", secret("SCREENSAVER_SECONDS").toIntOrNull()?.toString() ?: "60")
     }
 

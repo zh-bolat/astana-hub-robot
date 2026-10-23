@@ -29,4 +29,8 @@
     <string name="diag_server_check" translatable="false">Проверить</string>
     <string name="diag_server_save" translatable="false">Сохранить</string>
     <string name="diag_server_reset" translatable="false">По умолчанию</string>
+    <string name="diag_chat" translatable="false">Разговор: agent — /v1/chat, legacy — правила + /v1/ask (сохраняется)</string>
+    <string name="diag_presence" translatable="false">Посетитель (заглушка PersonApi): подошёл / ушёл</string>
+    <string name="diag_person_arrive" translatable="false">Подошёл человек</string>
+    <string name="diag_person_leave" translatable="false">Ушёл</string>
 </resources>

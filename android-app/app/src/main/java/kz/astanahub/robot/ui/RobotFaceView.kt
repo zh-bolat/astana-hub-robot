@@ -15,6 +15,7 @@ import android.view.View
 import androidx.core.content.ContextCompat
 import kz.astanahub.robot.R
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.min
@@ -27,6 +28,8 @@ import kotlin.random.Random
  * LISTENING — глаза крупнее, расходятся кольца; THINKING — глаза вверх-вправо, крутится дуга;
  * SPEAKING — глаза «улыбаются» (плоский низ), шар «дышит»; LOOKING — глаза шире;
  * NAVIGATING — глаза смотрят вправо (по ходу движения).
+ * Эмоции ([emotion]): радость — глаза-полумесяцы, грусть — опущенные веки, удивление — круглые глаза,
+ * восторг — подпрыгивает, «думаю» — взгляд вверх. Сон ([sleeping]) — глаза-щёлочки, медленное дыхание, «z».
  * Живость: случайное моргание (иногда двойное), взгляд в сторону, изредка подмигивание «^» ([wink]).
  * Размеры — в единицах HTML-прототипа: диаметр лица = 280 единиц.
  */
@@ -40,6 +43,22 @@ class RobotFaceView @JvmOverloads constructor(
             if (field == value) return
             field = value
             phaseStarted = SystemClock.uptimeMillis()
+            invalidate()
+        }
+
+    /** Эмоция (агент `/v1/chat` или события на роботе) — накладывается на фазу. */
+    var emotion: Emotion = Emotion.NEUTRAL
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
+    /** Сон (режим SLEEP): глаза закрыты, медленное дыхание, «z». */
+    var sleeping: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
             invalidate()
         }
 
@@ -63,6 +82,12 @@ class RobotFaceView @JvmOverloads constructor(
     }
     private val rect = RectF()
     private val eyePath = Path()
+    private val cutPath = Path()
+    private val zPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = blue
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
     private val radii = FloatArray(8)
     private val sparkle: Drawable? = ContextCompat.getDrawable(context, R.drawable.ic_sparkle)?.mutate()
 
@@ -168,8 +193,12 @@ class RobotFaceView @JvmOverloads constructor(
 
         val wp = winkProgress(now)
         val tilt = if (wp < 0f) 0f else Ease.plateau(wp, 0.38f, 0.60f, ramp = 0.38f)
-        val scale = if (phase == Phase.SPEAKING) 1f + level * 0.05f else 1f
+        // Дыхание в простое и во сне, подпрыгивание от восторга.
+        val breath = 1f + eye.breath * sin(t * if (sleeping) 1.1f else 1.7f)
+        val scale = (if (phase == Phase.SPEAKING && !sleeping) 1f + level * 0.05f else 1f) * breath
+        val hop = -eye.bounce * 10f * u * abs(sin(t * 5.2f))
         canvas.save()
+        canvas.translate(0f, hop)
         canvas.scale(scale, scale, cx, cy)
         canvas.rotate(-4f * tilt, cx, cy)
         canvas.drawCircle(cx, cy, r, facePaint)
@@ -185,7 +214,7 @@ class RobotFaceView @JvmOverloads constructor(
                 // Второй глаз при подмигивании чуть щурится и приподнимается.
                 canvas.translate(0f, -4f * u * tilt)
                 canvas.scale(eye.sx * (1f + 0.04f * tilt), eye.sy * blink * (1f - 0.16f * tilt))
-                drawEye(canvas, u, 1f)
+                drawEye(canvas, u, 1f, side)
             }
             canvas.restore()
         }
@@ -199,7 +228,7 @@ class RobotFaceView @JvmOverloads constructor(
         canvas.restore()
         canvas.restore()
 
-        drawSparkles(canvas, cx, cy, u, t)
+        if (eye.closed > 0.5f) drawSleepZ(canvas, cx, cy, u, t) else drawSparkles(canvas, cx, cy, u, t)
 
         if (isShown) postInvalidateOnAnimation()
     }
@@ -208,10 +237,10 @@ class RobotFaceView @JvmOverloads constructor(
      * Белый глаз 40×52 единиц. При разговоре ([EyePose.speak] → 1) он ниже (34) и с плоским низом,
      * как border-radius 50% 50% 45% 45% / 85% 85% 30% 30% в прототипе. [heightK] — сжатие по высоте.
      */
-    private fun drawEye(canvas: Canvas, u: Float, heightK: Float) {
+    private fun drawEye(canvas: Canvas, u: Float, heightK: Float, side: Int = 0) {
         val speak = eye.speak
         val hw = 20f * u
-        val hh = (26f - 9f * speak) * u * heightK
+        val hh = (26f - 9f * speak) * u * heightK * (1f - 0.86f * eye.closed)
         val shift = -4f * u * speak
         val topRy = hh * (1f + (2f * 0.739f - 1f) * speak)
         val botRy = hh * (1f + (2f * 0.261f - 1f) * speak)
@@ -222,6 +251,25 @@ class RobotFaceView @JvmOverloads constructor(
         rect.set(-hw, -hh + shift + u, hw, hh + shift + u)
         eyePath.reset()
         eyePath.addRoundRect(rect, radii, Path.Direction.CW)
+        // Радость: снизу «откусывает» эллипс — глаз-полумесяц.
+        if (eye.smile > 0.01f) {
+            val cy = hh * (2.2f - 1.3f * eye.smile) + shift
+            cutPath.reset()
+            cutPath.addOval(-hw * 1.3f, cy - hh, hw * 1.3f, cy + hh, Path.Direction.CW)
+            eyePath.op(cutPath, Path.Op.DIFFERENCE)
+        }
+        // Грусть: верхнее веко опущено к внешнему краю глаза.
+        if (eye.lid > 0.01f && side != 0) {
+            val c = -hh + eye.lid * hh * 0.8f + shift
+            val k = 0.45f * eye.lid * hh / hw
+            cutPath.reset()
+            cutPath.moveTo(-2f * hw, -3f * hh)
+            cutPath.lineTo(2f * hw, -3f * hh)
+            cutPath.lineTo(2f * hw, c + side * k * 2f * hw)
+            cutPath.lineTo(-2f * hw, c - side * k * 2f * hw)
+            cutPath.close()
+            eyePath.op(cutPath, Path.Op.DIFFERENCE)
+        }
         canvas.drawPath(eyePath, eyeShadowPaint)
         eyePath.offset(0f, -u)
         canvas.drawPath(eyePath, eyePaint)
@@ -259,6 +307,16 @@ class RobotFaceView @JvmOverloads constructor(
         eyeShadowPaint.alpha = EYE_SHADOW_ALPHA
     }
 
+    /** Сон: три «z» поднимаются от лица справа вверх и тают. */
+    private fun drawSleepZ(canvas: Canvas, cx: Float, cy: Float, u: Float, t: Float) {
+        for (i in 0 until 3) {
+            val p = ((t / 3.6f) + i / 3f) % 1f
+            zPaint.textSize = (26f + 22f * p) * u
+            zPaint.alpha = ((1f - p) * 200).toInt().coerceIn(0, 255)
+            canvas.drawText("z", cx + (110f + 50f * p) * u, cy - (90f + 110f * p) * u, zPaint)
+        }
+    }
+
     /** Три звёздочки ✦: справа сверху крупная, справа мелкая, слева снизу мелкая; мерцают вразнобой. */
     private fun drawSparkles(canvas: Canvas, cx: Float, cy: Float, u: Float, t: Float) {
         val d = sparkle ?: return
@@ -280,7 +338,7 @@ class RobotFaceView @JvmOverloads constructor(
         }
     }
 
-    private fun winkAllowed() = phase != Phase.THINKING && phase != Phase.LISTENING
+    private fun winkAllowed() = !sleeping && phase != Phase.THINKING && phase != Phase.LISTENING && emotion != Emotion.SAD
 
     /** Подмигивание запланировано, идёт или только что закончилось (короткая пауза после). */
     private fun winkBusy(now: Long) =
@@ -297,7 +355,7 @@ class RobotFaceView @JvmOverloads constructor(
         val busyWink = winkBusy(now)
         // Моргание: каждые 2.6–5.8 с, в 20 % случаев двойное.
         if (now >= nextBlinkAt) {
-            if (phase != Phase.THINKING && !busyWink) {
+            if (phase != Phase.THINKING && !busyWink && !sleeping) {
                 blinkStart = now
                 secondBlinkAt = if (Random.nextFloat() < 0.2f) now + 260L else 0L
             }
@@ -308,7 +366,7 @@ class RobotFaceView @JvmOverloads constructor(
             secondBlinkAt = 0L
         }
         // Взгляд в сторону: каждые 3.5–7 с на 0.9–1.6 с (не когда слушает, думает или ведёт).
-        val canGlance = phase == Phase.IDLE || phase == Phase.SPEAKING || phase == Phase.LOOKING
+        val canGlance = !sleeping && (phase == Phase.IDLE || phase == Phase.SPEAKING || phase == Phase.LOOKING)
         if (now >= nextGlanceAt) {
             if (canGlance && !busyWink) {
                 val roll = Random.nextFloat()
@@ -330,16 +388,19 @@ class RobotFaceView @JvmOverloads constructor(
     }
 
     private fun updatePose(dt: Float) {
-        target.sx = 1f; target.sy = 1f; target.dx = 0f; target.dy = 0f; target.speak = 0f
-        when (phase) {
-            Phase.LISTENING -> { target.sx = 1.18f; target.sy = 1.22f }
-            Phase.THINKING -> { target.dx = 12f; target.dy = -28f; target.sx = 0.92f; target.sy = 0.92f }
-            Phase.SPEAKING -> target.speak = 1f
-            Phase.LOOKING -> { target.sx = 1.15f; target.sy = 1.15f }
-            Phase.NAVIGATING -> target.dx = 30f
-            Phase.IDLE -> Unit
-        }
+        val pose = FacePoses.target(phase, emotion, sleeping)
+        target.sx = pose.sx; target.sy = pose.sy; target.dx = pose.dx; target.dy = pose.dy; target.speak = pose.speak
+        target.smile = pose.smile; target.lid = pose.lid; target.bounce = pose.bounce
+        target.breath = pose.breath; target.closed = pose.closed
         val k = if (dt == 0f) 1f else 1f - exp(-dt / POSE_TAU)
+        // Засыпает и просыпается медленно, эмоции — чуть мягче, чем фаза.
+        val ks = if (dt == 0f) 1f else 1f - exp(-dt / SLEEP_TAU)
+        val ke = if (dt == 0f) 1f else 1f - exp(-dt / EMOTION_TAU)
+        eye.smile += (target.smile - eye.smile) * ke
+        eye.lid += (target.lid - eye.lid) * ke
+        eye.bounce += (target.bounce - eye.bounce) * ke
+        eye.breath += (target.breath - eye.breath) * ks
+        eye.closed += (target.closed - eye.closed) * ks
         val kg = if (dt == 0f) 1f else 1f - exp(-dt / GLANCE_TAU)
         eye.sx += (target.sx - eye.sx) * k
         eye.sy += (target.sy - eye.sy) * k
@@ -368,6 +429,7 @@ class RobotFaceView @JvmOverloads constructor(
     private class EyePose(
         var sx: Float = 1f, var sy: Float = 1f, var dx: Float = 0f, var dy: Float = 0f,
         var speak: Float = 0f, var gx: Float = 0f, var gy: Float = 0f,
+        var smile: Float = 0f, var lid: Float = 0f, var bounce: Float = 0f, var breath: Float = 0f, var closed: Float = 0f,
     )
 
     /** Звёздочка: центр относительно центра лица и размер — в единицах прототипа; период и сдвиг фазы — в секундах. */
@@ -401,6 +463,8 @@ class RobotFaceView @JvmOverloads constructor(
         const val WINK_ROLL_MS = 9_000L
         const val POSE_TAU = 0.08f
         const val GLANCE_TAU = 0.12f
+        const val EMOTION_TAU = 0.16f
+        const val SLEEP_TAU = 0.5f
 
         // Прототип (лицо 280): s1 44 (right −30, top −14), s2 18 (right −44, top 40), s3 20 (left −34, bottom 22).
         val SPARKLES = listOf(
