@@ -25,10 +25,16 @@ DEFAULT_BODY_LIMIT = 16 * 1024
 def body_limits(settings: Settings) -> dict[str, int]:
     return {
         "/v1/ask": 16 * 1024,
+        "/v1/chat": 16 * 1024,
         "/v1/look": settings.max_image_bytes + 64 * 1024,
         "/v1/stt": settings.max_audio_bytes + 64 * 1024,
         "/v1/tts": 4 * 1024,
     }
+
+
+def _is_chat_frame(path: str) -> bool:
+    """/v1/chat/{turn_id}/frame — кадр камеры, лимит как у /look."""
+    return path.startswith("/v1/chat/") and path.endswith("/frame") and path.count("/") == 4
 
 
 class BodyTooLarge(HTTPException):
@@ -80,7 +86,9 @@ class GuardMiddleware:
             await response(scope, receive, send)
             return
 
-        limit = self.limits.get(path, DEFAULT_BODY_LIMIT)
+        limit = self.limits.get(path) or (
+            self.limits["/v1/look"] if _is_chat_frame(path) else DEFAULT_BODY_LIMIT
+        )
         declared = _content_length(headers)
         if declared is not None and declared > limit:
             await self._too_large(scope, receive, send, limit)
