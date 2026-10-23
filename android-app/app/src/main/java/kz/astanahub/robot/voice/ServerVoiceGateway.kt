@@ -30,6 +30,8 @@ import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
+import kz.astanahub.robot.backend.LiveSttEvent
+import kz.astanahub.robot.backend.LiveSttSession
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.LogSafe
 import timber.log.Timber
@@ -54,7 +56,8 @@ sealed interface ServerSpeakResult {
 
 /**
  * Голос через backend (вариант B, docs/api-contract.md «Голос через сервер»):
- * микрофон → VAD → WAV → /v1/stt; фразы → /v1/tts (следующая грузится, пока играет текущая) → MediaPlayer.
+ * микрофон → WS /v1/stt/stream (live: текст по ходу речи, конец фразы находит сервер);
+ * если live недоступен — микрофон → VAD → WAV → /v1/stt; фразы → /v1/tts (следующая грузится, пока играет текущая) → MediaPlayer.
  * Работает на эмуляторе (микрофон хоста) и на роботе.
  */
 class ServerVoiceGateway(
@@ -93,6 +96,7 @@ class ServerVoiceGateway(
 
     private var listenJob: Job? = null
     @Volatile private var continuous = false
+    @Volatile private var liveDisabledUntil = 0L
 
     fun hasMicPermission() = recorder.hasPermission()
 
@@ -142,6 +146,10 @@ class ServerVoiceGateway(
             Timber.w("RECORD_AUDIO not granted")
             _sttEvents.tryEmit(SttEvent("", null, null, 0, 0, BackendError(ErrorKind.UNKNOWN, message = "нет разрешения RECORD_AUDIO")))
             return false
+        }
+        if (SystemClock.elapsedRealtime() >= liveDisabledUntil) {
+            val session = backend.openLiveStt(sttLangHint, sttSessionId)
+            if (session != null) listenLive(session)?.let { return it }
         }
         _activity.value = VoiceActivity.LISTENING
         val result = try {
@@ -201,6 +209,73 @@ class ServerVoiceGateway(
         }
     }
 
+    /**
+     * Live STT: звук уходит на сервер, пока посетитель говорит; промежуточный текст — на экран.
+     * @return null — live недоступен (старый сервер, нет сети до ответа `ready`): записать фразу по-старому.
+     */
+    private suspend fun listenLive(session: LiveSttSession): Boolean? = coroutineScope {
+        _activity.value = VoiceActivity.LISTENING
+        val opened = SystemClock.elapsedRealtime()
+        var audioBytes = 0L
+        var ready = false
+        // робот заговорил — запись прекращаем, иначе распознаем собственную речь
+        val muteWatcher = launch { muted.first { it }; session.cancel() }
+        val mic = launch {
+            val error = recorder.stream(vadConfig.sampleRate, onLevel = { _micLevel.value = it }) { chunk ->
+                audioBytes += chunk.size
+                session.sendPcm(chunk)
+            }
+            if (error != null) {
+                Timber.w("recorder: %s", error)
+                session.cancel()
+            }
+        }
+        try {
+            for (event in session.events) {
+                when (event) {
+                    is LiveSttEvent.Ready -> {
+                        ready = true
+                        Timber.i("live STT ready in %dms via %s", SystemClock.elapsedRealtime() - opened, event.provider)
+                    }
+                    is LiveSttEvent.Partial -> _transcripts.tryEmit(Transcript(event.text, isFinal = false))
+                    is LiveSttEvent.Final -> {
+                        mic.cancel()
+                        val r = event.result
+                        val audioMillis = audioBytes * 1000 / (vadConfig.sampleRate * 2)
+                        val latency = SystemClock.elapsedRealtime() - opened
+                        Timber.i("live STT final audio=%dms [%s]: %s", audioMillis, r.lang?.code, LogSafe.redact(r.text))
+                        _sttEvents.tryEmit(SttEvent(r.text, r.lang, r.confidence, audioMillis, latency))
+                        _transcripts.tryEmit(Transcript(r.text, isFinal = true, lang = r.lang))
+                        if (r.text.isBlank()) _transcripts.tryEmit(Transcript("", isFinal = false))
+                        return@coroutineScope true
+                    }
+                    is LiveSttEvent.Failed -> {
+                        mic.cancel()
+                        Timber.w("live STT failed (ready=%s): %s", ready, event.error)
+                        _transcripts.tryEmit(Transcript("", isFinal = false))
+                        if (!ready) {
+                            liveDisabledUntil = SystemClock.elapsedRealtime() + LIVE_RETRY_AFTER_MS
+                            return@coroutineScope null
+                        }
+                        _sttEvents.tryEmit(SttEvent("", null, null, 0, 0, event.error))
+                        return@coroutineScope false
+                    }
+                }
+            }
+            when {
+                isMuted() -> true // отменили, потому что робот заговорил
+                ready -> false
+                else -> null // соединение закрылось без ответа
+            }
+        } finally {
+            muteWatcher.cancel()
+            mic.cancel()
+            session.cancel()
+            _micLevel.value = 0f
+            if (_activity.value == VoiceActivity.LISTENING) _activity.value = VoiceActivity.IDLE
+        }
+    }
+
     override suspend fun speak(phrases: List<String>, lang: Lang): Boolean =
         speakDetailed(phrases, lang) == ServerSpeakResult.Done
 
@@ -250,5 +325,7 @@ class ServerVoiceGateway(
     private companion object {
         const val ERROR_BACKOFF_MS = 2_000L
         const val PTT_WAIT_FOR_SILENCE_MS = 2_000L
+        /** Live не открылся — минуту пишем фразы по-старому (/v1/stt), потом пробуем снова. */
+        const val LIVE_RETRY_AFTER_MS = 60_000L
     }
 }

@@ -94,3 +94,55 @@ class QuickQuestionOut(BaseModel):
 
 class QuickQuestionsResponse(BaseModel):
     items: list[QuickQuestionOut]
+
+
+MessageKind = Literal["ask", "look", "where_is", "guide_to", "where_am_i"]
+LocalKind = Literal["where_is", "guide_to", "where_am_i"]
+
+
+class ChatMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    kind: MessageKind
+    text: str
+    lang: LangField
+    created_at: str
+    request_id: str
+    found: bool | None = None
+    interrupted: bool | None = None
+
+
+class SessionMessagesResponse(BaseModel):
+    session_id: str
+    messages: list[ChatMessage]
+
+
+class LocalMessageRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kind": "where_is",
+                "question": "Где кафе?",
+                "answer": "Кафе справа от вас, метров 15.",
+                "lang": "ru",
+                "place_id": "cafe",
+            }
+        }
+    )
+
+    kind: LocalKind
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(min_length=1, max_length=2000)
+    lang: LangField
+    place_id: str | None = Field(default=None, max_length=64)
+    found: bool = True
+    interrupted: bool = False
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        return _strip_required(v)
+
+
+class LocalMessageResponse(BaseModel):
+    request_id: str

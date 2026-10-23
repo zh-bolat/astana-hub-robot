@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 
 import httpx
@@ -9,7 +10,7 @@ import pytest
 from app.config import Settings
 from app.speech.base import SpeechError, has_letters
 from app.speech.elevenlabs import ElevenLabsProvider
-from app.speech.factory import build_stt_provider, build_tts_provider
+from app.speech.factory import FallbackTtsProvider, build_stt_provider, build_tts_provider
 from app.speech.fake import SILENT_MP3, FakeSpeechProvider
 from tests.conftest import AUTH
 
@@ -23,6 +24,7 @@ def _s(**kw) -> Settings:
         gemini_api_key=None,
         elevenlabs_api_key=None,
         yandex_api_key=None,
+        openrouter_api_key=None,
     )
     return Settings(**{**base, **kw})
 
@@ -35,6 +37,10 @@ def _s(**kw) -> Settings:
         ({"gemini_api_key": "g", "yandex_api_key": "y"}, "gemini", "yandex"),
         ({"gemini_api_key": "g", "elevenlabs_api_key": "e"}, "elevenlabs", "elevenlabs"),
         ({"elevenlabs_api_key": "e", "yandex_api_key": "y"}, "elevenlabs", "elevenlabs"),
+        ({"openrouter_api_key": "o"}, "openrouter", "openrouter"),
+        ({"openrouter_api_key": "o", "gemini_api_key": "g"}, "gemini", "openrouter"),
+        ({"openrouter_api_key": "o", "yandex_api_key": "y"}, "openrouter", "yandex"),
+        ({"openrouter_api_key": "o", "elevenlabs_api_key": "e"}, "elevenlabs", "elevenlabs"),
     ],
 )
 def test_auto_provider_selection(keys, stt, tts):
@@ -270,3 +276,172 @@ def test_gemini_stt_all_fail_is_speech_error(monkeypatch):
     p, _ = _gemini_stt(monkeypatch, behaviour)
     with pytest.raises(SpeechError):
         asyncio.run(p.stt(b"\x01\x02", 16000, None))
+
+
+# ---------- OpenRouter (MockTransport) ----------
+
+
+def _openrouter(handler):
+    from app.speech.openrouter import OpenRouterSpeechProvider
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return OpenRouterSpeechProvider(
+        api_key="test",
+        stt_model="google/lite",
+        stt_fallback_models=["google/flash"],
+        voices={"ru": "voice-ru", "kk": "voice-kk", "en": "voice-en"},
+        base_url="https://openrouter.test/api/v1",
+        deadline_s=2,
+        client=client,
+    )
+
+
+@pytest.mark.parametrize(
+    ("lang", "model", "voice"),
+    [
+        ("kk", "elevenlabs/eleven-v3", "voice-kk"),
+        ("ru", "elevenlabs/eleven-flash-v2.5", "voice-ru"),
+        ("en", "elevenlabs/eleven-flash-v2.5", "voice-en"),
+    ],
+)
+def test_openrouter_tts_request(lang, model, voice):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"ID3mp3", headers={"content-type": "audio/mpeg"})
+
+    p = _openrouter(handler)
+    assert asyncio.run(p.tts("Сәлем.", lang)) == b"ID3mp3"
+    req = seen[0]
+    assert str(req.url) == "https://openrouter.test/api/v1/audio/speech"
+    assert json.loads(req.content) == {
+        "model": model,
+        "input": "Сәлем.",
+        "voice": voice,
+        "response_format": "mp3",
+    }
+    assert p.voice_id(lang) == f"{voice}:{model}:mp3"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(400, json={"error": {"message": "Unknown voice"}}),
+        httpx.Response(200, json={"error": "no audio"}),
+        httpx.Response(200, content=b"", headers={"content-type": "audio/mpeg"}),
+    ],
+)
+def test_openrouter_tts_errors_are_speech_error(response):
+    with pytest.raises(SpeechError):
+        asyncio.run(_openrouter(lambda request: response).tts("Привет.", "ru"))
+
+
+def _chat(content: str) -> httpx.Response:
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+def test_openrouter_stt_request_and_detected_lang():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _chat('{"lang": "kk", "text": "Асхана қайда?"}')
+
+    res = asyncio.run(_openrouter(handler).stt(b"\x01\x02" * 100, 16000, None))
+    assert (res.text, res.lang, res.confidence) == ("Асхана қайда?", "kk", None)
+    req = seen[0]
+    assert str(req.url) == "https://openrouter.test/api/v1/chat/completions"
+    body = json.loads(req.content)
+    assert body["model"] == "google/lite"
+    assert body["response_format"]["type"] == "json_schema"
+    system, user = body["messages"]
+    assert "Cyrillic" in system["content"]
+    prompt, audio = user["content"]
+    assert audio["input_audio"]["format"] == "wav"
+    assert base64.b64decode(audio["input_audio"]["data"])[:4] == b"RIFF"
+    assert "detect" in prompt["text"]
+
+
+def test_openrouter_stt_known_lang_and_hallucination_filter():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _chat('{"lang": "en", "text": "00:00"}')
+
+    res = asyncio.run(_openrouter(handler).stt(b"\x01\x02" * 100, 16000, "ru"))
+    assert (res.text, res.lang) == ("", "ru")
+    assert "Russian" in seen[0]["messages"][1]["content"][0]["text"]
+
+
+def test_openrouter_stt_falls_back_on_503():
+    models = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        models.append(model)
+        if model == "google/lite":
+            return httpx.Response(503, json={"error": {"message": "overloaded"}})
+        return _chat('{"lang": "ru", "text": "Где кафе?"}')
+
+    res = asyncio.run(_openrouter(handler).stt(b"\x01\x02", 16000, None))
+    assert res.text == "Где кафе?"
+    assert models[-1] == "google/flash"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(400, json={"error": {"message": "bad audio"}}),
+        httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]}),
+    ],
+)
+def test_openrouter_stt_errors_are_speech_error(response):
+    with pytest.raises(SpeechError):
+        asyncio.run(_openrouter(lambda request: response).stt(b"\x01\x02", 16000, None))
+
+
+def test_openrouter_stt_network_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    with pytest.raises(SpeechError):
+        asyncio.run(_openrouter(handler).stt(b"\x01\x02", 16000, "ru"))
+
+
+# ---------- запасной TTS ----------
+
+
+class _BrokenTts:
+    name = "broken"
+
+    def voice_id(self, lang):
+        return f"broken-{lang}"
+
+    async def tts(self, text, lang):
+        raise SpeechError("quota exceeded")
+
+
+def test_tts_fallback_used_on_primary_error():
+    fallback = FakeSpeechProvider()
+    tts = FallbackTtsProvider(_BrokenTts(), fallback)
+    assert asyncio.run(tts.tts("Привет", "ru")) == SILENT_MP3
+    assert fallback.tts_calls == 1
+    assert (tts.name, tts.voice_id("kk")) == ("broken", "broken-kk")
+
+
+def test_tts_fallback_built_from_settings():
+    s = Settings(
+        _env_file=None,
+        robot_token="t",
+        tts_provider="elevenlabs",
+        tts_fallback_provider="openrouter",
+        elevenlabs_api_key="xi",
+        openrouter_api_key="o",
+    )
+    tts = build_tts_provider(s)
+    assert isinstance(tts, FallbackTtsProvider)
+    assert (tts.primary.name, tts.fallback.name) == ("elevenlabs", "openrouter")
+    same = s.model_copy(update={"tts_fallback_provider": "elevenlabs"})
+    assert build_tts_provider(same).name == "elevenlabs"

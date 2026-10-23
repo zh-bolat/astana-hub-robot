@@ -347,6 +347,170 @@
         }
       }
     },
+    "/v1/sessions/{session_id}/messages": {
+      "get": {
+        "summary": "Session Messages",
+        "description": "Последние `limit` обменов «вопрос → ответ» разговора, старые первыми.",
+        "operationId": "session_messages_v1_sessions__session_id__messages_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add Local Message",
+        "description": "Ответ, который робот дал сам, без сервера («где X», «проводи», «где я»), — в историю и лог.",
+        "operationId": "add_local_message_v1_sessions__session_id__messages_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalMessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/stt": {
       "post": {
         "summary": "Stt",
@@ -657,6 +821,87 @@
           "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10"
         }
       },
+      "ChatMessage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "look",
+              "where_is",
+              "guide_to",
+              "where_am_i"
+            ],
+            "title": "Kind"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "ru",
+              "kk",
+              "en"
+            ],
+            "title": "Lang"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "found": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Found"
+          },
+          "interrupted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interrupted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "kind",
+          "text",
+          "lang",
+          "created_at",
+          "request_id"
+        ],
+        "title": "ChatMessage"
+      },
       "ErrorDetail": {
         "properties": {
           "code": {
@@ -730,6 +975,90 @@
           "version"
         ],
         "title": "HealthResponse"
+      },
+      "LocalMessageRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "where_is",
+              "guide_to",
+              "where_am_i"
+            ],
+            "title": "Kind"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Answer"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "ru",
+              "kk",
+              "en"
+            ],
+            "title": "Lang"
+          },
+          "place_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Id"
+          },
+          "found": {
+            "type": "boolean",
+            "title": "Found",
+            "default": true
+          },
+          "interrupted": {
+            "type": "boolean",
+            "title": "Interrupted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "question",
+          "answer",
+          "lang"
+        ],
+        "title": "LocalMessageRequest",
+        "example": {
+          "answer": "Кафе справа от вас, метров 15.",
+          "kind": "where_is",
+          "lang": "ru",
+          "place_id": "cafe",
+          "question": "Где кафе?"
+        }
+      },
+      "LocalMessageResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "LocalMessageResponse"
       },
       "PlaceOut": {
         "properties": {
@@ -822,6 +1151,27 @@
           "items"
         ],
         "title": "QuickQuestionsResponse"
+      },
+      "SessionMessagesResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "messages"
+        ],
+        "title": "SessionMessagesResponse"
       },
       "SttResponse": {
         "properties": {

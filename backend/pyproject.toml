@@ -19,6 +19,7 @@ dependencies = [
     "sentry-sdk>=2.72.0",
     "sqlalchemy>=2.1.4",
     "uvicorn[standard]>=0.54.0",
+    "websockets>=16.1.1",
 ]
 
 [dependency-groups]

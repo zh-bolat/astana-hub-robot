@@ -44,6 +44,7 @@ class SwitchableBackendApi(
     override suspend fun quickQuestions(lang: Lang) = delegate.quickQuestions(lang)
     override suspend fun stt(wav: ByteArray, lang: Lang?, sessionId: String) = delegate.stt(wav, lang, sessionId)
     override suspend fun tts(text: String, lang: Lang) = delegate.tts(text, lang)
+    override fun openLiveStt(lang: Lang?, sessionId: String) = delegate.openLiveStt(lang, sessionId)
 
     companion object {
         /**

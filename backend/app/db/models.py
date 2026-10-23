@@ -24,6 +24,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    false,
     func,
     text,
 )
@@ -284,6 +285,8 @@ class QuestionLog(Base):
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    # посетитель перебил робота: answer — только фразы, успевшие уйти (SSE оборван до done)
+    interrupted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
 
 class FeedbackRow(Base):

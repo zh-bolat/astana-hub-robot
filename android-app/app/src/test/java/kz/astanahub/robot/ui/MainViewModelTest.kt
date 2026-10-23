@@ -225,7 +225,7 @@ class MainViewModelTest {
 
         assertEquals(Lang.EN, vm.state.value.lang)
         assertEquals(listOf(QuickQuestion("q1", "Q-en")), vm.state.value.quickQuestions)
-        assertEquals(listOf(Lang.EN), voice.languages)
+        assertEquals(listOf(Lang.RU, Lang.EN), voice.languages) // RU — подсказка при старте
         coVerify { backend.ask("Where is the cafe?", match { it.lang == Lang.EN }) }
     }
 

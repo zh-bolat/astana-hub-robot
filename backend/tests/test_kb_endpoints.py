@@ -136,5 +136,6 @@ def test_openapi_matches_contract_paths(client):
         "/v1/quick-questions",
         "/v1/stt",
         "/v1/tts",
+        "/v1/sessions/{session_id}/messages",
     }
     assert "multipart/form-data" in spec["paths"]["/v1/look"]["post"]["requestBody"]["content"]

@@ -10,9 +10,10 @@ from contextlib import aclosing
 from typing import Annotated
 
 import anyio
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.types import Send
@@ -29,13 +30,17 @@ from app.logging_setup import get_request_id
 from app.schemas import (
     AnswerResponse,
     AskRequest,
+    ChatMessage,
     ErrorResponse,
     HealthResponse,
+    LocalMessageRequest,
+    LocalMessageResponse,
     LookMeta,
     PlaceOut,
     PlacesResponse,
     QuickQuestionOut,
     QuickQuestionsResponse,
+    SessionMessagesResponse,
 )
 from app.service import AnswerService
 
@@ -314,3 +319,76 @@ async def quick_questions(
     return QuickQuestionsResponse(
         items=[QuickQuestionOut(id=q.id, text=q.text.get(lang)) for q in kb.quick_questions]
     )
+
+
+# ---------- История разговора (чат на экране робота) ----------
+
+SessionId = Annotated[str, Path(min_length=1, max_length=64)]
+
+
+@router.get(
+    "/sessions/{session_id}/messages",
+    response_model=SessionMessagesResponse,
+    responses=_ERRORS,
+    dependencies=[Depends(require_robot)],
+)
+async def session_messages(
+    session_id: SessionId,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> SessionMessagesResponse:
+    """Последние `limit` обменов «вопрос → ответ» разговора, старые первыми."""
+    rows = await run_in_threadpool(request.app.state.log_repo.session_history, session_id, limit)
+    messages: list[ChatMessage] = []
+    for row in rows:
+        common = {
+            "kind": row.endpoint,
+            "lang": row.lang,
+            "created_at": row.created_at.isoformat(),
+            "request_id": row.request_id,
+        }
+        messages.append(
+            ChatMessage(id=f"{row.request_id}:q", role="user", text=row.question, **common)
+        )
+        messages.append(
+            ChatMessage(
+                id=f"{row.request_id}:a",
+                role="assistant",
+                text=row.answer,
+                found=row.found,
+                interrupted=bool(row.interrupted),
+                **common,
+            )
+        )
+    return SessionMessagesResponse(session_id=session_id, messages=messages)
+
+
+@router.post(
+    "/sessions/{session_id}/messages",
+    status_code=201,
+    response_model=LocalMessageResponse,
+    responses=_ERRORS,
+    dependencies=[Depends(require_robot)],
+)
+async def add_local_message(
+    session_id: SessionId, body: LocalMessageRequest, request: Request
+) -> LocalMessageResponse:
+    """Ответ, который робот дал сам, без сервера («где X», «проводи», «где я»), — в историю и лог."""
+    request_id = _request_id()
+    await run_in_threadpool(
+        request.app.state.log_repo.add,
+        request_id=request_id,
+        session_id=session_id,
+        endpoint=body.kind,
+        question=body.question,
+        lang=body.lang,
+        place_id=body.place_id,
+        found=body.found,
+        category="local",  # ответ робота без сервера: навигация, «где я»
+        answer=body.answer,
+        sources=[],
+        provider="local",
+        latency_ms=0,
+        interrupted=body.interrupted,
+    )
+    return LocalMessageResponse(request_id=request_id)

@@ -70,6 +70,7 @@ dependencies = [
     { name = "sentry-sdk" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -94,6 +95,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = ">=2.72.0" },
     { name = "sqlalchemy", specifier = ">=2.1.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
+    { name = "websockets", specifier = ">=16.1.1" },
 ]
 
 [package.metadata.requires-dev]

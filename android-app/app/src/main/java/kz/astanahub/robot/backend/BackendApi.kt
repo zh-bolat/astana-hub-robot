@@ -21,4 +21,7 @@ interface BackendApi {
 
     /** Синтез одной фразы (≤ 300 символов) → MP3. */
     suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray>
+
+    /** Live-распознавание одной фразы (WS /v1/stt/stream); null — не поддерживается (заглушки). */
+    fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession? = null
 }

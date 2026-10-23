@@ -38,7 +38,12 @@ from app.sentry_setup import init_sentry
 from app.service import AnswerService
 from app.speech.base import SttProvider, TtsProvider
 from app.speech.cache import TtsCache
-from app.speech.factory import build_stt_provider, build_tts_provider
+from app.speech.factory import (
+    build_stt_provider,
+    build_stt_stream_provider,
+    build_tts_provider,
+)
+from app.speech.streaming import StreamingStt
 from app.speech_api import router as speech_router
 
 RETENTION_INTERVAL_S = 24 * 3600
@@ -164,6 +169,7 @@ def create_app(
     tts: TtsProvider | None = None,
     knowledge_source: KnowledgeSource | None = None,
     log_repo: QuestionLogRepo | None = None,
+    stt_stream: StreamingStt | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
     knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi)."""
@@ -242,6 +248,7 @@ def create_app(
     app.state.log_writer = log_writer
     app.state.stt = stt
     app.state.tts = tts_provider
+    app.state.stt_stream = stt_stream or build_stt_stream_provider(settings, stt)
     app.state.speech_rate_limiter = RateLimiter(settings.speech_rate_limit_per_min)
     app.state.tts_cache = TtsCache(
         memory_bytes=settings.tts_cache_memory_mb * 1024 * 1024,
@@ -265,6 +272,7 @@ def create_app(
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
             "stt": app.state.stt.name,
+            "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,
         },
     )
