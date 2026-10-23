@@ -17,6 +17,10 @@ import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.AskContext
 import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.ChatAction
+import kz.astanahub.robot.backend.ChatActionType
+import kz.astanahub.robot.backend.LocalMessage
+import kz.astanahub.robot.backend.map
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.backend.QuickQuestion
@@ -92,7 +96,7 @@ class MainViewModel(
     private val phrases: Phrases,
     private val clock: () -> Long = System::currentTimeMillis,
     private val sessionIdleMillis: Long = SESSION_IDLE_MILLIS,
-    /** «Где X» / «Проводи» — локально по карте; null — всё уходит в /ask. */
+    /** «Где X» / «Проводи» — локально по карте; null — всё уходит агенту (/v1/chat). */
     private val wayFinder: WayFinder? = null,
     private val robot: RobotGateway? = null,
     /** Через сколько мс бездействия показать заставку и сбросить сессию; null — выключено (тесты). */
@@ -292,40 +296,47 @@ class MainViewModel(
                 IntentRouter.Intent.WHERE_IS -> handleWhereIs(question, routed.subject)
                 IntentRouter.Intent.GUIDE_TO -> handleGuide(question, routed.subject)
                 IntentRouter.Intent.WHERE_AM_I -> handleWhereAmI(question)
-                IntentRouter.Intent.ASK -> handleAsk(question)
+                IntentRouter.Intent.ASK -> handleChat(question)
             }
         }
     }
 
-    /** «Где X?» — локально; место не узнали → вопрос к серверу. */
+    /** «Где X?» — локально; место не узнали → вопрос агенту. */
     private suspend fun handleWhereIs(question: String, subject: String) {
-        val wf = wayFinder ?: return handleAsk(question)
+        val wf = wayFinder ?: return handleChat(question)
         setBusy(Phase.THINKING)
         val answer = wf.whereIs(subject.ifBlank { question }, _state.value.lang)
-            ?: return handleAsk(question)
+            ?: return handleChat(question)
         setBusy(null)
         _state.update { it.copy(answer = answer.text, guideTarget = answer.guideTarget) }
+        recordLocal("where_is", question, answer.text, answer.place?.id)
         speakPhrases(PhraseSplitter.split(answer.text), _state.value.lang)
     }
 
     private suspend fun handleWhereAmI(question: String) {
-        val wf = wayFinder ?: return handleAsk(question)
+        val wf = wayFinder ?: return handleChat(question)
         setBusy(Phase.THINKING)
         val answer = wf.whereAmI(_state.value.lang)
         setBusy(null)
+        recordLocal("where_am_i", question, answer.text, answer.place?.id)
         say(answer.text, offline = _state.value.offline)
     }
 
-    /** «Проводи до X» — сразу ведём; место не узнали → честно говорим (без сервера это не решить). */
+    /**
+     * «Проводи до X» — место узнали по карте → сразу ведём. Не узнали («проводи туда») → агент: он помнит
+     * разговор. Агент недоступен → честно говорим, что место не знаем.
+     */
     private suspend fun handleGuide(question: String, subject: String) {
-        val wf = wayFinder ?: return handleAsk(question)
+        val wf = wayFinder ?: return handleChat(question)
         setBusy(Phase.THINKING)
         val place = wf.find(subject.ifBlank { question })
         setBusy(null)
         if (place == null) {
-            say(WayPhrases.unknownPlace(_state.value.lang), offline = _state.value.offline)
+            handleChat(question) { say(WayPhrases.unknownPlace(_state.value.lang), offline = _state.value.offline) }
             return
         }
+        val lang = _state.value.lang
+        recordLocal("guide_to", question, WayPhrases.guideStart(WayFinder.displayName(place, lang), lang), place.id)
         startGuide(place)
     }
 
@@ -341,7 +352,7 @@ class MainViewModel(
      * (или [RobotGateway.STOP_CONFIRM_TIMEOUT_MS]), только потом startNavigation.
      * Все фразы поездки (старт, препятствие, прибытие) — внутри navJob и отменяются вместе с ним.
      */
-    private fun startGuide(place: Place) {
+    private fun startGuide(place: Place, announce: Boolean = true) {
         val nav = robot ?: return
         val lang = _state.value.lang
         val name = WayFinder.displayName(place, lang)
@@ -353,11 +364,13 @@ class MainViewModel(
                 val confirmed = nav.stopNavigationAndWait(RobotGateway.STOP_CONFIRM_TIMEOUT_MS)
                 Timber.i("previous navigation stopped (confirmed=%s)", confirmed)
             }
-            _state.update { it.copy(guideTarget = null, guidingTo = name, answer = WayPhrases.guideStart(name, lang)) }
+            _state.update {
+                it.copy(guideTarget = null, guidingTo = name, answer = if (announce) WayPhrases.guideStart(name, lang) else it.answer)
+            }
             setBusy(Phase.NAVIGATING)
             val trip = this
-            // Фраза старта звучит параллельно с началом движения.
-            val startSpeech = launch { voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
+            // Фраза старта звучит параллельно с началом движения; агент («Провожаю вас…») её уже сказал.
+            val startSpeech = launch { if (announce) voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
             var obstacleSpeech: Job? = null
             val result = try {
                 nav.navigateTo(place.mapName) { event ->
@@ -485,14 +498,66 @@ class MainViewModel(
         setBusy(null)
     }
 
-    private suspend fun handleAsk(question: String) {
+    /**
+     * Вопрос агенту (/v1/chat): ответ звучит, затем робот выполняет действия из ответа.
+     * [onFailure] — своя реакция на ошибку вместо фразы «нет связи».
+     */
+    private suspend fun handleChat(question: String, onFailure: (suspend () -> Unit)? = null) {
         setBusy(Phase.THINKING)
         val context = askContext()
-        var result = backend.ask(question, context)
+        var result = backend.chat(question, context)
         if (result.isRateLimited()) {
-            result = retryAfterRateLimit(result) { backend.ask(question, context) }
+            result = retryAfterRateLimit(result) { backend.chat(question, context) }
         }
-        deliver(result)
+        if (result is ApiResult.Failure && onFailure != null) {
+            Timber.w("chat error: %s", result.error)
+            setBusy(null)
+            onFailure()
+            return
+        }
+        deliver(result.map { it.answer })
+        val actions = (result as? ApiResult.Success)?.value?.actions.orEmpty()
+        for (action in actions) perform(action, question)
+    }
+
+    /** Действие из ответа агента. Место, которого нет у робота, пропускаем (агент о нём уже сказал). */
+    private suspend fun perform(action: ChatAction, question: String) {
+        Timber.i("chat action %s place=%s", action.type, action.placeId)
+        when (action.type) {
+            ChatActionType.LOOK -> handleLook(question)
+            ChatActionType.WHERE_IS -> {
+                val place = placeFor(action) ?: return
+                if (wayFinder?.canGuide(place) == true) _state.update { it.copy(guideTarget = place) }
+            }
+            ChatActionType.GUIDE_TO -> {
+                val place = placeFor(action)
+                if (place == null) {
+                    say(WayPhrases.unknownPlace(_state.value.lang), offline = _state.value.offline)
+                    return
+                }
+                startGuide(place, announce = false)
+            }
+        }
+    }
+
+    private suspend fun placeFor(action: ChatAction): Place? {
+        val id = action.placeId ?: return null
+        return wayFinder?.placeById(id).also { if (it == null) Timber.w("chat action: unknown place %s", id) }
+    }
+
+    /** Локальный ответ — в историю и память агента; фоном, ответ посетителю не ждёт, ошибка — только в лог. */
+    private fun recordLocal(kind: String, question: String, answer: String, placeId: String?) {
+        val message = LocalMessage(sessionId, kind, question, answer, _state.value.lang, placeId)
+        viewModelScope.launch {
+            try {
+                val r = backend.recordLocal(message)
+                if (r is ApiResult.Failure) Timber.w("local message not recorded: %s", r.error.kind)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.e(e, "local message")
+            }
+        }
     }
 
     private suspend fun handleLook(question: String) {
@@ -517,10 +582,10 @@ class MainViewModel(
         deliver(result)
     }
 
-    private suspend fun retryAfterRateLimit(
-        first: ApiResult<Answer>,
-        retry: suspend () -> ApiResult<Answer>,
-    ): ApiResult<Answer> {
+    private suspend fun <T> retryAfterRateLimit(
+        first: ApiResult<T>,
+        retry: suspend () -> ApiResult<T>,
+    ): ApiResult<T> {
         val seconds = (first as ApiResult.Failure).error.retryAfterSeconds ?: 1
         voice.speak(listOf(phrases.get(PhraseKey.ONE_MOMENT, _state.value.lang)), _state.value.lang)
         delay(seconds.coerceIn(1, MAX_RETRY_AFTER_SECONDS) * 1000)

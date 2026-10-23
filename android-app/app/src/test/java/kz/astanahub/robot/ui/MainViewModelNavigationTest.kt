@@ -17,6 +17,8 @@ import kotlinx.coroutines.test.setMain
 import kz.astanahub.robot.backend.Answer
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.BackendApi
+import kz.astanahub.robot.backend.ChatAnswer
+import kz.astanahub.robot.backend.map
 import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.camera.CameraGateway
 import kz.astanahub.robot.core.Lang
@@ -64,6 +66,11 @@ class MainViewModelNavigationTest {
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         backend = mockk()
+        // /v1/chat в тестах ведёт себя как /ask без действий (тот ответ, что задан для ask в тесте)
+        coEvery { backend.chat(any(), any()) } coAnswers {
+            backend.ask(firstArg(), secondArg()).map { ChatAnswer(it) }
+        }
+        coEvery { backend.recordLocal(any()) } returns ApiResult.Success(Unit)
         voice = TestVoice()
         coEvery { backend.quickQuestions(any()) } returns ApiResult.Success(questions)
         coEvery { backend.ask(any(), any()) } answers {

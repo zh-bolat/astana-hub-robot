@@ -73,3 +73,33 @@ data class AskContext(
     val lang: Lang?,
     val placeId: String? = null,
 )
+
+/** Действие робота из ответа агента (/v1/chat). */
+enum class ChatActionType(val code: String) {
+    /** Показать, где место: под ответом — кнопка «Проводить». */
+    WHERE_IS("where_is"),
+    /** Проводить: робот едет, когда договорил ответ. */
+    GUIDE_TO("guide_to"),
+    /** Посмотреть камерой: кадр → /v1/look. */
+    LOOK("look");
+
+    companion object {
+        fun fromCode(code: String?): ChatActionType? = entries.firstOrNull { it.code == code }
+    }
+}
+
+data class ChatAction(val type: ChatActionType, val placeId: String?)
+
+/** Ответ /v1/chat: как у /ask плюс действия робота. */
+data class ChatAnswer(val answer: Answer, val actions: List<ChatAction> = emptyList())
+
+/** Что робот ответил сам, без сервера («где X», «проводи», «где я») — в историю и память агента. */
+data class LocalMessage(
+    val sessionId: String,
+    val kind: String,
+    val question: String,
+    val answer: String,
+    val lang: Lang,
+    val placeId: String? = null,
+    val found: Boolean = true,
+)

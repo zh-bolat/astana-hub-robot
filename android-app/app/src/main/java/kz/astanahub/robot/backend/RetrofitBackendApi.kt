@@ -51,16 +51,43 @@ class RetrofitBackendApi(
         call(timeouts.referenceMillis) { service.health() }.map { "${it.status} ${it.version.orEmpty()}".trim() }
 
     override suspend fun ask(question: String, context: AskContext): ApiResult<Answer> =
-        call(timeouts.askMillis) {
-            service.ask(
-                AskRequestDto(
-                    question = clipQuestion(question),
-                    lang = context.lang?.code,
-                    sessionId = context.sessionId,
-                    placeId = context.placeId,
+        call(timeouts.askMillis) { service.ask(askBody(question, context)) }.map { it.toDomain() }
+
+    private fun askBody(question: String, context: AskContext) = AskRequestDto(
+        question = clipQuestion(question),
+        lang = context.lang?.code,
+        sessionId = context.sessionId,
+        placeId = context.placeId,
+    )
+
+    /** Сервер ответил 404 на /chat (старая версия) — дальше сразу /ask. */
+    @Volatile private var chatUnsupported = false
+
+    override suspend fun chat(question: String, context: AskContext): ApiResult<ChatAnswer> {
+        if (chatUnsupported) return super.chat(question, context)
+        val result = call(timeouts.askMillis) { service.chat(askBody(question, context)) }
+        if (result is ApiResult.Failure && result.error.httpStatus == 404) {
+            Timber.w("server without /v1/chat, falling back to /v1/ask")
+            chatUnsupported = true
+            return super.chat(question, context)
+        }
+        return result.map { it.toDomain() }
+    }
+
+    override suspend fun recordLocal(message: LocalMessage): ApiResult<Unit> =
+        call(timeouts.referenceMillis) {
+            service.recordLocal(
+                message.sessionId,
+                LocalMessageDto(
+                    kind = message.kind,
+                    question = clipQuestion(message.question),
+                    answer = message.answer.take(MAX_LOCAL_ANSWER_CHARS),
+                    lang = message.lang.code,
+                    placeId = message.placeId,
+                    found = message.found,
                 ),
             )
-        }.map { it.toDomain() }
+        }.map { }
 
     override suspend fun look(jpeg: ByteArray, question: String?, context: AskContext): ApiResult<Answer> {
         val meta = json.encodeToString(
@@ -182,6 +209,9 @@ class RetrofitBackendApi(
         /** Контракт: `question` — 1–500 символов. */
         const val MAX_QUESTION_CHARS = 500
 
+        /** Контракт: `answer` локального сообщения — 1–2000 символов. */
+        const val MAX_LOCAL_ANSWER_CHARS = 2000
+
         /** Обрезка до [MAX_QUESTION_CHARS] без разрыва суррогатной пары (эмодзи). */
         fun clipQuestion(question: String): String {
             val q = question.trim()
@@ -252,6 +282,18 @@ internal fun AnswerDto.toDomain() = Answer(
     phrases = phrases.ifEmpty { listOf(answer) },
     lang = Lang.fromCode(lang),
     found = found,
+)
+
+internal fun ChatDto.toDomain() = ChatAnswer(
+    answer = Answer(
+        requestId = requestId,
+        text = answer,
+        phrases = phrases.ifEmpty { listOf(answer) },
+        lang = Lang.fromCode(lang),
+        found = found,
+    ),
+    // Неизвестные типы действий (новый сервер) пропускаем
+    actions = actions.mapNotNull { a -> ChatActionType.fromCode(a.type)?.let { ChatAction(it, a.placeId) } },
 )
 
 internal inline fun <T, R> ApiResult<T>.map(transform: (T) -> R): ApiResult<R> = when (this) {

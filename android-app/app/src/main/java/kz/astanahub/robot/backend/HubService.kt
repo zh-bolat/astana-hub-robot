@@ -10,6 +10,7 @@ import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /** Запрос без заголовка Authorization (контракт: `/health` вызывается без токена). */
@@ -21,6 +22,15 @@ internal annotation class NoAuth
 internal interface HubService {
     @POST("ask")
     suspend fun ask(@Body body: AskRequestDto): Response<AnswerDto>
+
+    @POST("chat")
+    suspend fun chat(@Body body: AskRequestDto): Response<ChatDto>
+
+    @POST("sessions/{sessionId}/messages")
+    suspend fun recordLocal(
+        @Path("sessionId") sessionId: String,
+        @Body body: LocalMessageDto,
+    ): Response<LocalMessageResponseDto>
 
     @Multipart
     @POST("look")

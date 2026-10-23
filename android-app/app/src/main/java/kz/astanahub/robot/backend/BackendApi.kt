@@ -9,6 +9,16 @@ interface BackendApi {
 
     suspend fun ask(question: String, context: AskContext): ApiResult<Answer>
 
+    /**
+     * POST /v1/chat: агент помнит разговор и сам выбирает действие робота.
+     * По умолчанию (заглушки, сервер без /chat) — ответ /ask без действий.
+     */
+    suspend fun chat(question: String, context: AskContext): ApiResult<ChatAnswer> =
+        ask(question, context).map { ChatAnswer(it) }
+
+    /** POST /v1/sessions/{id}/messages: локальный ответ робота — в историю и память агента. */
+    suspend fun recordLocal(message: LocalMessage): ApiResult<Unit> = ApiResult.Success(Unit)
+
     suspend fun look(jpeg: ByteArray, question: String?, context: AskContext): ApiResult<Answer>
 
     /** Точки карты; с [etag] сервер может ответить 304 → [PlacesResult.notModified]. */

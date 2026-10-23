@@ -19,6 +19,14 @@ class WayFinder(
 
     suspend fun find(query: String): Place? = PlaceMatcher.match(query, repository.places())?.place
 
+    /** Место по id из ответа агента (/v1/chat); сервер мог назвать и имя точки карты. */
+    suspend fun placeById(id: String): Place? =
+        repository.places().firstOrNull { it.id == id || it.mapName.equals(id, ignoreCase = true) }
+
+    /** Можно ли проводить: место есть на карте робота и точка достижима. */
+    suspend fun canGuide(place: Place): Boolean =
+        repository.findOnMap(place, repository.mapPlaces())?.isReachable == true
+
     /** null — место не узнали (тогда спрашиваем сервер, если он есть). */
     suspend fun whereIs(query: String, lang: Lang): WayAnswer? {
         val place = find(query) ?: return null

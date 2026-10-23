@@ -30,6 +30,36 @@ internal data class AnswerDto(
 )
 
 @Serializable
+internal data class ChatActionDto(
+    val type: String,
+    @SerialName("place_id") val placeId: String? = null,
+)
+
+@Serializable
+internal data class ChatDto(
+    @SerialName("request_id") val requestId: String? = null,
+    val answer: String,
+    val phrases: List<String> = emptyList(),
+    val lang: String? = null,
+    val found: Boolean = true,
+    val sources: List<String> = emptyList(),
+    val actions: List<ChatActionDto> = emptyList(),
+)
+
+@Serializable
+internal data class LocalMessageDto(
+    val kind: String,
+    val question: String,
+    val answer: String,
+    val lang: String,
+    @SerialName("place_id") val placeId: String? = null,
+    val found: Boolean = true,
+)
+
+@Serializable
+internal data class LocalMessageResponseDto(@SerialName("request_id") val requestId: String? = null)
+
+@Serializable
 internal data class PlacesDto(val places: List<PlaceDto> = emptyList())
 
 @Serializable

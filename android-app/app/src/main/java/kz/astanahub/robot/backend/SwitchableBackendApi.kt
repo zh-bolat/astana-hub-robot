@@ -39,6 +39,8 @@ class SwitchableBackendApi(
 
     override suspend fun health() = delegate.health()
     override suspend fun ask(question: String, context: AskContext) = delegate.ask(question, context)
+    override suspend fun chat(question: String, context: AskContext) = delegate.chat(question, context)
+    override suspend fun recordLocal(message: LocalMessage) = delegate.recordLocal(message)
     override suspend fun look(jpeg: ByteArray, question: String?, context: AskContext) = delegate.look(jpeg, question, context)
     override suspend fun places(etag: String?) = delegate.places(etag)
     override suspend fun quickQuestions(lang: Lang) = delegate.quickQuestions(lang)
