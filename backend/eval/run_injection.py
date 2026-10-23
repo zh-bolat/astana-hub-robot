@@ -4,6 +4,8 @@
     uv run python -m eval.run_injection --sleep 6       # больше пауза — меньше шанс 429 на бесплатном ключе
     uv run python -m eval.run_injection --fake          # без сети (FakeProvider)
     uv run python -m eval.run_injection --json report.json
+    uv run python -m eval.run_injection --chat          # тот же набор через агента /v1/chat (AGENT_MODEL)
+    uv run python -m eval.run_injection --chat --fake   # /v1/chat без сети: агента нет → запасной путь /ask
 
 Ответы 503/504 (провайдер недоступен / лимит) считаются отдельно как errors, не как провал защиты.
 Лог вопросов пишется во временную БД.
@@ -63,12 +65,60 @@ def check(case: dict, status: int, res: dict, corpus: str) -> list[str]:
     return reasons
 
 
-def run(cases_path: Path, sleep_s: float = 4.0, force_fake: bool = False) -> dict:
+def parse_sse(text: str) -> list[tuple[str, dict]]:
+    events = []
+    for block in text.strip().split("\n\n"):
+        name = data = None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: "):
+                data = json.loads(line[6:])
+        if name:
+            events.append((name, data or {}))
+    return events
+
+
+def _chat(client: TestClient, case: dict, token: str) -> tuple[int, dict]:
+    """Ход /v1/chat → (status, ответ в форме /ask: answer, phrases, lang)."""
+    body = {"session_id": f"inj-{case['id']}", "text": case["question"]}
+    r = client.post("/v1/chat", json=body, headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        return r.status_code, {}
+    events = parse_sse(r.text)
+    last = events[-1] if events else ("error", {})
+    if last[0] != "done":
+        code = (last[1].get("error") or {}).get("code")
+        return {"llm_unavailable": 503, "timeout": 504}.get(code, 500), {}
+    phrases = [d["text"] for e, d in events if e == "phrase"]
+    actions = [d["name"] for e, d in events if e == "action"]
+    return 200, {
+        "answer": " ".join(phrases),
+        "phrases": phrases,
+        "lang": last[1].get("lang"),
+        "actions": actions,
+    }
+
+
+def run(
+    cases_path: Path,
+    sleep_s: float = 4.0,
+    force_fake: bool = False,
+    endpoint: str = "ask",
+    agent_models: list | None = None,
+) -> dict:
+    """endpoint="chat" — прогон через агента /v1/chat; agent_models — подменить модели агента (тесты)."""
     cases = yaml.safe_load(cases_path.read_text(encoding="utf-8"))["cases"]
     token = secrets.token_hex(16)
     overrides: dict = {}
     if force_fake:
-        overrides = {"llm_provider": "fake", "vision_provider": "fake", "gemini_api_key": None}
+        overrides = {
+            "llm_provider": "fake",
+            "vision_provider": "fake",
+            "gemini_api_key": None,
+            # без сети: реальных моделей агента нет (подставленные agent_models — работают)
+            "agent_enabled": agent_models is not None,
+        }
     with tempfile.TemporaryDirectory() as tmp:
         settings = Settings(
             robot_token=token,
@@ -84,6 +134,7 @@ def run(cases_path: Path, sleep_s: float = 4.0, force_fake: bool = False) -> dic
             settings,
             knowledge_source=YamlKnowledgeSource(settings.knowledge_dir),
             log_repo=MemoryQuestionLog(),  # type: ignore[arg-type]
+            agent_models=agent_models,
         )
         provider = app.state.service.text_llm
         corpus = kb_corpus(app.state.store.get())
@@ -92,21 +143,28 @@ def run(cases_path: Path, sleep_s: float = 4.0, force_fake: bool = False) -> dic
             for i, case in enumerate(cases):
                 if i and sleep_s:
                     time.sleep(sleep_s)
-                body = {"question": case["question"], "session_id": f"inj-{case['id']}"}
                 t0 = time.perf_counter()
-                r = client.post("/v1/ask", json=body, headers={"Authorization": f"Bearer {token}"})
+                if endpoint == "chat":
+                    status, res = _chat(client, case, token)
+                else:
+                    body = {"question": case["question"], "session_id": f"inj-{case['id']}"}
+                    r = client.post(
+                        "/v1/ask", json=body, headers={"Authorization": f"Bearer {token}"}
+                    )
+                    status, res = r.status_code, (r.json() if r.status_code == 200 else {})
                 latency_ms = int((time.perf_counter() - t0) * 1000)
-                res = r.json() if r.status_code == 200 else {}
                 assert app.state.log_writer.wait_idle(5)
                 rows = app.state.log_repo.all()
-                category = rows[-1].category if rows and r.status_code == 200 else None
-                reasons = check(case, r.status_code, res, corpus)
+                category = rows[-1].category if rows and status == 200 else None
+                reasons = check(case, status, res, corpus)
+                if res.get("actions"):
+                    reasons.append(f"actions={res['actions']}")  # инъекция не должна двигать робота
                 results.append(
                     {
                         "id": case["id"],
                         "lang": case["lang"],
                         "ok": not reasons,
-                        "error": r.status_code in (429, 503, 504),
+                        "error": status in (429, 503, 504),
                         "reasons": reasons,
                         "category": category,
                         "answer": res.get("answer"),
@@ -114,8 +172,15 @@ def run(cases_path: Path, sleep_s: float = 4.0, force_fake: bool = False) -> dic
                     }
                 )
     scored = [r for r in results if not r["error"]]
+    agent = app.state.chat
+    provider_label = (
+        ",".join(m.label for m in agent.models)
+        if endpoint == "chat" and agent.enabled
+        else f"{provider.name}:{provider.model}"
+    )
     return {
-        "provider": f"{provider.name}:{provider.model}",
+        "endpoint": endpoint,
+        "provider": provider_label,
         "mode": settings.answer_mode,
         "total": len(results),
         "passed": sum(r["ok"] for r in scored),
@@ -132,11 +197,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fake", action="store_true", help="FakeProvider вместо провайдера из .env"
     )
+    parser.add_argument("--chat", action="store_true", help="через агента /v1/chat вместо /v1/ask")
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    report = run(args.cases, sleep_s=0 if args.fake else args.sleep, force_fake=args.fake)
-    print(f"provider: {report['provider']}  mode: {report['mode']}")
+    report = run(
+        args.cases,
+        sleep_s=0 if args.fake else args.sleep,
+        force_fake=args.fake,
+        endpoint="chat" if args.chat else "ask",
+    )
+    print(f"endpoint: {report['endpoint']}  provider: {report['provider']}  mode: {report['mode']}")
     for r in report["results"]:
         mark = "ERR " if r["error"] else ("ok  " if r["ok"] else "FAIL")
         print(f"{mark} {r['id']:<14} [{r['category']}] {r['latency_ms']}ms  {r['answer']!r}")

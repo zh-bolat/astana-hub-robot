@@ -12,10 +12,16 @@ from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
+from app.agent import ensure_tracing_disabled
+from app.agent.context import FrameBroker
+from app.agent.memory import ChatMemory
+from app.agent.models import AgentModel, build_agent_models
+from app.agent.service import ChatService
 from app.api import router
+from app.chat_api import router as chat_router
 from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
-from app.db import QuestionLogRepo, SessionRepo, make_engine
+from app.db import MessageRepo, QuestionLogRepo, SessionRepo, make_engine
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
@@ -170,11 +176,17 @@ def create_app(
     knowledge_source: KnowledgeSource | None = None,
     log_repo: QuestionLogRepo | None = None,
     stt_stream: StreamingStt | None = None,
+    agent_models: list[AgentModel] | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
-    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi)."""
+    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi).
+    agent_models — модели агента /v1/chat (тесты: ScriptedModel); по умолчанию — из AGENT_MODEL."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    # ADR 0001: трассировка Agents SDK выключена всегда (тексты посетителей не уходят в OpenAI)
+    if not settings.openai_agents_disable_tracing:
+        logger.warning("agent_tracing_cannot_be_enabled")
+    ensure_tracing_disabled()
     if not settings.robot_token.get_secret_value():
         raise RuntimeError("ROBOT_TOKEN is not set (see backend/.env.example)")
     init_sentry(settings)
@@ -244,6 +256,22 @@ def create_app(
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
+    if agent_models is None:
+        agent_models = build_agent_models(settings) if settings.agent_enabled else []
+    app.state.chat = ChatService(
+        settings,
+        store,
+        app.state.service,
+        vision_llm,
+        ChatMemory(
+            MessageRepo(engine) if log_repo is None else None,
+            log_writer,
+            limit=settings.agent_history_messages,
+        ),
+        FrameBroker(),
+        log_writer,
+        agent_models,
+    )
     app.state.log_repo = repo
     app.state.log_writer = log_writer
     app.state.stt = stt
@@ -258,6 +286,7 @@ def create_app(
 
     install_error_handlers(app)
     app.include_router(router)
+    app.include_router(chat_router)
     app.include_router(speech_router)
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
@@ -274,6 +303,7 @@ def create_app(
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,
+            "agent": [m.label for m in agent_models] if app.state.chat.enabled else "fallback",
         },
     )
     return app
