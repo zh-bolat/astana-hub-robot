@@ -627,6 +627,10 @@ def test_phrase_assembler_tags_split_across_chunks():
 def test_guide_consent():
     offer = "Кафе на первом этаже. Проводить вас?"
     assert guide_consent("да", offer)
+    # живой прогон: Gemini предлагает «провожу», а не «проводить»
+    assert guide_consent("Да, давай", "В хабе есть кафе. Хотите, я провожу вас туда?")
+    assert guide_consent("Иә", "Сізді шығарып салайын ба?")
+    assert guide_consent("Sure", "Would you like me to walk you there?")
     assert guide_consent("Иә, рахмет", "Кафеге дейін апарайын ба?")
     assert guide_consent("yes please", "Shall I take you there?")
     assert not guide_consent("нет, спасибо", offer)
