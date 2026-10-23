@@ -65,6 +65,17 @@ class AnswerResponse(BaseModel):
     sources: list[str]
 
 
+class ChatAction(BaseModel):
+    """Действие робота из ответа агента: показать место, проводить, посмотреть камерой."""
+
+    type: Literal["where_is", "guide_to", "look"]
+    place_id: str | None = None
+
+
+class ChatResponse(AnswerResponse):
+    actions: list[ChatAction] = Field(default_factory=list)
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
@@ -96,7 +107,7 @@ class QuickQuestionsResponse(BaseModel):
     items: list[QuickQuestionOut]
 
 
-MessageKind = Literal["ask", "look", "where_is", "guide_to", "where_am_i"]
+MessageKind = Literal["ask", "chat", "look", "where_is", "guide_to", "where_am_i"]
 LocalKind = Literal["where_is", "guide_to", "where_am_i"]
 
 

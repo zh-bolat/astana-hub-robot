@@ -118,6 +118,101 @@
         }
       }
     },
+    "/v1/chat": {
+      "post": {
+        "summary": "Chat",
+        "description": "Агентский чат: модель помнит разговор и сама выбирает действие робота.",
+        "operationId": "chat_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE: phrase {text} и action {type, place_id} по мере готовности, затем done {request_id, lang, found, sources, actions} или error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/look": {
       "post": {
         "summary": "Look",
@@ -821,6 +916,36 @@
           "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10"
         }
       },
+      "ChatAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "where_is",
+              "guide_to",
+              "look"
+            ],
+            "title": "Type"
+          },
+          "place_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "ChatAction",
+        "description": "Действие робота из ответа агента: показать место, проводить, посмотреть камерой."
+      },
       "ChatMessage": {
         "properties": {
           "id": {
@@ -839,6 +964,7 @@
             "type": "string",
             "enum": [
               "ask",
+              "chat",
               "look",
               "where_is",
               "guide_to",
@@ -901,6 +1027,62 @@
           "request_id"
         ],
         "title": "ChatMessage"
+      },
+      "ChatResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "phrases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Phrases"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "ru",
+              "kk",
+              "en"
+            ],
+            "title": "Lang"
+          },
+          "found": {
+            "type": "boolean",
+            "title": "Found"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatAction"
+            },
+            "type": "array",
+            "title": "Actions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "answer",
+          "phrases",
+          "lang",
+          "found",
+          "sources"
+        ],
+        "title": "ChatResponse"
       },
       "ErrorDetail": {
         "properties": {

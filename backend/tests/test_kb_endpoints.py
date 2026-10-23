@@ -131,6 +131,7 @@ def test_openapi_matches_contract_paths(client):
     assert set(spec["paths"]) == {
         "/v1/health",
         "/v1/ask",
+        "/v1/chat",
         "/v1/look",
         "/v1/places",
         "/v1/quick-questions",

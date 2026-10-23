@@ -1,6 +1,7 @@
 # Astana Hub Robot — backend
 
-FastAPI-сервер для робота: `/v1/ask` (вопросы о хабе по базе знаний, JSON или SSE-стриминг), `/v1/look`
+FastAPI-сервер для робота: `/v1/ask` (вопросы о хабе по базе знаний, JSON или SSE-стриминг), `/v1/chat`
+(агентский чат: память разговора и действия робота), `/v1/look`
 (кадр с камеры → vision LLM), `/v1/stt` и `/v1/tts` (голос через сервер), `/v1/places`, `/v1/quick-questions`,
 `/v1/health`. Контракт — [`docs/api-contract.md`](../docs/api-contract.md) (истина), OpenAPI — `openapi.json`
 (генерируется, см. ниже). `/docs`, `/redoc`, `/openapi.json` по умолчанию выключены (404); локально включить:
@@ -98,6 +99,10 @@ Eval использует провайдер из `.env`: без ключа — 
 | `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | резервные модели через запятую |
 | `GEMINI_THINKING_LEVEL` | `minimal` | размышления Gemini 3.x; `GEMINI_THINKING_BUDGET` — только для 2.5 |
 | `ASK_TIMEOUT_S`, `LOOK_TIMEOUT_S` | 6.5, 11 | бюджет сервера на ответ LLM, включая повтор и резерв; иначе `504 timeout` |
+| `CHAT_PROVIDER` | `auto` | агент `/v1/chat`: `openrouter` / `off`; `auto` = openrouter при `OPENROUTER_API_KEY`, иначе `/chat` отвечает как `/ask` |
+| `AGENT_MODEL` | `anthropic/claude-haiku-5.5` | модель агента на OpenRouter |
+| `AGENT_TIMEOUT_S`, `AGENT_TOTAL_S` | 6.5, 15 | до первой фразы (включая вызовы тулов) и на весь ответ агента |
+| `AGENT_MAX_TURNS`, `AGENT_HISTORY_MESSAGES` | 4, 12 | запросов к модели на реплику; сколько последних сообщений разговора видит агент |
 | `ASK_STREAM_TOTAL_S` | 12 | SSE /ask: предел на весь стрим |
 | `ANSWER_MODE` | `open` | `open` — база, иначе ответ модели из общих знаний; `strict` — только база + small talk |
 | `RATE_LIMIT_PER_MIN` | 30 | /ask и /look, на токен, in-memory (один процесс) |
@@ -170,6 +175,27 @@ Eval использует провайдер из `.env`: без ключа — 
   `/chat/completions` — JSON-схема ответа, `reasoning: minimal`, настоящий SSE-стрим, кадр `/look` — data-URI.
   Модели — `OPENROUTER_MODEL` / `OPENROUTER_FALLBACK_MODELS` / `OPENROUTER_VISION_MODEL`, повтор и резерв — тот же
   `run_with_fallback`. С `STT_PROVIDER=openrouter` и `TTS_PROVIDER=openrouter` весь сервер работает на одном ключе.
+
+## Агентский чат (/v1/chat)
+
+Решение и замеры — [`docs/decisions/0001-agent-chat-stack.md`](../docs/decisions/0001-agent-chat-stack.md), формат —
+`docs/api-contract.md`. Код — `app/agent/`.
+
+- **OpenAI Agents SDK + Claude Haiku 5.5 через OpenRouter** (`OpenAIChatCompletionsModel` поверх `AsyncOpenAI`
+  с `base_url` OpenRouter). Трассировка SDK выключена — тексты посетителей в OpenAI не уходят.
+- Правила и база знаний — в `instructions` под кешем промпта (`cache_control: ephemeral`); время, место робота,
+  язык и реплика — в последнем сообщении. Размышления модели выключены (`reasoning.enabled=false`) — ради задержки.
+- Тулы (`app/agent/tools.py`) — действия робота, а не код на сервере: `where_is`, `guide_to`, `look` проверяют
+  место по базе и отдают клиенту событие `action`; `no_answer` — отказ и строка «без ответа» в логе.
+  После `look` / `no_answer` модель повторно не вызывается.
+- Текст ответа модели, в котором есть вызов тула, не озвучивается (это рассуждение, а не ответ); фразы-рассуждения
+  («The visitor asks…») отсекает фильтр. Дальше — тот же выходной фильтр и лимит длины, что у `/ask`.
+- Память: таблица `messages` (вопрос, вызовы тулов, сказанный ответ) + кеш последних реплик в памяти процесса — запись
+  в БД идёт фоном, а следующий вопрос робот присылает сразу после `done`. Локальные ответы робота
+  (`POST /v1/sessions/{id}/messages`) тоже попадают в память.
+- Ошибка провайдера или лимит шагов до первой фразы → ответ даёт `/ask` (`agent_failed_fallback` в логе).
+  В логе вопросов `endpoint=chat`, категории `agent` / `small_talk` / `out_of_scope` / `blocked`; строка
+  `agent_run` в логе — токены, попадание в кеш, тулы, время до первой фразы.
 
 ## Голос через сервер (/v1/stt, /v1/tts)
 
@@ -318,6 +344,7 @@ app/
   main.py          create_app(): миграции, база знаний из Postgres, фоновые синк/сверка, X-Request-Id + access-лог
   api.py           эндпоинты v1, авторизация, rate limit, SSE, multipart
   service.py       логика /ask (JSON и стрим) и /look: база → промпт → LLM → очистка → фразы → лог
+  agent/           агентский чат /v1/chat: service.py (Agents SDK, память, фильтры), tools.py, prompts.py
   streaming.py     разбор JSON-ответа модели на лету (фразы по готовности)
   prompts.py       промпты и тексты отказов
   lang.py          определение языка ru/kk/en

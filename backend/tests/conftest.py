@@ -193,9 +193,17 @@ def settings(tmp_path: Path, knowledge_dir: Path, db: Engine, pg_url: str) -> Se
 def make_client(settings: Settings):
     clients: list[TestClient] = []
 
-    def _make(text_llm=None, vision_llm=None, speech=None, **overrides) -> TestClient:
+    def _make(
+        text_llm=None, vision_llm=None, speech=None, chat_client=None, **overrides
+    ) -> TestClient:
         s = settings.model_copy(update=overrides)
-        app = create_app(s, text_llm or FakeProvider(), vision_llm or FakeProvider(), speech)
+        app = create_app(
+            s,
+            text_llm or FakeProvider(),
+            vision_llm or FakeProvider(),
+            speech,
+            chat_client=chat_client,
+        )
         c = TestClient(app)
         clients.append(c)
         return c
@@ -203,6 +211,10 @@ def make_client(settings: Settings):
     yield _make
     for c in clients:
         c.close()
+        # lifespan без `with TestClient` не запускается — пул соединений закрываем сами,
+        # иначе тестовый Postgres упирается в max_connections
+        c.app.state.log_writer.wait_idle(5)
+        c.app.state.engine.dispose()
 
 
 @pytest.fixture

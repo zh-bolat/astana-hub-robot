@@ -113,6 +113,19 @@ class Settings(BaseSettings):
     openrouter_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
     openrouter_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
     openrouter_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
+    # Агентский чат /v1/chat (docs/decisions/0001-agent-chat-stack.md): OpenAI Agents SDK + Claude Haiku
+    # через OpenRouter. auto — включён при OPENROUTER_API_KEY; off — /v1/chat отвечает как /v1/ask.
+    chat_provider: Literal["auto", "openrouter", "off"] = "auto"
+    agent_model: str = "anthropic/claude-haiku-5.5"
+    agent_max_tokens: int = 400
+    # До первой фразы (включая вызовы тулов), сек; робот ждёт ответ 8 с
+    agent_timeout_s: float = 6.5
+    # Весь ответ агента, сек
+    agent_total_s: float = 15.0
+    # Запросов к модели на одну реплику (ответ + вызовы тулов)
+    agent_max_turns: int = 4
+    # Сколько последних сообщений разговора агент видит (память — таблица messages)
+    agent_history_messages: int = 12
     # ElevenLabs
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
@@ -222,6 +235,11 @@ class Settings(BaseSettings):
         if self.yandex_api_key:
             return "yandex"
         return "openrouter" if self.openrouter_api_key else "fake"
+
+    def resolved_chat_provider(self) -> str:
+        if self.chat_provider != "auto":
+            return self.chat_provider
+        return "openrouter" if self.openrouter_api_key else "off"
 
     def resolved_stt_stream_provider(self) -> str:
         if self.stt_stream_provider != "auto":

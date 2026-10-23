@@ -9,13 +9,15 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from openai import AsyncOpenAI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
+from app.agent.service import ChatService, build_chat_client
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
-from app.db import QuestionLogRepo, SessionRepo, make_engine
+from app.db import MessageRepo, QuestionLogRepo, SessionRepo, make_engine
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
@@ -170,9 +172,11 @@ def create_app(
     knowledge_source: KnowledgeSource | None = None,
     log_repo: QuestionLogRepo | None = None,
     stt_stream: StreamingStt | None = None,
+    chat_client: AsyncOpenAI | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
-    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi)."""
+    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi).
+    chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт)."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
     if not settings.robot_token.get_secret_value():
@@ -197,6 +201,16 @@ def create_app(
         repo,
         sessions=SessionRepo(engine) if log_repo is None else None,
         max_pending=settings.question_log_queue_max,
+    )
+    service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
+    chat = ChatService(
+        settings,
+        store,
+        service,
+        log_writer,
+        chat_client or build_chat_client(settings),
+        messages=MessageRepo(engine) if log_repo is None else None,
+        sessions=SessionRepo(engine) if log_repo is None else None,
     )
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
@@ -224,7 +238,7 @@ def create_app(
             await _cancel(sync_task)
             await _cancel(refresh_task)
             await _cancel(retention_task)
-            await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider)
+            await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider, chat)
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
 
@@ -243,7 +257,8 @@ def create_app(
     app.state.engine = engine
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
-    app.state.service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
+    app.state.service = service
+    app.state.chat = chat
     app.state.log_repo = repo
     app.state.log_writer = log_writer
     app.state.stt = stt
@@ -271,6 +286,7 @@ def create_app(
             "version": __version__,
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
+            "chat": chat.name,
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,

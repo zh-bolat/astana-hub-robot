@@ -155,6 +155,13 @@ class MessageRepo:
             s.commit()
             return row.id
 
+    def add_many(self, session_id: str, items: list[dict]) -> None:
+        """Обмен целиком (реплика, вызовы инструментов, ответ) одной транзакцией.
+        items — поля MessageRow без session_id: role, content, tool_name?, tool_args?."""
+        with Session(self.engine) as s:
+            s.add_all(MessageRow(session_id=session_id, **item) for item in items)
+            s.commit()
+
     def history(self, session_id: str, limit: int = 20) -> list[MessageRow]:
         """Последние `limit` сообщений сессии в хронологическом порядке."""
         stmt = (
