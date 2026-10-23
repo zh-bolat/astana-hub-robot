@@ -55,9 +55,9 @@
 	import security_headers
 
 	# --- Лимиты тела (проверяются по Content-Length до чтения; chunked — при чтении) ---
-	# Контракт: /look ≤ 1 МБ + 64 КБ, /stt ≤ 600 КБ + 64 КБ, /ask ≤ 16 КБ, /tts ≤ 4 КБ.
+	# Контракт: /look и /chat/{turn_id}/frame ≤ 1 МБ + 64 КБ, /stt ≤ 600 КБ + 64 КБ, /ask ≤ 16 КБ, /tts ≤ 4 КБ.
 	# Точные лимиты держит backend; здесь — грубый барьер с небольшим запасом.
-	@look path /v1/look
+	@look path /v1/look /v1/chat/*/frame
 	request_body @look {
 		max_size 1200KB
 	}
@@ -65,7 +65,7 @@
 	request_body @stt {
 		max_size 700KB
 	}
-	@small not path /v1/look /v1/stt
+	@small not path /v1/look /v1/stt /v1/chat/*/frame
 	request_body @small {
 		max_size 32KB
 	}

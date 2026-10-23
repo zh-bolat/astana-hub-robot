@@ -3,9 +3,15 @@ package kz.astanahub.robot.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,10 +24,19 @@ import kz.astanahub.robot.backend.AskContext
 import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
+import kz.astanahub.robot.backend.LocalMessage
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.backend.QuickQuestionCache
 import kz.astanahub.robot.camera.CameraGateway
+import kz.astanahub.robot.chat.AgentTurnRunner
+import kz.astanahub.robot.chat.ChatEvent
+import kz.astanahub.robot.chat.ChatInput
+import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.chat.ChatRequest
+import kz.astanahub.robot.chat.ChatTimeouts
+import kz.astanahub.robot.chat.TurnHandler
+import kz.astanahub.robot.chat.TurnOutcome
 import kz.astanahub.robot.core.IntentRouter
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.PhraseKey
@@ -31,6 +46,8 @@ import kz.astanahub.robot.core.UtteranceFilter
 import kz.astanahub.robot.places.OfflineQuickButtons
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.places.WayPhrases
+import kz.astanahub.robot.presence.PresenceEvent
+import kz.astanahub.robot.robot.HeadController
 import kz.astanahub.robot.robot.NavEvent
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
@@ -60,14 +77,21 @@ data class MainUiState(
     val guideTarget: Place? = null,
     /** Куда сейчас ведём (название), null — не ведём. */
     val guidingTo: String? = null,
-    /** Заставка после бездействия. */
-    val screensaver: Boolean = false,
+    /** SLEEP — «спящее» лицо (заставка), FACE — лицо на весь экран (agent), MENU — плитки и ответы. */
+    val mode: ScreenMode = ScreenMode.MENU,
+    /** Выражение лица: `emotion` агента или событие на роботе; сбрасывается в NEUTRAL после ответа. */
+    val emotion: Emotion = Emotion.NEUTRAL,
+    /** Фраза ответа, которая звучит сейчас (крупные субтитры в FACE); null — показываем весь [answer]. */
+    val subtitle: String? = null,
     val screen: Screen = Screen.HOME,
     /** Страница частых вопросов (по [FAQ_PAGE_SIZE] на странице). */
     val faqPage: Int = 0,
     /** Раскрытый вопрос в списке частых вопросов (id), null — все свёрнуты. */
     val faqOpenId: String? = null,
 ) {
+    /** Заставка после бездействия (режим SLEEP). */
+    val screensaver: Boolean get() = mode == ScreenMode.SLEEP
+
     /** Кнопка «Назад» видна везде, кроме приветствия. */
     val canGoBack: Boolean get() = screen != Screen.HOME
 
@@ -99,6 +123,13 @@ class MainViewModel(
     private val screensaverMillis: Long? = null,
     /** Кеш кнопок частых вопросов на диске (показываем без сети). */
     private val quickCache: QuickQuestionCache? = null,
+    /** agent — реплики идут в `/v1/chat`, legacy — прежний путь. Читается на каждую реплику (меняется в диагностике). */
+    private val chatMode: () -> ChatMode = { ChatMode.LEGACY },
+    private val chatTimeouts: ChatTimeouts = ChatTimeouts(),
+    /** «Подошёл / ушёл» (PersonApi или заглушка); null — будят только касание и голос. */
+    private val presence: Flow<PresenceEvent>? = null,
+    /** Голова: слежение за собеседником, сброс, кивки. */
+    private val head: HeadController? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -108,7 +139,14 @@ class MainViewModel(
     private var quickJob: Job? = null
     private var navJob: Job? = null
     private var idleJob: Job? = null
+    private var emotionJob: Job? = null
+    private var menuJob: Job? = null
     private var busy = false
+
+    private val turnRunner = AgentTurnRunner(backend, chatTimeouts)
+
+    /** Перед роботом стоит человек (по PersonApi): не засыпаем по бездействию. */
+    private var visitorPresent = false
 
     /** Экраны, на которые возвращает «Назад» (только устойчивые: приветствие, ответ, страница вопросов). */
     private data class Snapshot(
@@ -138,6 +176,7 @@ class MainViewModel(
     private var quickFromServer = false
 
     init {
+        _state.update { it.copy(mode = awakeMode()) }
         voice.setSessionId(sessionId)
         viewModelScope.launch {
             voice.transcripts.collect(::onTranscript)
@@ -151,6 +190,7 @@ class MainViewModel(
         voice.setLanguage(_state.value.lang) // подсказка языка серверному STT — с первой фразы
         loadQuickQuestions()
         wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
+        presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
         restartIdleTimer()
     }
 
@@ -185,7 +225,9 @@ class MainViewModel(
             Timber.i("utterance ignored in %s (len=%d)", _state.value.phase, text.length)
             return
         }
-        submit(text)
+        // Разговор голосом — лицом к лицу: из меню возвращаемся к лицу (agent).
+        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        submitInternal(text, faqId = null, input = ChatInput.VOICE, lang = t.lang)
     }
 
     /** /v1/stt не прошёл из-за связи: бейдж + «нет связи» голосом (не чаще раза в минуту и не перебивая). */
@@ -213,20 +255,58 @@ class MainViewModel(
 
     /** Касание экрана / голос: убрать заставку и перезапустить таймер бездействия. */
     fun wake() {
-        if (_state.value.screensaver) _state.update { it.copy(screensaver = false) }
+        if (_state.value.mode == ScreenMode.SLEEP) _state.update { it.copy(mode = awakeMode()) }
         restartIdleTimer()
+        if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
     }
 
-    private fun restartIdleTimer() {
-        val timeout = screensaverMillis ?: return
+    private fun restartIdleTimer(timeoutOverride: Long? = null) {
+        val timeout = timeoutOverride ?: screensaverMillis ?: return
         idleJob?.cancel()
         idleJob = viewModelScope.launch {
             delay(timeout)
             val s = _state.value
-            if (s.phase == Phase.IDLE && navJob?.isActive != true && requestJob?.isActive != true) {
+            if (s.phase == Phase.IDLE && navJob?.isActive != true && requestJob?.isActive != true && !visitorPresent) {
                 goIdle()
             } else {
                 restartIdleTimer()
+            }
+        }
+    }
+
+    /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
+    private fun awakeMode(): ScreenMode = if (chatMode() == ChatMode.AGENT) ScreenMode.FACE else ScreenMode.MENU
+
+    /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
+    fun openMenu() {
+        wake()
+        if (_state.value.mode != ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.MENU) }
+        restartMenuTimer()
+    }
+
+    /** «К роботу»: из меню обратно к лицу (только agent). */
+    fun showFace() {
+        wake()
+        menuJob?.cancel()
+        if (awakeMode() == ScreenMode.FACE && _state.value.mode == ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.FACE) }
+    }
+
+    /** Сменили режим разговора на экране диагностики. */
+    fun onSettingsChanged() {
+        val mode = _state.value.mode
+        if (mode != ScreenMode.SLEEP && mode != awakeMode()) _state.update { it.copy(mode = awakeMode()) }
+    }
+
+    private fun restartMenuTimer() {
+        menuJob?.cancel()
+        if (awakeMode() != ScreenMode.FACE) return
+        menuJob = viewModelScope.launch {
+            delay(MENU_IDLE_MILLIS)
+            val s = _state.value
+            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true) {
+                _state.update { it.copy(mode = ScreenMode.FACE) }
+            } else if (s.mode == ScreenMode.MENU) {
+                restartMenuTimer()
             }
         }
     }
@@ -237,10 +317,13 @@ class MainViewModel(
         sessionId = newSessionId()
         langChosenExplicitly = false
         val langChanged = _state.value.lang != Lang.RU
+        emotionJob?.cancel()
+        menuJob?.cancel()
+        head?.release()
         _state.update {
             it.copy(
-                lang = Lang.RU, question = null, partialQuestion = null, answer = null,
-                guideTarget = null, offline = false, screensaver = true,
+                lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
+                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null,
             )
         }
@@ -260,10 +343,13 @@ class MainViewModel(
         loadQuickQuestions()
     }
 
-    /** Вопрос текстом (поле ввода на эмуляторе, плитка вопроса) или финальный ASR: ответ — на экране ответа. */
-    fun submit(text: String) = submitInternal(text, faqId = null)
+    /** Вопрос текстом (поле ввода на эмуляторе) или финальный ASR: ответ — на экране ответа. */
+    fun submit(text: String) = submitInternal(text, faqId = null, input = ChatInput.TEXT)
 
-    private fun submitInternal(text: String, faqId: String?) {
+    /** Плитка или кнопка частого вопроса. */
+    fun submitButton(text: String) = submitInternal(text, faqId = null, input = ChatInput.BUTTON)
+
+    private fun submitInternal(text: String, faqId: String?, input: ChatInput, lang: Lang? = null) {
         val question = text.trim()
         if (question.isEmpty()) return
         // Повторное нажатие той же кнопки, пока ответ ещё готовится, — игнорируем (на роботе жали 6 раз подряд).
@@ -284,16 +370,26 @@ class MainViewModel(
             _state.update { it.copy(screen = Screen.FAQ, faqOpenId = faqId) }
         }
         requestJob = viewModelScope.launch {
-            _state.update { it.copy(question = question, partialQuestion = null, answer = null, guideTarget = null) }
-            val routed = IntentRouter.route(question)
-            Timber.d("intent %s subject=%s", routed.intent, LogSafe.redact(routed.subject))
-            when (routed.intent) {
-                IntentRouter.Intent.LOOK -> handleLook(question)
-                IntentRouter.Intent.WHERE_IS -> handleWhereIs(question, routed.subject)
-                IntentRouter.Intent.GUIDE_TO -> handleGuide(question, routed.subject)
-                IntentRouter.Intent.WHERE_AM_I -> handleWhereAmI(question)
-                IntentRouter.Intent.ASK -> handleAsk(question)
+            _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null) }
+            MoodRules.forUtterance(question)?.let { showEmotion(it) }
+            if (chatMode() == ChatMode.AGENT && !_state.value.offline) {
+                handleAgent(question, input, lang ?: _state.value.lang)
+            } else {
+                handleLegacy(question)
             }
+        }
+    }
+
+    /** Прежний путь (legacy и запасной для agent): локальные правила + `/v1/ask` / `/v1/look`. */
+    private suspend fun handleLegacy(question: String) {
+        val routed = IntentRouter.route(question)
+        Timber.d("intent %s subject=%s", routed.intent, LogSafe.redact(routed.subject))
+        when (routed.intent) {
+            IntentRouter.Intent.LOOK -> handleLook(question)
+            IntentRouter.Intent.WHERE_IS -> handleWhereIs(question, routed.subject)
+            IntentRouter.Intent.GUIDE_TO -> handleGuide(question, routed.subject)
+            IntentRouter.Intent.WHERE_AM_I -> handleWhereAmI(question)
+            IntentRouter.Intent.ASK -> handleAsk(question)
         }
     }
 
@@ -304,7 +400,8 @@ class MainViewModel(
         val answer = wf.whereIs(subject.ifBlank { question }, _state.value.lang)
             ?: return handleAsk(question)
         setBusy(null)
-        _state.update { it.copy(answer = answer.text, guideTarget = answer.guideTarget) }
+        _state.update { it.copy(answer = answer.text, subtitle = null, guideTarget = answer.guideTarget) }
+        postLocal(LocalMessage.KIND_WHERE_IS, question, answer.text, answer.place?.id)
         speakPhrases(PhraseSplitter.split(answer.text), _state.value.lang)
     }
 
@@ -313,6 +410,7 @@ class MainViewModel(
         setBusy(Phase.THINKING)
         val answer = wf.whereAmI(_state.value.lang)
         setBusy(null)
+        postLocal(LocalMessage.KIND_WHERE_AM_I, question, answer.text, answer.place?.id)
         say(answer.text, offline = _state.value.offline)
     }
 
@@ -323,9 +421,12 @@ class MainViewModel(
         val place = wf.find(subject.ifBlank { question })
         setBusy(null)
         if (place == null) {
-            say(WayPhrases.unknownPlace(_state.value.lang), offline = _state.value.offline)
+            val text = WayPhrases.unknownPlace(_state.value.lang)
+            postLocal(LocalMessage.KIND_GUIDE_TO, question, text, null, found = false)
+            say(text, offline = _state.value.offline)
             return
         }
+        postLocal(LocalMessage.KIND_GUIDE_TO, question, WayPhrases.guideStart(WayFinder.displayName(place, _state.value.lang), _state.value.lang), place.id)
         startGuide(place)
     }
 
@@ -353,8 +454,10 @@ class MainViewModel(
                 val confirmed = nav.stopNavigationAndWait(RobotGateway.STOP_CONFIRM_TIMEOUT_MS)
                 Timber.i("previous navigation stopped (confirmed=%s)", confirmed)
             }
-            _state.update { it.copy(guideTarget = null, guidingTo = name, answer = WayPhrases.guideStart(name, lang)) }
+            _state.update { it.copy(guideTarget = null, guidingTo = name, answer = WayPhrases.guideStart(name, lang), subtitle = null) }
             setBusy(Phase.NAVIGATING)
+            // Слежение головой занимает шасси — на время поездки выключаем (одно устройство — одно API).
+            head?.setNavigating(true)
             val trip = this
             // Фраза старта звучит параллельно с началом движения.
             val startSpeech = launch { voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
@@ -371,6 +474,7 @@ class MainViewModel(
                     }
                 }
             } finally {
+                head?.setNavigating(false)
                 _state.update { it.copy(guidingTo = null) }
                 setBusy(null)
             }
@@ -423,7 +527,7 @@ class MainViewModel(
             _state.update { it.copy(faqOpenId = null, question = null, answer = null, guideTarget = null) }
             return
         }
-        submitInternal(item.text, faqId = item.id)
+        submitInternal(item.text, faqId = item.id, input = ChatInput.BUTTON)
     }
 
     /** «Назад»: на предыдущий экран без повторной озвучки; истории нет — на приветствие. */
@@ -470,19 +574,287 @@ class MainViewModel(
     }
 
     /** Кнопка «Что это?». */
-    fun lookAround() = submit(LOOK_DEFAULT_QUESTION.getValue(_state.value.lang))
+    fun lookAround() = submitButton(LOOK_DEFAULT_QUESTION.getValue(_state.value.lang))
 
     fun stop() {
         wake()
         requestJob?.cancel()
         voice.stopSpeaking()
-        if (navJob?.isActive == true) {
-            navJob?.cancel()
-            robot?.stopNavigation()
-            _state.update { it.copy(guidingTo = null) }
+        if (stopNavigationOnly()) {
             viewModelScope.launch { say(WayPhrases.guideCancelled(_state.value.lang), offline = _state.value.offline) }
         }
         setBusy(null)
+    }
+
+    /** Остановить поездку (кнопка «Стоп», `action: stop` агента). true — ехали. */
+    private fun stopNavigationOnly(): Boolean {
+        if (navJob?.isActive != true) return false
+        navJob?.cancel()
+        robot?.stopNavigation()
+        _state.update { it.copy(guidingTo = null) }
+        return true
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Посетитель подошёл / ушёл (задача 14) и голова (задача 15).
+    // ---------------------------------------------------------------------------------------------
+
+    private fun onPresence(event: PresenceEvent) {
+        when (event) {
+            is PresenceEvent.Arrived -> {
+                visitorPresent = true
+                head?.follow(event.personId)
+                val wasSleeping = _state.value.mode == ScreenMode.SLEEP
+                if (wasSleeping) {
+                    // Новый посетитель — новый разговор (goIdle уже сменил session_id, но экран мог проснуться иначе).
+                    sessionId = newSessionId()
+                    langChosenExplicitly = false
+                }
+                wake()
+                showEmotion(MoodRules.visitorArrived)
+                if (event.greet && !busyNow()) greet()
+            }
+            is PresenceEvent.FaceId -> head?.follow(event.personId)
+            PresenceEvent.Left -> {
+                visitorPresent = false
+                // Ведём к точке: посетитель идёт сзади, камера его не видит — не засыпаем и голову не трогаем.
+                if (navJob?.isActive == true) return
+                head?.release()
+                if (_state.value.mode == ScreenMode.SLEEP) return
+                if (busyNow()) restartIdleTimer(LEFT_RECHECK_MILLIS) else goIdle()
+            }
+        }
+    }
+
+    private fun busyNow(): Boolean =
+        requestJob?.isActive == true || navJob?.isActive == true || _state.value.phase != Phase.IDLE
+
+    /** Приветствие подошедшему: агент (`visitor_arrived`), не ответил за 2 с или нет связи — своя фраза. */
+    private fun greet() {
+        val lang = _state.value.lang
+        requestJob?.cancel()
+        requestJob = viewModelScope.launch {
+            val agent = chatMode() == ChatMode.AGENT && !_state.value.offline
+            val outcome = if (agent) {
+                runAgentTurn(
+                    text = "", input = null, event = ChatRequest.EVENT_VISITOR_ARRIVED, lang = lang,
+                    firstPhraseMillis = chatTimeouts.greetingPhraseMillis, question = null, showThinking = false,
+                )
+            } else null
+            if (outcome == null || outcome is TurnOutcome.Fallback) {
+                say(phrases.get(PhraseKey.GREETING, lang), offline = _state.value.offline)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Агентский чат: POST /v1/chat (SSE) → эмоции, фразы, действия. Таймауты → запасной путь.
+    // ---------------------------------------------------------------------------------------------
+
+    private suspend fun handleAgent(question: String, input: ChatInput, lang: Lang) {
+        val outcome = runAgentTurn(question, input, event = null, lang, chatTimeouts.firstPhraseMillis, question)
+        if (outcome is TurnOutcome.Fallback) {
+            Timber.w("agent fallback: %s (%s)", outcome.reason, outcome.error?.kind)
+            handleLegacy(question)
+        }
+    }
+
+    /** Что озвучить или сделать по порядку событий хода (фразы и where_is/guide_to — строго друг за другом). */
+    private sealed interface TurnStep {
+        data class Say(val text: String, val lang: Lang) : TurnStep
+        class Run(val block: suspend () -> Unit) : TurnStep
+    }
+
+    /**
+     * Один ход агента. Фразы озвучиваются по мере прихода (очередь [TurnStep]), текст копится в `answer`,
+     * текущая фраза — в `subtitle`. `look` — снимок и POST frame параллельно (≤ 8 с). Отмена (новая реплика,
+     * «Стоп») обрывает SSE: сервер пишет ход с `interrupted: true`.
+     */
+    private suspend fun runAgentTurn(
+        text: String,
+        input: ChatInput?,
+        event: String?,
+        lang: Lang,
+        firstPhraseMillis: Long,
+        question: String?,
+        showThinking: Boolean = true,
+    ): TurnOutcome = coroutineScope {
+        if (showThinking) setBusy(Phase.THINKING)
+        val steps = Channel<TurnStep>(Channel.UNLIMITED)
+        val pending = AtomicInteger(0)
+        var streaming = true
+        val spoken = mutableListOf<String>()
+
+        suspend fun sayPart(part: String, partLang: Lang) {
+            spoken += part
+            _state.update { it.copy(answer = spoken.joinToString(" "), subtitle = part) }
+            setBusy(null)
+            voice.speak(listOf(part), partLang)
+            touchSession()
+        }
+        val say: suspend (String, Lang) -> Unit = { part, partLang -> sayPart(part, partLang) }
+
+        val speaker = launch {
+            for (step in steps) {
+                when (step) {
+                    is TurnStep.Say -> sayPart(step.text, step.lang)
+                    is TurnStep.Run -> step.block()
+                }
+                if (pending.decrementAndGet() == 0 && streaming && showThinking && navJob?.isActive != true) setBusy(Phase.THINKING)
+            }
+        }
+
+        fun enqueue(step: TurnStep) {
+            pending.incrementAndGet()
+            steps.trySend(step)
+        }
+
+        val scope: CoroutineScope = this
+        val handler = object : TurnHandler {
+            override fun onEmotion(name: String) {
+                Emotion.fromName(name)?.let(::setEmotion)
+            }
+
+            override fun onPhrase(text: String) {
+                PhraseSplitter.normalize(listOf(text)).forEach { enqueue(TurnStep.Say(it, lang)) }
+            }
+
+            override fun onAction(action: ChatEvent.Action, turnId: String?) {
+                Timber.i("agent action %s place=%s", action.name, action.placeId)
+                when (action.name) {
+                    ChatEvent.Action.WHERE_IS -> enqueue(TurnStep.Run { agentWhereIs(action, lang, say) })
+                    ChatEvent.Action.GUIDE_TO -> enqueue(TurnStep.Run { agentGuide(action, lang, say) })
+                    ChatEvent.Action.STOP -> stopNavigationOnly()
+                    ChatEvent.Action.LOOK -> scope.launch { sendFrame(turnId) }
+                    else -> Timber.w("unknown agent action: %s", action.name)
+                }
+            }
+        }
+
+        val request = ChatRequest(
+            sessionId = sessionId,
+            text = text,
+            lang = lang,
+            input = input,
+            event = event,
+            nearestPlaceId = nearestPlaceId(),
+            navigating = navJob?.isActive == true,
+        )
+        val outcome = try {
+            turnRunner.run(request, handler, firstPhraseMillis)
+        } finally {
+            streaming = false
+            steps.close()
+        }
+        if (outcome is TurnOutcome.Fallback) speaker.cancel() else speaker.join()
+        if (showThinking) setBusy(null)
+        when (outcome) {
+            is TurnOutcome.Completed -> {
+                _state.update { it.copy(offline = false) }
+                val doneLang = outcome.done.lang
+                if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
+                    _state.update { it.copy(lang = doneLang) }
+                    voice.setLanguage(doneLang)
+                    loadQuickQuestions()
+                }
+                if (!quickFromServer) loadQuickQuestions()
+            }
+            is TurnOutcome.Broken -> Timber.w("agent turn broken after reply: %s", outcome.reason)
+            is TurnOutcome.Fallback -> Unit
+        }
+        if (outcome !is TurnOutcome.Fallback) relaxEmotion()
+        outcome
+    }
+
+    /** `action: where_is` — робот сам считает направление по своей карте и озвучивает (в историю не пишем: ход агента). */
+    private suspend fun agentWhereIs(action: ChatEvent.Action, lang: Lang, say: suspend (String, Lang) -> Unit) {
+        val wf = wayFinder ?: return
+        val place = wf.placeFor(action.placeId, action.mapName)
+        if (place == null) {
+            say(WayPhrases.unknownPlace(lang), lang)
+            return
+        }
+        val answer = wf.describe(place, lang)
+        _state.update { it.copy(guideTarget = answer.guideTarget) }
+        PhraseSplitter.split(answer.text).forEach { say(it, lang) }
+    }
+
+    /** `action: guide_to` — агент уже получил согласие посетителя: едем (фразы в пути — как у кнопки «Проводить»). */
+    private suspend fun agentGuide(action: ChatEvent.Action, lang: Lang, say: suspend (String, Lang) -> Unit) {
+        val wf = wayFinder ?: return
+        val place = wf.placeFor(action.placeId, action.mapName)
+        if (place == null) {
+            say(WayPhrases.unknownPlace(lang), lang)
+            return
+        }
+        startGuide(place)
+    }
+
+    /** `action: look` — кадр и `POST /v1/chat/{turn_id}/frame` не дольше [ChatTimeouts.frameMillis]. */
+    private suspend fun sendFrame(turnId: String?) {
+        if (turnId == null) {
+            Timber.w("look without turn_id")
+            return
+        }
+        setEmotion(MoodRules.looking)
+        val sent = withTimeoutOrNull(chatTimeouts.frameMillis) {
+            val jpeg = captureFrame() ?: return@withTimeoutOrNull false
+            val result = backend.chatFrame(turnId, jpeg)
+            if (result is ApiResult.Failure) Timber.w("chat frame: %s", result.error)
+            result is ApiResult.Success
+        }
+        Timber.i("chat frame sent=%s", sent)
+    }
+
+    /** Снимок; на время снимка слежение головой выключено (камера и зрение робота не вместе). */
+    private suspend fun captureFrame(quality: Int = CameraGateway.DEFAULT_JPEG_QUALITY): ByteArray? {
+        head?.setCameraBusy(true)
+        return try {
+            camera.captureJpeg(quality)
+        } finally {
+            head?.setCameraBusy(false)
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Эмоции лица.
+    // ---------------------------------------------------------------------------------------------
+
+    private fun setEmotion(emotion: Emotion) {
+        emotionJob?.cancel()
+        if (_state.value.emotion == emotion) return
+        _state.update { it.copy(emotion = emotion) }
+        head?.onEmotion(emotion)
+    }
+
+    /** Эмоция события на роботе: держится [EMOTION_LINGER_MILLIS], потом спокойное лицо. */
+    private fun showEmotion(emotion: Emotion) {
+        setEmotion(emotion)
+        relaxEmotion()
+    }
+
+    private fun relaxEmotion() {
+        emotionJob?.cancel()
+        emotionJob = viewModelScope.launch {
+            delay(EMOTION_LINGER_MILLIS)
+            _state.update { it.copy(emotion = Emotion.NEUTRAL) }
+        }
+    }
+
+    /** Локальный ответ («где X», «проводи», «где я») — в историю на сервере; ошибка только в лог. */
+    private fun postLocal(kind: String, question: String, answer: String, placeId: String?, found: Boolean = true) {
+        val sid = sessionId
+        val message = LocalMessage(kind, question, answer, _state.value.lang, placeId, found)
+        viewModelScope.launch {
+            try {
+                val result = backend.postLocalMessage(sid, message)
+                if (result is ApiResult.Failure) Timber.w("history post: %s", result.error.kind)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "history post failed")
+            }
+        }
     }
 
     private suspend fun handleAsk(question: String) {
@@ -497,7 +869,7 @@ class MainViewModel(
 
     private suspend fun handleLook(question: String) {
         setBusy(Phase.LOOKING)
-        val jpeg = camera.captureJpeg()
+        val jpeg = captureFrame()
         if (jpeg == null) {
             setBusy(null)
             say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, _state.value.lang), offline = false)
@@ -508,7 +880,7 @@ class MainViewModel(
         var result = backend.look(jpeg, question, context)
         if (result is ApiResult.Failure && result.error.kind == ErrorKind.PAYLOAD_TOO_LARGE) {
             // Контракт: пересжать кадр и повторить один раз.
-            val smaller = camera.captureJpeg(quality = RECOMPRESS_QUALITY)
+            val smaller = captureFrame(quality = RECOMPRESS_QUALITY)
             if (smaller != null) result = backend.look(smaller, question, context)
         }
         if (result.isRateLimited()) {
@@ -537,12 +909,13 @@ class MainViewModel(
                     voice.setLanguage(answer.lang)
                     loadQuickQuestions()
                 }
-                _state.update { it.copy(answer = answer.text, offline = false) }
+                _state.update { it.copy(answer = answer.text, subtitle = null, offline = false) }
                 if (!quickFromServer) loadQuickQuestions()
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
             is ApiResult.Failure -> {
                 Timber.w("backend error: %s", result.error)
+                showEmotion(MoodRules.trouble)
                 if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), _state.value.lang), offline = result.error.isConnectivity())
             }
@@ -550,7 +923,7 @@ class MainViewModel(
     }
 
     private suspend fun say(text: String, offline: Boolean) {
-        _state.update { it.copy(answer = text, offline = offline) }
+        _state.update { it.copy(answer = text, subtitle = null, offline = offline) }
         speakPhrases(PhraseSplitter.split(text), _state.value.lang)
     }
 
@@ -642,6 +1015,15 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+
+        /** Меню без касаний столько — назад к лицу (agent). */
+        const val MENU_IDLE_MILLIS = 30_000L
+
+        /** Эмоция держится после ответа / события, потом лицо спокойное. */
+        const val EMOTION_LINGER_MILLIS = 6_000L
+
+        /** Посетитель ушёл, пока робот был занят: повторная проверка «можно ли спать». */
+        const val LEFT_RECHECK_MILLIS = 3_000L
         private const val MAX_HISTORY = 20
         const val NO_CONNECTION_REPEAT_MILLIS = 60_000L
         private const val PLACE_LOOKUP_TIMEOUT_MILLIS = 1_000L

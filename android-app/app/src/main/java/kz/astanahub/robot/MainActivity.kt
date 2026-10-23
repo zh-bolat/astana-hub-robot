@@ -11,7 +11,9 @@ import android.os.SystemClock
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
+import android.view.GestureDetector
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -34,6 +36,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
+import kz.astanahub.robot.chat.ChatMode
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.databinding.ActivityMainBinding
 import kz.astanahub.robot.databinding.ItemFaqRowBinding
@@ -46,6 +49,7 @@ import kz.astanahub.robot.ui.MainViewModel
 import kz.astanahub.robot.ui.MoodEmoji
 import kz.astanahub.robot.ui.Phase
 import kz.astanahub.robot.ui.Screen
+import kz.astanahub.robot.ui.ScreenMode
 import kz.astanahub.robot.ui.SubtitlePacer
 import kz.astanahub.robot.ui.TileIcons
 import kz.astanahub.robot.ui.UiScale
@@ -74,6 +78,9 @@ class MainActivity : AppCompatActivity() {
                     robot = container.robot,
                     screensaverMillis = BuildConfig.SCREENSAVER_SECONDS.takeIf { it > 0 }?.let { it * 1000L },
                     quickCache = container.quickQuestionCache,
+                    chatMode = { container.chatSettings.mode.value },
+                    presence = container.presence,
+                    head = container.head,
                 )
             }
         }
@@ -83,6 +90,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Что уже нарисовано (перерисовываем плитки и строки вопросов только при изменении). */
     private var renderedTiles: Any? = null
+    private var renderedFaceChips: Any? = null
     private var renderedFaq: Any? = null
 
     /** Плитка, которую нажал посетитель (подсвечена, пока не ушли с приветствия). */
@@ -115,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         val url = container.backend.url.value
         if (backendUrlSeen != null && backendUrlSeen != url) viewModel.refreshFromServer()
         backendUrlSeen = url
+        viewModel.onSettingsChanged() // режим разговора могли сменить в диагностике
         // Масштаб меняют на экране диагностики — применяем без перезапуска приложения.
         if (UiScale.percent(this) != appliedScale) recreate()
     }
@@ -171,6 +180,43 @@ class MainActivity : AppCompatActivity() {
             render(viewModel.state.value)
         }
 
+        // Лицо на весь экран (agent): меню — кнопкой или жестом вверх.
+        binding.faceInputRow.isVisible = !BuildConfig.IS_ROBOT
+        binding.faceSendButton.setOnClickListener { sendTyped(binding.faceInputText) }
+        binding.faceInputText.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) { sendTyped(binding.faceInputText); true } else false
+        }
+        binding.faceMenuButton.setOnClickListener { viewModel.openMenu() }
+        binding.faceButton.setOnClickListener { viewModel.showFace() }
+        binding.faceStopButton.setOnClickListener {
+            viewModel.stop()
+            showSubtitles(false)
+        }
+        binding.faceMicButton.setOnClickListener { listenOnce() }
+        binding.faceLangRu.setOnClickListener { viewModel.selectLanguage(Lang.RU) }
+        binding.faceLangKk.setOnClickListener { viewModel.selectLanguage(Lang.KK) }
+        binding.faceLangEn.setOnClickListener { viewModel.selectLanguage(Lang.EN) }
+        if (container.diagnostics.access != DiagAccess.DISABLED) {
+            binding.faceLogo.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
+        }
+        val swipe = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                val dy = (e1?.y ?: return false) - e2.y
+                if (dy > SWIPE_MIN_PX * resources.displayMetrics.density && velocityY < 0) {
+                    viewModel.openMenu()
+                    return true
+                }
+                return false
+            }
+        })
+        binding.bigFace.setOnTouchListener { v, ev ->
+            if (ev.actionMasked == MotionEvent.ACTION_UP) v.performClick()
+            swipe.onTouchEvent(ev)
+        }
+        binding.bigFace.setOnClickListener { binding.bigFace.wink() }
+        binding.saverFace.sleeping = true
+
         // Слои поверх экрана.
         binding.guideStopButton.setOnClickListener { viewModel.stop() }
         binding.screensaver.setOnClickListener { viewModel.wake() }
@@ -211,11 +257,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendTyped() {
-        val text = binding.inputText.text?.toString().orEmpty()
+    private fun sendTyped(input: android.widget.EditText = binding.inputText) {
+        val text = input.text?.toString().orEmpty()
         if (text.isBlank()) return
         viewModel.submit(text)
-        binding.inputText.text = null
+        input.text = null
     }
 
     /** «Просто скажите вопрос»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -286,6 +332,53 @@ class MainActivity : AppCompatActivity() {
         binding.screensaver.isVisible = state.screensaver
         if (state.screensaver && binding.exitOverlay.isVisible) stayIn(wake = false)
         renderExitTexts(lang)
+        renderFace(state)
+    }
+
+    /** Лицо на весь экран (FACE): статус, что слышу, кнопки частых вопросов или «Стоп». */
+    private fun renderFace(state: MainUiState) {
+        val lang = state.lang
+        val faceMode = state.mode == ScreenMode.FACE
+        binding.faceLayer.isVisible = faceMode
+        binding.face.emotion = state.emotion
+        binding.faceButton.isVisible = state.mode == ScreenMode.MENU && container.chatSettings.mode.value == ChatMode.AGENT
+        binding.faceButton.text = str(R.string.action_face, lang)
+        if (!faceMode) return
+
+        binding.bigFace.phase = state.phase
+        binding.bigFace.emotion = state.emotion
+        binding.faceStatus.text = str(if (state.phase == Phase.IDLE) R.string.face_hint else statusRes(state.phase), lang)
+        binding.faceLangRu.isSelected = lang == Lang.RU
+        binding.faceLangKk.isSelected = lang == Lang.KK
+        binding.faceLangEn.isSelected = lang == Lang.EN
+        binding.faceOffline.isVisible = state.offline
+        binding.faceOffline.text = str(R.string.offline_badge, lang)
+        binding.faceHeard.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
+        binding.faceMenuButton.text = str(R.string.action_menu, lang)
+        binding.faceInputLayout.hint = str(R.string.input_hint, lang)
+        binding.faceSendButton.text = str(R.string.action_send, lang)
+        binding.faceSendButton.isEnabled = !state.processing
+
+        val busy = state.processing || state.phase == Phase.SPEAKING || state.phase == Phase.NAVIGATING
+        binding.faceStopButton.isVisible = busy
+        binding.faceStopButton.text = str(R.string.action_stop, lang)
+        binding.faceChips.isVisible = !busy
+        val key = listOf(lang, state.quickQuestions)
+        if (renderedFaceChips != key) {
+            renderedFaceChips = key
+            val chips = binding.faceChips
+            chips.removeAllViews()
+            state.quickQuestions.take(FACE_CHIPS).forEachIndexed { i, q ->
+                val chip = TextView(this, null, 0, R.style.Hub_Chip).apply {
+                    text = q.text
+                    maxWidth = resources.getDimensionPixelSize(R.dimen.left_column_width)
+                    setOnClickListener { viewModel.submitButton(q.text) }
+                }
+                chips.addView(chip, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, resources.getDimensionPixelSize(R.dimen.chip_height),
+                ).apply { if (i > 0) marginStart = resources.getDimensionPixelSize(R.dimen.tile_gap) })
+            }
+        }
     }
 
     private fun statusRes(phase: Phase): Int = when (phase) {
@@ -336,7 +429,7 @@ class MainActivity : AppCompatActivity() {
 
         data class Tile(val icon: Int, val label: String, val onClick: () -> Unit)
         val tiles = state.quickQuestions.take(HOME_QUESTION_TILES).map { q ->
-            Tile(TileIcons.kindFor(q.text).res, q.text) { viewModel.submit(q.text) }
+            Tile(TileIcons.kindFor(q.text).res, q.text) { viewModel.submitButton(q.text) }
         } + Tile(R.drawable.ic_tile_help, str(R.string.tile_faq, lang)) { viewModel.openFaq() } +
             Tile(R.drawable.ic_tile_camera, str(R.string.action_look, lang)) { viewModel.lookAround() }
 
@@ -456,11 +549,17 @@ class MainActivity : AppCompatActivity() {
     private var subtitleLingering = false
     private var subtitleScreen: Screen? = null
 
+    /** Субтитры показаны (облачко под лицом в меню или крупные — в режиме лица). */
+    private var subtitleShown = false
+    private var subtitleFaceMode = false
+
+    private fun subtitleView(): TextView = if (subtitleFaceMode) binding.faceSubtitle else binding.subtitleText
+
     private val subtitleTick = object : Runnable {
         override fun run() {
             val elapsed = SystemClock.uptimeMillis() - subtitleStarted
             val frame = pacer.frameAt(subtitlePlan, elapsed) ?: return
-            binding.subtitleText.text = subtitleSpan(frame)
+            subtitleView().text = subtitleSpan(frame)
             if (elapsed < pacer.durationMillis(subtitlePlan)) handler.postDelayed(this, SUBTITLE_TICK_MS)
         }
     }
@@ -468,9 +567,12 @@ class MainActivity : AppCompatActivity() {
     private val subtitleHide = Runnable { showSubtitles(false) }
 
     private fun renderSubtitles(state: MainUiState) {
-        val text = state.answer
+        val text = state.subtitle ?: state.answer
+        val faceMode = state.mode == ScreenMode.FACE
+        if (subtitleShown && faceMode != subtitleFaceMode) showSubtitles(false)
         if (state.phase == Phase.SPEAKING && !text.isNullOrBlank()) {
-            if (text != subtitleFor || !binding.subtitleBox.isVisible || subtitleLingering) {
+            if (text != subtitleFor || !subtitleShown || subtitleLingering) {
+                subtitleFaceMode = faceMode
                 handler.removeCallbacks(subtitleHide)
                 subtitleFor = text
                 subtitleLingering = false
@@ -481,7 +583,7 @@ class MainActivity : AppCompatActivity() {
                 showSubtitles(true)
                 subtitleTick.run()
             }
-        } else if (binding.subtitleBox.isVisible) {
+        } else if (subtitleShown) {
             // Следующее действие (слушает, думает, ведёт, другой экран) — облачко больше не нужно.
             val interrupted = state.phase != Phase.IDLE || state.screen != subtitleScreen
             if (interrupted) showSubtitles(false) else if (!subtitleLingering) finishSubtitles()
@@ -493,9 +595,9 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(subtitleTick)
         subtitleLingering = true
         pacer.frameAt(subtitlePlan, Long.MAX_VALUE)?.let {
-            binding.subtitleText.text = SpannableStringBuilder(subtitleSpan(it)).append(' ').append(MoodEmoji.forText(subtitleFor))
+            subtitleView().text = SpannableStringBuilder(subtitleSpan(it)).append(' ').append(MoodEmoji.forText(subtitleFor))
         }
-        if (Math.random() < SUBTITLE_WINK_CHANCE) binding.face.wink()
+        if (Math.random() < SUBTITLE_WINK_CHANCE) (if (subtitleFaceMode) binding.bigFace else binding.face).wink()
         val linger = maxOf(SUBTITLE_LINGER_MIN_MS, SUBTITLE_LINGER_PER_CHAR_MS * subtitleFor.orEmpty().length)
         handler.postDelayed(subtitleHide, linger)
     }
@@ -507,10 +609,12 @@ class MainActivity : AppCompatActivity() {
             handler.removeCallbacks(subtitleTick)
             handler.removeCallbacks(subtitleHide)
         }
-        binding.subtitleBox.isVisible = show
+        subtitleShown = show
+        binding.subtitleBox.isVisible = show && !subtitleFaceMode
+        binding.faceSubtitle.isVisible = show && subtitleFaceMode
         // Пока есть облачко, подпись статуса и «что слышу» не нужны: место под лицом одно.
-        binding.statusText.isVisible = !show
-        binding.heardText.isVisible = !show
+        binding.statusText.isVisible = !(show && !subtitleFaceMode)
+        binding.heardText.isVisible = !(show && !subtitleFaceMode)
     }
 
     private fun subtitleSpan(frame: SubtitlePacer.Frame): CharSequence {
@@ -611,6 +715,8 @@ class MainActivity : AppCompatActivity() {
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
         const val HOME_QUESTION_TILES = 4
+        const val FACE_CHIPS = 3
+        const val SWIPE_MIN_PX = 120
         const val TILES_PER_ROW = 3
         const val ANSWER_LINES = 3
         const val FAQ_LINES = 2

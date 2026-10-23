@@ -8,6 +8,10 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.Flow
+import kz.astanahub.robot.chat.ChatEvent
+import kz.astanahub.robot.chat.ChatRequest
+import kz.astanahub.robot.chat.OkHttpChatClient
 import kz.astanahub.robot.core.Lang
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,6 +31,8 @@ data class BackendTimeouts(
     val referenceMillis: Long = 5_000,
     val sttMillis: Long = 6_000,
     val ttsMillis: Long = 5_000,
+    /** Кадр для `look` агента: контракт — в течение 8 с. */
+    val frameMillis: Long = 8_000,
 )
 
 /**
@@ -111,6 +117,35 @@ class RetrofitBackendApi(
     override fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession =
         OkHttpLiveSttSession(client, baseUrl, token, lang, sessionId)
 
+    private val chatClient by lazy { OkHttpChatClient(baseUrl, token, client) }
+
+    override fun chat(request: ChatRequest): Flow<ChatEvent> = chatClient.chat(request)
+
+    override suspend fun chatFrame(turnId: String, jpeg: ByteArray): ApiResult<Unit> {
+        val image = MultipartBody.Part.createFormData("image", "frame.jpg", jpeg.toRequestBody(JPEG_MEDIA_TYPE))
+        return guard(timeouts.frameMillis) {
+            val response = service.chatFrame(turnId, image)
+            response.body()?.close()
+            if (response.isSuccessful) ApiResult.Success(Unit) else ApiResult.Failure(parseError(response))
+        }
+    }
+
+    override suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =
+        guard(timeouts.referenceMillis) {
+            val dto = LocalMessageDto(
+                kind = message.kind,
+                question = clipQuestion(message.question),
+                answer = message.answer.take(MAX_LOCAL_ANSWER_CHARS),
+                lang = message.lang.code,
+                placeId = message.placeId,
+                found = message.found,
+                interrupted = message.interrupted,
+            )
+            val response = service.postMessage(sessionId, dto)
+            response.body()?.close()
+            if (response.isSuccessful) ApiResult.Success(Unit) else ApiResult.Failure(parseError(response))
+        }
+
     /** Сервер с FakeSpeechProvider отдаёт тишину и `X-Speech-Provider: fake` — считаем TTS недоступным. */
     private fun rejectFakeSpeech(response: Response<*>): BackendError? =
         if (response.headers()[SPEECH_PROVIDER_HEADER].equals("fake", ignoreCase = true)) {
@@ -181,6 +216,9 @@ class RetrofitBackendApi(
 
         /** Контракт: `question` — 1–500 символов. */
         const val MAX_QUESTION_CHARS = 500
+
+        /** Контракт `/sessions/…/messages`: `answer` — 1–2000 символов. */
+        const val MAX_LOCAL_ANSWER_CHARS = 2000
 
         /** Обрезка до [MAX_QUESTION_CHARS] без разрыва суррогатной пары (эмодзи). */
         fun clipQuestion(question: String): String {

@@ -22,6 +22,24 @@ class WayFinder(
     /** null — место не узнали (тогда спрашиваем сервер, если он есть). */
     suspend fun whereIs(query: String, lang: Lang): WayAnswer? {
         val place = find(query) ?: return null
+        return describe(place, lang)
+    }
+
+    /**
+     * Место из `action` агента (`place_id`, `map_name`): сначала по id в кеше мест, потом по имени точки карты.
+     * Точки нет в кеше мест, но она есть на карте робота — место без переводов (имя = map_name).
+     */
+    suspend fun placeFor(placeId: String?, mapName: String?): Place? {
+        val places = repository.places()
+        placeId?.let { id -> places.firstOrNull { it.id == id } }?.let { return it }
+        mapName?.let { m -> places.firstOrNull { it.mapName.equals(m, ignoreCase = true) } }?.let { return it }
+        val name = mapName ?: placeId ?: return null
+        val point = repository.mapPlaces().firstOrNull { it.name.equals(name, ignoreCase = true) } ?: return null
+        return Place(placeId ?: point.name, point.name, emptyMap(), emptyList(), emptyMap())
+    }
+
+    /** «Где [place]»: направление и расстояние от текущей позиции робота. */
+    suspend fun describe(place: Place, lang: Lang): WayAnswer {
         val name = displayName(place, lang)
         val map = repository.mapPlaces()
         val point = repository.findOnMap(place, map)

@@ -4,7 +4,9 @@ import android.app.Application
 import kz.astanahub.robot.agent.AgentMicControl
 import kz.astanahub.robot.agent.AgentVoiceGateway
 import kz.astanahub.robot.agent.HubAppAgent
+import kz.astanahub.robot.robotapi.PersonApiGateway
 import kz.astanahub.robot.robotapi.RobotApiGateway
+import kz.astanahub.robot.robotapi.RobotHeadGateway
 import kz.astanahub.robot.robotapi.SurfaceShareCameraGateway
 
 /**
@@ -21,6 +23,8 @@ object FlavorGateways {
             robot = RobotApiGateway(app),
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,
+            persons = PersonApiGateway(),
+            head = RobotHeadGateway(),
         )
     }
 }

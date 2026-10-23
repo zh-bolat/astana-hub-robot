@@ -23,6 +23,7 @@ class LocalizedText(context: Context) : Phrases {
             PhraseKey.NOT_HEARD -> R.string.phrase_not_heard
             PhraseKey.ONE_MOMENT -> R.string.phrase_one_moment
             PhraseKey.CAMERA_UNAVAILABLE -> R.string.phrase_camera_unavailable
+            PhraseKey.GREETING -> R.string.phrase_greeting
         },
         lang,
     )

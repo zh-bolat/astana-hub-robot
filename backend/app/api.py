@@ -342,7 +342,9 @@ async def session_messages(
     messages: list[ChatMessage] = []
     for row in rows:
         common = {
-            "kind": row.endpoint,
+            # Ходы агентского чата (endpoint=chat) в истории — как ответ сервера (kind=ask):
+            # в контракте истории значения chat нет
+            "kind": "ask" if row.endpoint == "chat" else row.endpoint,
             "lang": row.lang,
             "created_at": row.created_at.isoformat(),
             "request_id": row.request_id,

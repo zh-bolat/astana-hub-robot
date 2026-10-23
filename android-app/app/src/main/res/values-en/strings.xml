@@ -41,4 +41,8 @@
     <string name="exit_sub">The robot will stop answering visitors.</string>
     <string name="exit_yes">Exit</string>
     <string name="exit_no">Stay</string>
+    <string name="phrase_greeting">Hello! I am the Astana Hub assistant. Ask me about the hub or where to go.</string>
+    <string name="action_menu">Menu</string>
+    <string name="action_face">Back to robot</string>
+    <string name="face_hint">Just ask, I am listening</string>
 </resources>

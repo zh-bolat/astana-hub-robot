@@ -21,6 +21,7 @@ import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.RetrofitBackendApi
 import kz.astanahub.robot.backend.BackendUrlPolicy
+import kz.astanahub.robot.chat.ChatMode
 import kz.astanahub.robot.core.LogSafe
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.databinding.ActivityDiagnosticsBinding
@@ -187,6 +188,29 @@ class DiagnosticsActivity : AppCompatActivity() {
                     else "getPosition: x=${"%.2f".format(pose.x)} y=${"%.2f".format(pose.y)} theta=${"%.2f".format(pose.theta)} рад")
             }
         }
+        // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
+        val chat = container.chatSettings
+        binding.chatModeGroup.check(if (chat.mode.value == ChatMode.AGENT) R.id.chatModeAgent else R.id.chatModeLegacy)
+        binding.chatModeGroup.addOnButtonCheckedListener { _, id, checked ->
+            if (!checked) return@addOnButtonCheckedListener
+            val mode = if (id == R.id.chatModeAgent) ChatMode.AGENT else ChatMode.LEGACY
+            chat.set(mode)
+            log("Разговор: ${mode.code}")
+        }
+
+        // Эмулятор: подошёл / ушёл человек (на роботе — PersonApi, кнопок нет).
+        val simulator = container.presenceSimulator
+        binding.presenceLabel.visibility = if (simulator == null) View.GONE else View.VISIBLE
+        binding.presenceRow.visibility = if (simulator == null) View.GONE else View.VISIBLE
+        binding.personArrive.setOnClickListener {
+            simulator?.arrive()
+            log("Посетитель: подошёл (уйдёт сам через 90 с)")
+        }
+        binding.personLeave.setOnClickListener {
+            simulator?.leave()
+            log("Посетитель: ушёл (заснёт через ~15 с)")
+        }
+
         binding.refreshPlaces.setOnClickListener {
             lifecycleScope.launch {
                 container.places.invalidateMap() // перечитать и точки карты, не ждать TTL

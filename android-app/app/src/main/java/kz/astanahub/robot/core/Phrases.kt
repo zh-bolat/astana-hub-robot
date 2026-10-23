@@ -6,6 +6,8 @@ enum class PhraseKey {
     NOT_HEARD,
     ONE_MOMENT,
     CAMERA_UNAVAILABLE,
+    /** Приветствие подошедшему, если агент не ответил за 2 с или нет связи. */
+    GREETING,
 }
 
 fun interface Phrases {

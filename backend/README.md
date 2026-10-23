@@ -171,6 +171,67 @@ Eval использует провайдер из `.env`: без ключа — 
   Модели — `OPENROUTER_MODEL` / `OPENROUTER_FALLBACK_MODELS` / `OPENROUTER_VISION_MODEL`, повтор и резерв — тот же
   `run_with_fallback`. С `STT_PROVIDER=openrouter` и `TTS_PROVIDER=openrouter` весь сервер работает на одном ключе.
 
+## Агентский чат (/v1/chat)
+
+Контракт — `docs/api-contract.md` («POST /v1/chat»), стек — ADR `docs/decisions/0001-agent-chat-stack.md`:
+**OpenAI Agents SDK** (`openai-agents`) + модель через **`LitellmModel`** (`litellm`). Код — `app/agent/`,
+эндпоинты — `app/chat_api.py`.
+
+| Модуль | Что делает |
+|---|---|
+| `service.py` | ход: история → `Runner.run_streamed` → SSE `turn / emotion / phrase / action / done / error`, фильтр, лимиты, деградация, запись хода |
+| `tools.py` | `search_knowledge`, `find_place` (на сервере), `where_is` / `guide_to` / `stop` (→ SSE `action`), `look` (кадр → vision) |
+| `knowledge.py` | поиск по базе знаний и местам, проверка согласия на проводы (без SDK — легко тестировать) |
+| `prompts.py` | инструкции агента (RU/KZ/EN, 1–3 предложения, факты только из тулов, блок безопасности из `app/prompts.py`) |
+| `phrases.py` | сборка фраз из стрима и разбор служебных меток `[happy]`, `[unknown]` |
+| `memory.py` | память: таблица `messages` (последние `AGENT_HISTORY_MESSAGES`), кеш процесса, запись фоном |
+| `models.py` | `LitellmModel` для `AGENT_MODEL` + `AGENT_FALLBACK_MODELS` (ключи — из настроек, явно) |
+| `context.py` | контекст хода для тулов; `FrameBroker` — ожидание кадра по `turn_id` (только в памяти) |
+
+- **Трассировка SDK выключена всегда**: `set_tracing_disabled(True)` при импорте `app.agent` и при старте
+  приложения, `RunConfig(tracing_disabled=True)` на каждом ходе; `OPENAI_AGENTS_DISABLE_TRACING=false` игнорируется
+  (тест `test_tracing_disabled`). Ключ OpenAI не нужен. Тексты не пишутся и в debug-логи SDK.
+- **Модели:** строки LiteLLM, ключ по префиксу (`anthropic/` → `ANTHROPIC_API_KEY`, `gemini/` → `GEMINI_API_KEY`,
+  `openrouter/` → `OPENROUTER_API_KEY`); модель без ключа пропускается. Для Gemini 3 передаётся
+  `reasoning_effort=minimal` (+ `allowed_openai_params`: LiteLLM 1.83 иначе молча выбрасывает параметр и модель
+  «думает» по умолчанию — секунды задержки). Для `anthropic/` включается кеш промпта
+  (`cache_control_injection_points` на system) — на Claude ещё не проверен (нет ключа).
+- **Тулы:** не больше `AGENT_MAX_TOOL_CALLS` (3) за ход — после лимита тулы скрыты от модели (`is_enabled`), лишний
+  параллельный вызов получает «лимит исчерпан»; `max_turns` = лимит + 2. `where_is`/`guide_to` проверяют, что
+  `place_id` есть среди активных мест; `guide_to` — только при согласии: посетитель сам просит проводить в этой
+  реплике («проводи», «take me», «апарыңыз»…) или робот в прошлой реплике предложил проводить, а посетитель ответил
+  согласием («да», «иә», «yes»…; отказ «нет/не надо/жоқ» — не согласие). Без согласия модель получает `no_consent`.
+- **look:** тул сразу отдаёт роботу фразу «секунду, посмотрю» (если ещё ничего не сказано) и `action look`, ждёт
+  `POST /v1/chat/{turn_id}/frame` до `AGENT_LOOK_FRAME_TIMEOUT_S` (8 с; кадр — в future в памяти, на диск и в логи не
+  попадает), отдаёт его существующему vision-провайдеру (`/look`-промпт) и возвращает агенту описание. Кадр не
+  пришёл → агент получает `no_frame` и говорит, что не получилось. Ожидание кадра — в памяти процесса: сервер
+  должен работать одним воркером uvicorn (так и есть в Dockerfile).
+- **Эмоции:** `thinking` — сразу после `turn`. Эмоцию ответа модель ставит меткой в начале текста (`[happy] …`),
+  сервер вырезает метку и шлёт `emotion` перед первой фразой: выбор эмоции — в том же ответе, без лишнего запроса и
+  задержки. Нет метки — `neutral`; заблокированный фильтром ответ — `neutral`; запасное приветствие — `happy`.
+  Метка `[unknown]` — в базе ответа нет: в логе `found=false`, `category=out_of_scope` (вопрос «без ответа»).
+- **Фразы:** пофразно по мере стрима (`≤ 300` символов), выходной фильтр `app/safety.py` на каждую фразу, лимит
+  4 фразы / 600 символов; при срабатывании фильтра действия хода отменяются.
+- **Надёжность (выбранный вариант — деградация внутри того же потока, а не `error`):**
+  1. модель упала до первого события роботу → следующая из `AGENT_FALLBACK_MODELS`;
+  2. все упали или нет ни фразы, ни действия за `AGENT_FIRST_PHRASE_TIMEOUT_S` (5 с) → в том же SSE-потоке отвечает
+     логика `/v1/ask` (`AnswerService.ask_stream`, свой провайдер с повтором/хеджем; в логе — строка `endpoint=ask`),
+     для `visitor_arrived` — готовое приветствие; `done.tools = []`;
+  3. `error` — только если и запасной путь не ответил;
+  4. сбой/таймаут хода (`AGENT_TURN_TIMEOUT_S`) после того, как фразы ушли роботу → `done` с тем, что сказано
+     (отложенные действия не отправляются).
+- **Обрыв клиентом** (посетитель перебил): генератор SSE закрывается → `result.cancel()` + отмена задачи стрима,
+  ожидание кадра закрывается; ход пишется с `interrupted=true` (если хоть одна фраза ушла).
+- **Память и лог:** фоном (как лог вопросов): `sessions` (touch), `messages` — реплика (`role=visitor`, в `tool_args`
+  — `event`/`input`), каждый вызов тула (`role=tool`, `tool_name`, `tool_args` = аргументы, `content` = результат
+  ≤ 500 символов), ответ (`role=assistant`, в `tool_args` — `request_id`, `turn_id`, `actions`, `emotion`, `category`,
+  `provider`, `interrupted`). Миграция не понадобилась. Лог вопросов — `endpoint=chat` (приветствия
+  `visitor_arrived` не пишутся). В `GET /v1/sessions/{id}/messages` такие ходы отдаются с `kind=ask`.
+  Агент видит последние `AGENT_HISTORY_MESSAGES` реплик (кеш процесса; после рестарта — из БД, таймаут 0,7 с —
+  без истории, если БД не ответила).
+- **Проверка на injection:** `uv run python -m eval.run_injection --chat` — тот же набор через агента (провал — в т.ч.
+  любое `action` в ответе на инъекцию); в тестах — прогон с «попугаем», который повторяет реплику дословно.
+
 ## Голос через сервер (/v1/stt, /v1/tts)
 
 STT и TTS выбираются раздельно (`app/speech/`):

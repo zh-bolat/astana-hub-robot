@@ -3,6 +3,7 @@ package kz.astanahub.robot.backend
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kz.astanahub.robot.chat.ChatRequest
 import kz.astanahub.robot.core.Lang
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import timber.log.Timber
@@ -45,6 +46,10 @@ class SwitchableBackendApi(
     override suspend fun stt(wav: ByteArray, lang: Lang?, sessionId: String) = delegate.stt(wav, lang, sessionId)
     override suspend fun tts(text: String, lang: Lang) = delegate.tts(text, lang)
     override fun openLiveStt(lang: Lang?, sessionId: String) = delegate.openLiveStt(lang, sessionId)
+    override fun chat(request: ChatRequest) = delegate.chat(request)
+    override suspend fun chatFrame(turnId: String, jpeg: ByteArray) = delegate.chatFrame(turnId, jpeg)
+    override suspend fun postLocalMessage(sessionId: String, message: LocalMessage) =
+        delegate.postLocalMessage(sessionId, message)
 
     companion object {
         /**
