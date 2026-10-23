@@ -10,6 +10,7 @@ import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /** Запрос без заголовка Authorization (контракт: `/health` вызывается без токена). */
@@ -49,4 +50,12 @@ internal interface HubService {
     /** Тело — audio/mpeg; Retrofit буферизует ResponseBody целиком (без @Streaming). */
     @POST("tts")
     suspend fun tts(@Body body: TtsRequestDto): Response<ResponseBody>
+
+    /** Кадр по запросу агента; ответ 204 без тела. */
+    @Multipart
+    @POST("chat/{turnId}/frame")
+    suspend fun chatFrame(@Path("turnId") turnId: String, @Part image: MultipartBody.Part): Response<ResponseBody>
+
+    @POST("sessions/{sessionId}/messages")
+    suspend fun postMessage(@Path("sessionId") sessionId: String, @Body body: LocalMessageDto): Response<ResponseBody>
 }
