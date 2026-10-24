@@ -280,7 +280,7 @@ WebSocket вместо `POST /v1/stt`: звук уходит на сервер �
 ### `GET /v1/admin/metrics?hours=24` — сводка (только админ)
 Заголовок `Authorization: Bearer <ADMIN_TOKEN>` (отдельный от токена робота, в `.env` сервера). Ответ — p50/p95/count по
 этапам: робот (`stt_final_ms`, `first_audio_ms`, …) и сервер (`stt_ms`, `llm_first_token_ms` и `llm_total_ms` по
-моделям, `tts_first_byte_ms` и `tts_total_ms` по языкам и провайдерам, доля фолбэков), за последние `hours` часов и по часам.
+моделям, `stt_live_final_ms` — live-распознавание от конца речи до финала, `tts_first_byte_ms` и `tts_total_ms` по языкам и провайдерам, доля фолбэков), за последние `hours` часов и по часам.
 `GET /v1/admin/metrics/page` — простая HTML-страница с этой сводкой (токен вводится на странице, в URL не передаётся).
 
 ## Ошибки
