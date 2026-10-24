@@ -32,6 +32,7 @@ from app.schemas import (
     AnswerResponse,
     AskRequest,
     ChatMessage,
+    ChatRequest,
     ChatResponse,
     ErrorResponse,
     HealthResponse,
@@ -172,8 +173,9 @@ async def ask(body: AskRequest, request: Request):
                 "text/event-stream": {
                     "schema": {
                         "type": "string",
-                        "description": "SSE: phrase {text} и action {type, place_id} по мере готовности, "
-                        "затем done {request_id, lang, found, sources, actions} или error",
+                        "description": "SSE: emotion {name} перед первой phrase; phrase {text} и action "
+                        "{type, place_id} по мере готовности, затем done {request_id, lang, found, "
+                        "sources, actions} или error",
                     }
                 },
             }
@@ -181,7 +183,7 @@ async def ask(body: AskRequest, request: Request):
     },
     dependencies=[Depends(require_robot)],
 )
-async def chat(body: AskRequest, request: Request):
+async def chat(body: ChatRequest, request: Request):
     """Агентский чат: модель помнит разговор и сама выбирает действие робота."""
     service: ChatService = request.app.state.chat
     request_id = _request_id()
@@ -383,7 +385,9 @@ async def session_messages(
     messages: list[ChatMessage] = []
     for row in rows:
         common = {
-            "kind": row.endpoint,
+            # Ходы агентского чата (endpoint=chat) в истории — как ответ сервера (kind=ask):
+            # в контракте истории значения chat нет
+            "kind": "ask" if row.endpoint == "chat" else row.endpoint,
             "lang": row.lang,
             "created_at": row.created_at.isoformat(),
             "request_id": row.request_id,

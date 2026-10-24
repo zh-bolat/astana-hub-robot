@@ -100,8 +100,9 @@ Eval использует провайдер из `.env`: без ключа — 
 | `GEMINI_THINKING_LEVEL` | `minimal` | размышления Gemini 3.x; `GEMINI_THINKING_BUDGET` — только для 2.5 |
 | `ASK_TIMEOUT_S`, `LOOK_TIMEOUT_S` | 6.5, 11 | бюджет сервера на ответ LLM, включая повтор и резерв; иначе `504 timeout` |
 | `CHAT_PROVIDER` | `auto` | агент `/v1/chat`: `openrouter` / `off`; `auto` = openrouter при `OPENROUTER_API_KEY`, иначе `/chat` отвечает как `/ask` |
-| `AGENT_MODEL` | `anthropic/claude-haiku-5.5` | модель агента на OpenRouter |
+| `AGENT_MODEL` | `anthropic/claude-haiku-5.5` | модель агента на OpenRouter (старый вид `openrouter/anthropic/…` тоже принимается) |
 | `AGENT_TIMEOUT_S`, `AGENT_TOTAL_S` | 6.5, 15 | до первой фразы (включая вызовы тулов) и на весь ответ агента |
+| `AGENT_GREETING_TIMEOUT_S` | 1.8 | `visitor_arrived`: дольше — готовое приветствие (робот ждёт 2 с) |
 | `AGENT_MAX_TURNS`, `AGENT_HISTORY_MESSAGES` | 4, 12 | запросов к модели на реплику; сколько последних сообщений разговора видит агент |
 | `ASK_STREAM_TOTAL_S` | 12 | SSE /ask: предел на весь стрим |
 | `ANSWER_MODE` | `open` | `open` — база, иначе ответ модели из общих знаний; `strict` — только база + small talk |
@@ -196,6 +197,19 @@ Eval использует провайдер из `.env`: без ключа — 
 - Ошибка провайдера или лимит шагов до первой фразы → ответ даёт `/ask` (`agent_failed_fallback` в логе).
   В логе вопросов `endpoint=chat`, категории `agent` / `small_talk` / `out_of_scope` / `blocked`; строка
   `agent_run` в логе — токены, попадание в кеш, тулы, время до первой фразы.
+- Трассировка: `set_tracing_disabled(True)` при импорте `app.agent` и в `create_app`, `RunConfig(tracing_disabled=True)`
+  на каждом запуске; `OPENAI_AGENTS_DISABLE_TRACING=false` не действует (тест `test_tracing_disabled`).
+- **Дополнения v1.1 (лицо робота):**
+  - эмоция — модель начинает ответ тегом (`[happy] …`), сервер его вырезает и шлёт `emotion {name}` перед первой
+    фразой (в JSON — поле `emotion`); без тега — `neutral`, small talk — `happy`, `look` — `thinking`, ответ `/ask` —
+    `neutral`. Лишнего запроса к модели нет;
+  - `event: "visitor_arrived"` (`question` может быть пустым) — короткое приветствие на языке `lang`, действия
+    игнорируются; пишется в память (`messages`, вместо реплики — «(посетитель подошёл к роботу)»), в журнал вопросов —
+    нет. Нет агента, ошибка или дольше `AGENT_GREETING_TIMEOUT_S` → готовое приветствие.
+- Устаревшие `AGENT_ENABLED` (только `false` при `CHAT_PROVIDER=auto` → `off`) и `AGENT_FALLBACK_MODELS` (не читается)
+  остались от агента на LiteLLM; `litellm` больше не нужен.
+- Injection: `uv run python -m eval.run_injection --chat` — набор через `/v1/chat` (провал — в т.ч. любое `action`);
+  `--chat --fake` — без сети (`CHAT_PROVIDER=off`); в тестах — прогон с моделью-«попугаем».
 
 ## Голос через сервер (/v1/stt, /v1/tts)
 

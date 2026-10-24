@@ -120,12 +120,17 @@ class Settings(BaseSettings):
     agent_max_tokens: int = 400
     # До первой фразы (включая вызовы тулов), сек; робот ждёт ответ 8 с
     agent_timeout_s: float = 6.5
+    # visitor_arrived: до приветствия модели, сек; дольше — готовое приветствие (робот ждёт 2 с)
+    agent_greeting_timeout_s: float = 1.8
     # Весь ответ агента, сек
     agent_total_s: float = 15.0
     # Запросов к модели на одну реплику (ответ + вызовы тулов)
     agent_max_turns: int = 4
     # Сколько последних сообщений разговора агент видит (память — таблица messages)
     agent_history_messages: int = 12
+    # Устаревшее (агент на LiteLLM): AGENT_ENABLED=false при CHAT_PROVIDER=auto = off; иначе игнорируется.
+    # AGENT_FALLBACK_MODELS больше не читается (резерв агента — ответ как /ask).
+    agent_enabled: bool | None = None
     # ElevenLabs
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
@@ -196,6 +201,12 @@ class Settings(BaseSettings):
     def _empty_to_none(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
 
+    @field_validator("agent_model", mode="before")
+    @classmethod
+    def _agent_model_openrouter_id(cls, v):
+        # Совместимость со строками LiteLLM: openrouter/anthropic/… → anthropic/… (id OpenRouter)
+        return v.strip().removeprefix("openrouter/") if isinstance(v, str) else v
+
     def gemini_fallback_list(self) -> list[str]:
         return _split(self.gemini_fallback_models)
 
@@ -239,6 +250,8 @@ class Settings(BaseSettings):
     def resolved_chat_provider(self) -> str:
         if self.chat_provider != "auto":
             return self.chat_provider
+        if self.agent_enabled is False:
+            return "off"
         return "openrouter" if self.openrouter_api_key else "off"
 
     def resolved_stt_stream_provider(self) -> str:

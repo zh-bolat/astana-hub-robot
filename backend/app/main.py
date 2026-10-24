@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
+from app.agent import ensure_tracing_disabled
 from app.agent.service import ChatService, build_chat_client
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
@@ -179,6 +180,8 @@ def create_app(
     chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт)."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    # ADR 0001: трассировка Agents SDK выключена всегда (тексты посетителей не уходят в OpenAI)
+    ensure_tracing_disabled()
     if not settings.robot_token.get_secret_value():
         raise RuntimeError("ROBOT_TOKEN is not set (see backend/.env.example)")
     init_sentry(settings)

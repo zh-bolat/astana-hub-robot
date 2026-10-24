@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
+from agents import set_tracing_disabled
+from agents.tracing import TracingProcessor, add_trace_processor, get_trace_provider
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,10 +19,11 @@ from app.agent.service import build_chat_client
 from app.config import Settings
 from app.db.models import MessageRow
 from app.prompts import REFUSALS
-from app.schemas import AskRequest
+from app.schemas import ChatRequest
 from tests.conftest import AUTH, SESSION, ask_body, logged
 
 SSE = {**AUTH, "Accept": "text/event-stream"}
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
 
 
 def say(text: str) -> dict:
@@ -110,7 +114,8 @@ def _sse(turn: dict) -> bytes:
     return (body + "data: [DONE]\n\n").encode()
 
 
-def events(client, question: str, **extra) -> list[tuple[str, dict]]:
+def events(client, question: str, with_emotion: bool = False, **extra) -> list[tuple[str, dict]]:
+    """События SSE; emotion (v1.1) — только с with_emotion=True."""
     with client.stream("POST", "/v1/chat", json=ask_body(question, **extra), headers=SSE) as r:
         assert r.status_code == 200
         body = r.read().decode()
@@ -118,7 +123,7 @@ def events(client, question: str, **extra) -> list[tuple[str, dict]]:
     for block in body.strip().split("\n\n"):
         lines = dict(line.split(": ", 1) for line in block.splitlines())
         out.append((lines["event"], json.loads(lines["data"])))
-    return out
+    return out if with_emotion else [e for e in out if e[0] != "emotion"]
 
 
 def messages(client) -> list[tuple[str, str, str | None]]:
@@ -357,7 +362,8 @@ def test_cut_stream_is_logged_as_interrupted(make_client):
     chat = client.app.state.chat
 
     async def run() -> None:
-        stream = chat.chat_stream(AskRequest(**ask_body("Где кафе?", lang="ru")), "req_cut")
+        stream = chat.chat_stream(ChatRequest(**ask_body("Где кафе?", lang="ru")), "req_cut")
+        assert (await stream.__anext__())[0] == "emotion"
         assert (await stream.__anext__())[0] == "phrase"
         await stream.aclose()
 
@@ -409,3 +415,234 @@ def test_narration_is_not_spoken(make_client):
     evs = events(client, "Проводи меня", lang="ru")
 
     assert [d["text"] for e, d in evs if e == "phrase"] == ["Куда вас проводить?"]
+
+
+# ---------- v1.1: эмоции ----------
+
+
+def test_emotion_tag_is_cut_and_sent_before_first_phrase(make_client):
+    model = FakeModel(say("[happy] Рада помочь! Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "happy"})
+    assert [d["text"] for e, d in evs if e == "phrase"] == ["Рада помочь!", "Кафе на первом этаже."]
+    assert [e for e, _ in evs].count("emotion") == 1
+    assert "[happy]" not in logged(client)[0].answer
+
+
+def test_no_emotion_tag_is_neutral(make_client):
+    model = FakeModel(say("Кафе на первом этаже. [sad] Ещё одна фраза."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "neutral"})
+    assert all("[sad]" not in d["text"] for e, d in evs if e == "phrase")
+
+
+def test_emotion_after_action_before_phrase(make_client):
+    model = FakeModel(
+        call("guide_to", {"place_id": "place:cafe"}), say("[excited] Провожаю вас в кафе.")
+    )
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Проводи в кафе", lang="ru", with_emotion=True)
+
+    assert [e for e, _ in evs] == ["action", "emotion", "phrase", "done"]
+    assert evs[1][1] == {"name": "excited"}
+
+
+def test_emotion_in_json_mode(make_client):
+    model = FakeModel(say("[surprised] Ого, хороший вопрос! Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+
+    body = client.post("/v1/chat", json=ask_body("Где кафе?", lang="ru"), headers=AUTH).json()
+
+    assert body["emotion"] == "surprised"
+    assert body["phrases"][0] == "Ого, хороший вопрос!"
+
+
+def test_emotion_on_fallback_and_look(make_client, client):
+    evs = events(client, "Какой пароль от Wi-Fi?", lang="ru", with_emotion=True)
+    assert evs[0] == ("emotion", {"name": "neutral"})  # CHAT_PROVIDER=off → ответ /ask
+
+    looker = chat_client(make_client, FakeModel(call("look")))
+    evs = events(looker, "Что это?", lang="ru", with_emotion=True)
+    assert [e for e, _ in evs][:3] == ["action", "emotion", "phrase"]
+    assert evs[1][1] == {"name": "thinking"}
+
+
+# ---------- v1.1: visitor_arrived ----------
+
+
+def test_visitor_arrived_greeting(make_client):
+    model = FakeModel(say("[happy] Здравствуйте! Чем могу помочь?"), say("Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "", lang="ru", event="visitor_arrived", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "happy"})
+    assert [d["text"] for e, d in evs if e == "phrase"] == ["Здравствуйте!", "Чем могу помочь?"]
+    assert evs[-1][1]["actions"] == []
+    turn = model.requests[0]["messages"][-1]["content"]
+    assert "подошёл посетитель" in turn and "ru (русский)" in turn
+    assert "<visitor_message>" not in turn
+    assert logged(client) == []  # не в журнал вопросов
+    assert [m[0] for m in messages(client)] == ["visitor", "assistant"]  # но в память
+    # следующий вопрос видит приветствие в истории
+    events(client, "Где кафе?", lang="ru")
+    convo = model.requests[1]["messages"][1:]
+    assert [m["role"] for m in convo] == ["user", "assistant", "user"]
+    assert convo[1]["content"] == "Здравствуйте! Чем могу помочь?"
+
+
+def test_visitor_arrived_ignores_actions(make_client):
+    model = FakeModel(call("guide_to", {"place_id": "place:cafe"}), say("Здравствуйте!"))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "", lang="en", event="visitor_arrived")
+
+    assert [e for e, _ in evs] == ["phrase", "done"]
+    assert evs[-1][1]["actions"] == []
+
+
+def test_visitor_arrived_without_agent_uses_ready_greeting(client):
+    evs = events(client, "", lang="kk", event="visitor_arrived", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "happy"})
+    assert evs[1][1]["text"].startswith("Сәлеметсіз бе")
+    assert evs[-1][1]["lang"] == "kk" and evs[-1][1]["actions"] == []
+    assert logged(client) == []
+
+
+def test_visitor_arrived_slow_model_uses_ready_greeting(make_client):
+    model = FakeModel(say("Поздно."), delay_s=2)
+    client = chat_client(make_client, model, agent_greeting_timeout_s=0.3)
+
+    evs = events(client, "", lang="en", event="visitor_arrived")
+
+    assert evs[0] == ("phrase", {"text": "Hello!"})
+    assert evs[-1][0] == "done"
+
+
+def test_empty_question_without_event_is_rejected(client):
+    r = client.post("/v1/chat", json=ask_body(""), headers=AUTH)
+    assert r.status_code == 400
+    r = client.post("/v1/chat", json=ask_body("hi", event="unknown"), headers=AUTH)
+    assert r.status_code == 400
+
+
+def test_chat_turn_is_ask_kind_in_session_history(make_client):
+    client = chat_client(make_client, FakeModel(say("Кафе на первом этаже.")))
+    events(client, "Где кафе?", lang="ru")
+    assert client.app.state.log_writer.wait_idle(5)
+
+    msgs = client.get(f"/v1/sessions/{SESSION}/messages", headers=AUTH).json()["messages"]
+
+    assert [m["kind"] for m in msgs] == ["ask", "ask"]
+
+
+# ---------- трассировка ----------
+
+
+class _SpyProcessor(TracingProcessor):
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def on_trace_start(self, trace) -> None:
+        self.events.append("trace_start")
+
+    def on_trace_end(self, trace) -> None:
+        self.events.append("trace_end")
+
+    def on_span_start(self, span) -> None:
+        self.events.append("span_start")
+
+    def on_span_end(self, span) -> None:
+        self.events.append("span_end")
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self) -> None:
+        pass
+
+
+def test_tracing_disabled(make_client, monkeypatch):
+    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "false")
+    set_tracing_disabled(False)  # даже если кто-то включил — create_app выключает
+    model = FakeModel(call("where_is", {"place_id": "place:cafe"}), say("Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+    provider = get_trace_provider()
+    assert provider._disabled is True
+    multi = provider._multi_processor
+    saved = list(multi._processors)
+    spy = _SpyProcessor()
+    add_trace_processor(spy)
+    try:
+        evs = events(client, "Где кафе?", lang="ru")
+    finally:
+        multi.set_processors(saved)
+    assert evs[0][0] == "action"
+    assert spy.events == []
+
+
+# ---------- конфиг ----------
+
+
+def test_legacy_agent_env_is_compatible():
+    s = Settings(
+        _env_file=None,
+        robot_token="t",
+        openrouter_api_key="k",
+        agent_model="openrouter/anthropic/claude-haiku-5.5",
+        agent_enabled=True,
+    )
+    assert s.agent_model == "anthropic/claude-haiku-5.5"
+    assert s.resolved_chat_provider() == "openrouter"
+    off = s.model_copy(update={"agent_enabled": False})
+    assert off.resolved_chat_provider() == "off"
+    forced = off.model_copy(update={"chat_provider": "openrouter"})
+    assert forced.resolved_chat_provider() == "openrouter"
+
+
+# ---------- eval injection через /v1/chat ----------
+
+
+class ParrotModel(FakeModel):
+    """Худший случай: модель повторяет реплику посетителя дословно (с тегом эмоции)."""
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.requests.append(body)
+        text = body["messages"][-1]["content"]
+        said = text.split("<visitor_message>\n", 1)[1].split("\n</visitor_message>", 1)[0]
+        return httpx.Response(
+            200, content=_sse(say(f"[happy] {said}")), headers={"content-type": "text/event-stream"}
+        )
+
+
+def test_injection_eval_through_agent_with_parrot_model():
+    """Выходной фильтр и лимиты должны удержать каждый случай из eval/injection.yaml."""
+    from eval.run_injection import run
+
+    report = run(
+        EVAL_DIR / "injection.yaml",
+        sleep_s=0,
+        force_fake=True,
+        endpoint="chat",
+        chat_client=ParrotModel().client(),
+    )
+    assert report["provider"] == "openrouter:anthropic/claude-haiku-5.5"
+    assert report["errors"] == 0
+    assert report["failed"] == 0, [r for r in report["results"] if not r["ok"]]
+
+
+def test_injection_eval_chat_mode_fake():
+    from eval.run_injection import run
+
+    report = run(EVAL_DIR / "injection.yaml", sleep_s=0, force_fake=True, endpoint="chat")
+    assert report["endpoint"] == "chat"
+    assert report["failed"] == 0 and report["errors"] == 0

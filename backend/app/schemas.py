@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 LangField = Literal["ru", "kk", "en"]
 
@@ -44,6 +44,42 @@ class AskRequest(BaseModel):
         return _strip_required(v)
 
 
+class ChatRequest(AskRequest):
+    """Запрос /v1/chat: как у /ask плюс `event` (v1.1). С visitor_arrived `question` может быть пустым."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "question": "Проводи меня в кафе",
+                "lang": "ru",
+                "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10",
+                "place_id": "reception",
+                "event": None,
+            }
+        }
+    )
+
+    question: str = Field(default="", max_length=500)
+    event: Literal["visitor_arrived"] | None = None
+
+    # Переопределяет одноимённый валидатор AskRequest: пустой question проверяется ниже
+    @field_validator("session_id")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        return _strip_required(v)
+
+    @field_validator("question")
+    @classmethod
+    def _strip_question(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode="after")
+    def _question_or_event(self) -> ChatRequest:
+        if not self.question and self.event is None:
+            raise ValueError("question must not be blank (empty only with event)")
+        return self
+
+
 class LookMeta(BaseModel):
     question: str | None = Field(default=None, max_length=500)
     lang: LangField | None = None
@@ -72,8 +108,13 @@ class ChatAction(BaseModel):
     place_id: str | None = None
 
 
+Emotion = Literal["neutral", "happy", "thinking", "surprised", "sad", "excited"]
+
+
 class ChatResponse(AnswerResponse):
     actions: list[ChatAction] = Field(default_factory=list)
+    # v1.1: эмоция ответа для лица робота (в SSE — событие emotion перед первой phrase)
+    emotion: Emotion = "neutral"
 
 
 class ErrorDetail(BaseModel):
@@ -107,7 +148,7 @@ class QuickQuestionsResponse(BaseModel):
     items: list[QuickQuestionOut]
 
 
-MessageKind = Literal["ask", "chat", "look", "where_is", "guide_to", "where_am_i"]
+MessageKind = Literal["ask", "look", "where_is", "guide_to", "where_am_i"]
 LocalKind = Literal["where_is", "guide_to", "where_am_i"]
 
 
