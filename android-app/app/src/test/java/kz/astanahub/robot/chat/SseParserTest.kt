@@ -19,36 +19,42 @@ class SseParserTest {
     @Test
     fun `full chat stream decodes every event type in order`() {
         val stream = """
-            event: turn
-            data: {"turn_id": "trn_1", "request_id": "req_1"}
-
             event: emotion
             data: {"name": "happy"}
 
+            event: action
+            data: {"type": "guide_to", "place_id": "cafe"}
+
             event: phrase
-            data: {"text": "Есть коворкинг на втором этаже."}
-
-            event: action
-            data: {"name": "where_is", "args": {"place_id": "coworking_2f", "map_name": "coworking"}}
-
-            event: action
-            data: {"name": "look"}
+            data: {"text": "Провожаю вас в кафе, идите за мной."}
 
             event: done
-            data: {"request_id": "req_1", "lang": "ru", "tools": ["find_place"]}
+            data: {"request_id": "req_1", "lang": "ru", "found": true, "sources": ["place:cafe"], "actions": [{"type": "guide_to", "place_id": "cafe"}]}
 
         """.trimIndent()
         assertEquals(
             listOf(
-                ChatEvent.Turn("trn_1", "req_1"),
                 ChatEvent.Emotion("happy"),
-                ChatEvent.Phrase("Есть коворкинг на втором этаже."),
-                ChatEvent.Action("where_is", mapOf("place_id" to "coworking_2f", "map_name" to "coworking")),
-                ChatEvent.Action("look", emptyMap()),
-                ChatEvent.Done("req_1", Lang.RU, listOf("find_place")),
+                ChatEvent.Action(ChatAction("guide_to", "cafe")),
+                ChatEvent.Phrase("Провожаю вас в кафе, идите за мной."),
+                ChatEvent.Done("req_1", Lang.RU, found = true, sources = listOf("place:cafe"), actions = listOf(ChatAction("guide_to", "cafe"))),
             ),
             events(stream + "\n"),
         )
+    }
+
+    @Test
+    fun `done without optional fields has defaults, found false is kept`() {
+        assertEquals(ChatEvent.Done(null, null), events("event: done\ndata: {}\n\n").single())
+        val d = events("event: done\ndata: {\"lang\": \"kk\", \"found\": false, \"actions\": []}\n\n").single() as ChatEvent.Done
+        assertEquals(Lang.KK, d.lang)
+        assertEquals(false, d.found)
+        assertTrue(d.actions.isEmpty())
+    }
+
+    @Test
+    fun `old turn event is ignored`() {
+        assertTrue(events("event: turn\ndata: {\"turn_id\": \"t\"}\n\n").isEmpty())
     }
 
     @Test
@@ -81,11 +87,10 @@ class SseParserTest {
     }
 
     @Test
-    fun `action args keep only primitive values`() {
-        val a = events("event: action\ndata: {\"name\": \"guide_to\", \"args\": {\"place_id\": \"cafe\", \"map_name\": null, \"x\": {\"y\": 1}}}\n\n")
-            .single() as ChatEvent.Action
-        assertEquals(mapOf("place_id" to "cafe"), a.args)
-        assertEquals("cafe", a.placeId)
-        assertNull(a.mapName)
+    fun `action without type is skipped, look has no place`() {
+        assertTrue(events("event: action\ndata: {\"place_id\": \"cafe\"}\n\n").isEmpty())
+        val a = events("event: action\ndata: {\"type\": \"look\", \"place_id\": null}\n\n").single() as ChatEvent.Action
+        assertEquals(ChatAction.LOOK, a.type)
+        assertNull(a.placeId)
     }
 }

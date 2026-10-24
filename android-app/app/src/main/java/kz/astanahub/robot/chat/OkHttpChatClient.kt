@@ -14,7 +14,6 @@ import kz.astanahub.robot.backend.ErrorEnvelopeDto
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.ChatRequestDto
 import kz.astanahub.robot.backend.RetrofitBackendApi
-import kz.astanahub.robot.backend.RobotStateDto
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -27,14 +26,14 @@ import timber.log.Timber
  * `POST /v1/chat` (только SSE). Поток событий — холодный [Flow]: отмена сборщика закрывает HTTP-соединение
  * (сервер видит обрыв и пишет ход с `interrupted: true`). Поток всегда заканчивается `Done` или `Error`:
  * HTTP-ошибка до начала потока и обрыв без `done` тоже приходят как [ChatEvent.Error].
- * Таймауты хода (turn ≤ 4 с, первая фраза ≤ 8 с) считает [AgentTurnRunner], здесь — только верхняя граница сокета.
+ * Таймауты хода (первая фраза или действие ≤ 8 с) считает [AgentTurnRunner], здесь — только верхняя граница сокета.
  */
 class OkHttpChatClient(
     private val baseUrl: String,
     private val token: String,
     client: OkHttpClient,
 ) {
-    /** Свой клиент: общий callTimeout 15 с оборвал бы ход с `look` (до 30 с). */
+    /** Свой клиент: общий callTimeout 15 с оборвал бы длинный ход (верхнюю границу держит [AgentTurnRunner]). */
     private val streamClient = client.newBuilder()
         .callTimeout(0, TimeUnit.SECONDS)
         .readTimeout(STREAM_READ_TIMEOUT_S, TimeUnit.SECONDS)
@@ -89,19 +88,18 @@ class OkHttpChatClient(
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private const val STREAM_READ_TIMEOUT_S = 35L
 
-        /** `robot_state` и `text` уходят всегда (даже по умолчанию), null-поля — нет. */
+        /** `question` уходит всегда (с `visitor_arrived` — пустой), null-поля — нет. */
         private val requestJson = Json {
             encodeDefaults = true
             explicitNulls = false
         }
 
         internal fun ChatRequest.toDto() = ChatRequestDto(
-            sessionId = sessionId,
-            text = RetrofitBackendApi.clipQuestion(text),
+            question = RetrofitBackendApi.clipQuestion(question),
             lang = lang?.code,
-            input = input?.code,
+            sessionId = sessionId,
+            placeId = placeId,
             event = event,
-            robotState = RobotStateDto(nearestPlaceId, navigating),
         )
 
         internal fun httpError(response: Response): BackendError {

@@ -76,21 +76,14 @@ internal data class TtsRequestDto(val text: String, val lang: String)
 @Serializable
 internal data class HealthDto(val status: String = "", val version: String? = null)
 
-/** Тело `POST /v1/chat`. */
+/** Тело `POST /v1/chat`: как у `/ask` плюс `event` (v1.1). */
 @Serializable
 internal data class ChatRequestDto(
-    @SerialName("session_id") val sessionId: String,
-    val text: String,
+    val question: String,
     val lang: String? = null,
-    val input: String? = null,
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("place_id") val placeId: String? = null,
     val event: String? = null,
-    @SerialName("robot_state") val robotState: RobotStateDto = RobotStateDto(),
-)
-
-@Serializable
-internal data class RobotStateDto(
-    @SerialName("nearest_place_id") val nearestPlaceId: String? = null,
-    val navigating: Boolean = false,
 )
 
 /** Тело `POST /v1/sessions/{session_id}/messages` — ответ, который робот дал сам. */

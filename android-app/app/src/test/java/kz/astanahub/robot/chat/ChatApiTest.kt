@@ -19,7 +19,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-/** `/v1/chat` поверх MockWebServer: SSE, ошибки до потока, обрыв, кадр `look`, история. runBlocking — реальное время. */
+/** `/v1/chat` поверх MockWebServer: SSE, ошибки до потока, обрыв, история. runBlocking — реальное время. */
 class ChatApiTest {
 
     private lateinit var server: MockWebServer
@@ -39,28 +39,26 @@ class ChatApiTest {
     private fun sse(body: String) = MockResponse().setResponseCode(200)
         .setHeader("Content-Type", "text/event-stream").setBody(body)
 
-    private val request = ChatRequest(
-        sessionId = "s-1", text = "Где тут поработать?", lang = Lang.RU, input = ChatInput.VOICE,
-        nearestPlaceId = "reception", navigating = false,
-    )
+    private val request = ChatRequest(sessionId = "s-1", question = "Где тут поработать?", lang = Lang.RU, placeId = "reception")
 
     @Test
     fun `chat streams events and sends contract request`() = runBlocking {
         server.enqueue(
             sse(
-                "event: turn\ndata: {\"turn_id\":\"trn_1\",\"request_id\":\"req_1\"}\n\n" +
-                    "event: emotion\ndata: {\"name\":\"thinking\"}\n\n" +
+                "event: emotion\ndata: {\"name\":\"thinking\"}\n\n" +
+                    "event: action\ndata: {\"type\":\"where_is\",\"place_id\":\"coworking\"}\n\n" +
                     "event: phrase\ndata: {\"text\":\"Есть коворкинг.\"}\n\n" +
-                    "event: done\ndata: {\"request_id\":\"req_1\",\"lang\":\"ru\",\"tools\":[]}\n\n",
+                    "event: done\ndata: {\"request_id\":\"req_1\",\"lang\":\"ru\",\"found\":true,\"sources\":[]," +
+                    "\"actions\":[{\"type\":\"where_is\",\"place_id\":\"coworking\"}]}\n\n",
             ),
         )
         val events = withTimeout(5_000) { api.chat(request).toList() }
         assertEquals(
             listOf(
-                ChatEvent.Turn("trn_1", "req_1"),
                 ChatEvent.Emotion("thinking"),
+                ChatEvent.Action(ChatAction("where_is", "coworking")),
                 ChatEvent.Phrase("Есть коворкинг."),
-                ChatEvent.Done("req_1", Lang.RU, emptyList()),
+                ChatEvent.Done("req_1", Lang.RU, actions = listOf(ChatAction("where_is", "coworking"))),
             ),
             events,
         )
@@ -69,18 +67,20 @@ class ChatApiTest {
         assertEquals("text/event-stream", sent.getHeader("Accept"))
         assertEquals("Bearer secret-token", sent.getHeader("Authorization"))
         val body = sent.body.readUtf8()
-        assertTrue(body, body.contains("\"session_id\":\"s-1\""))
-        assertTrue(body, body.contains("\"input\":\"voice\""))
-        assertTrue(body, body.contains("\"robot_state\":{\"nearest_place_id\":\"reception\",\"navigating\":false}"))
-        assertTrue(body, !body.contains("\"event\""))
+        assertEquals(
+            "{\"question\":\"Где тут поработать?\",\"lang\":\"ru\",\"session_id\":\"s-1\",\"place_id\":\"reception\"}",
+            body,
+        )
     }
 
     @Test
     fun `visitor arrived goes with empty text and event`() = runBlocking {
-        server.enqueue(sse("event: turn\ndata: {\"turn_id\":\"t\"}\n\nevent: done\ndata: {}\n\n"))
+        server.enqueue(sse("event: phrase\ndata: {\"text\":\"Сәлем!\"}\n\nevent: done\ndata: {}\n\n"))
         api.chat(ChatRequest("s-2", "", Lang.KK, event = ChatRequest.EVENT_VISITOR_ARRIVED)).toList()
         val body = server.takeRequest().body.readUtf8()
-        assertTrue(body, body.contains("\"text\":\"\""))
+        assertTrue(body, body.contains("\"question\":\"\""))
+        assertTrue(body, body.contains("\"lang\":\"kk\""))
+        assertTrue(body, !body.contains("place_id"))
         assertTrue(body, body.contains("\"event\":\"visitor_arrived\""))
     }
 
@@ -97,7 +97,7 @@ class ChatApiTest {
 
     @Test
     fun `stream closed before done ends with a network error`() = runBlocking {
-        server.enqueue(sse("event: turn\ndata: {\"turn_id\":\"t\"}\n\nevent: phrase\ndata: {\"text\":\"Раз.\"}\n\n"))
+        server.enqueue(sse("event: emotion\ndata: {\"name\":\"happy\"}\n\nevent: phrase\ndata: {\"text\":\"Раз.\"}\n\n"))
         val events = api.chat(request).toList()
         assertEquals(ChatEvent.Phrase("Раз."), events[1])
         assertEquals(ErrorKind.NETWORK, (events.last() as ChatEvent.Error).error.kind)
@@ -112,13 +112,13 @@ class ChatApiTest {
 
     @Test
     fun `cancelling the collector closes the connection (interruption)`() = runBlocking {
-        // Сервер прислал turn и «висит» — посетитель перебил.
+        // Сервер прислал первую фразу и «висит» — посетитель перебил.
         server.enqueue(
-            sse("event: turn\ndata: {\"turn_id\":\"t\"}\n\n" + "event: phrase\ndata: {\"text\":\"…\"}\n\n".repeat(50))
+            sse("event: phrase\ndata: {\"text\":\"Раз.\"}\n\n" + "event: phrase\ndata: {\"text\":\"…\"}\n\n".repeat(50))
                 .throttleBody(40, 1, TimeUnit.SECONDS),
         )
         val first = withTimeout(5_000) { api.chat(request).first() }
-        assertEquals(ChatEvent.Turn("t", null), first)
+        assertEquals(ChatEvent.Phrase("Раз."), first)
         // first() отменяет сбор после первого события: следующий запрос проходит, соединение не висит.
         server.enqueue(sse("event: done\ndata: {}\n\n"))
         val next = withTimeout(5_000) { api.chat(request).toList() }
@@ -126,22 +126,11 @@ class ChatApiTest {
     }
 
     @Test
-    fun `frame is posted as multipart image to the turn`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(204))
-        val result = api.chatFrame("trn_7", byteArrayOf(1, 2, 3))
-        assertTrue(result is ApiResult.Success)
-        val sent = server.takeRequest()
-        assertEquals("/v1/chat/trn_7/frame", sent.path)
-        assertTrue(sent.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
-        val body = sent.body.readUtf8()
-        assertTrue(body, body.contains("name=\"image\""))
-        assertTrue(body, body.contains("image/jpeg"))
-    }
-
-    @Test
-    fun `frame for a closed turn is a failure`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(404).setBody("{\"error\":{\"code\":\"not_found\"}}"))
-        assertTrue(api.chatFrame("trn_old", byteArrayOf(1)) is ApiResult.Failure)
+    fun `server error event in the stream keeps the common error format`() = runBlocking {
+        server.enqueue(sse("event: error\ndata: {\"error\":{\"code\":\"timeout\",\"message\":\"agent\"},\"request_id\":\"req_t\"}\n\n"))
+        val e = api.chat(request).toList().single() as ChatEvent.Error
+        assertEquals(ErrorKind.TIMEOUT, e.error.kind)
+        assertEquals("req_t", e.error.requestId)
     }
 
     @Test
