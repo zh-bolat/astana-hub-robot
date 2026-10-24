@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 LangField = Literal["ru", "kk", "en"]
 
@@ -65,6 +65,17 @@ class AnswerResponse(BaseModel):
     sources: list[str]
 
 
+class ChatAction(BaseModel):
+    """Действие робота из ответа агента: показать место, проводить, посмотреть камерой."""
+
+    type: Literal["where_is", "guide_to", "look"]
+    place_id: str | None = None
+
+
+class ChatResponse(AnswerResponse):
+    actions: list[ChatAction] = Field(default_factory=list)
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
@@ -96,7 +107,7 @@ class QuickQuestionsResponse(BaseModel):
     items: list[QuickQuestionOut]
 
 
-MessageKind = Literal["ask", "look", "where_is", "guide_to", "where_am_i"]
+MessageKind = Literal["ask", "chat", "look", "where_is", "guide_to", "where_am_i"]
 LocalKind = Literal["where_is", "guide_to", "where_am_i"]
 
 
@@ -146,50 +157,3 @@ class LocalMessageRequest(BaseModel):
 
 class LocalMessageResponse(BaseModel):
     request_id: str
-
-
-# ---------- Агентский чат /v1/chat ----------
-
-
-class RobotState(BaseModel):
-    nearest_place_id: str | None = Field(default=None, max_length=64)
-    navigating: bool = False
-
-
-class ChatRequest(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10",
-                "text": "Где тут можно поработать?",
-                "lang": "ru",
-                "input": "voice",
-                "event": None,
-                "robot_state": {"nearest_place_id": "reception", "navigating": False},
-            }
-        }
-    )
-
-    session_id: str = Field(min_length=1, max_length=64)
-    # Пусто допустимо только вместе с event (visitor_arrived)
-    text: str = Field(default="", max_length=500)
-    lang: LangField | None = None
-    input: Literal["voice", "text", "button"] | None = None
-    event: Literal["visitor_arrived"] | None = None
-    robot_state: RobotState | None = None
-
-    @field_validator("session_id")
-    @classmethod
-    def _session_not_blank(cls, v: str) -> str:
-        return _strip_required(v)
-
-    @field_validator("text")
-    @classmethod
-    def _strip_text(cls, v: str) -> str:
-        return v.strip()
-
-    @model_validator(mode="after")
-    def _text_or_event(self) -> ChatRequest:
-        if not self.text and self.event is None:
-            raise ValueError("text must not be blank (empty text is allowed only with event)")
-        return self
