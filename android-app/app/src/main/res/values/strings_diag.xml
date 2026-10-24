@@ -33,4 +33,8 @@
     <string name="diag_presence" translatable="false">Посетитель (заглушка PersonApi): подошёл / ушёл</string>
     <string name="diag_person_arrive" translatable="false">Подошёл человек</string>
     <string name="diag_person_leave" translatable="false">Ушёл</string>
+    <string name="diag_builtin_fallback" translatable="false">Сбой /v1/tts → встроенный голос робота (VOICE_BUILTIN_FALLBACK)</string>
+    <string name="diag_tts_streaming" translatable="false">Потоковый /v1/tts — звук с первых байт (TTS_STREAMING)</string>
+    <string name="diag_vad" translatable="false">Конец фразы после тишины: %1$d мс (VAD)</string>
+    <string name="diag_voice_cache_refresh" translatable="false">Обновить кеш голоса</string>
 </resources>

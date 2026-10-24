@@ -30,6 +30,7 @@ import kz.astanahub.robot.backend.LocalMessage
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.backend.QuickQuestionCache
+import kz.astanahub.robot.backend.TurnMetrics
 import kz.astanahub.robot.camera.CameraGateway
 import kz.astanahub.robot.chat.AgentTurnRunner
 import kz.astanahub.robot.chat.ChatAction
@@ -53,6 +54,7 @@ import kz.astanahub.robot.robot.NavEvent
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.voice.SpeechChunk
+import kz.astanahub.robot.voice.SpeechEvent
 import kz.astanahub.robot.voice.SpeechListener
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
@@ -133,6 +135,8 @@ class MainViewModel(
     private val presence: Flow<PresenceEvent>? = null,
     /** Голова: слежение за собеседником, сброс, кивки. */
     private val head: HeadController? = null,
+    /** Порог тишины VAD (для `/v1/metrics/turn`). */
+    private val vadSilenceMillis: () -> Int? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -181,6 +185,34 @@ class MainViewModel(
     /** Кнопки частых вопросов пришли с сервера (а не офлайн-набор). */
     private var quickFromServer = false
 
+    /** Когда VAD решил, что посетитель закончил (clock), — начало отсчёта таймингов хода. */
+    private var utteranceEndAt: Long? = null
+
+    /** Лицо уже «думает» по концу речи (VAD), финальный текст ещё распознаётся. */
+    private var thinkingEarly = false
+    private var thinkingEarlyJob: Job? = null
+
+    /** Тайминги текущего хода (`/v1/metrics/turn`). */
+    private var turn: TurnClock? = null
+
+    /** Ближайшая точка карты — последняя известная (запрос к агенту не ждёт позицию робота). */
+    @Volatile private var placeHint: String? = null
+    private var placeJob: Job? = null
+
+    private var fillerIndex = 0
+
+    /** Тайминги одного хода: все отметки — мс от [origin] (конец речи по VAD или нажатие кнопки). */
+    private class TurnClock(val origin: Long, val sttFinalMs: Long?, var lang: Lang?) {
+        var mode: String = TurnMetrics.MODE_AGENT
+        var requestId: String? = null
+        var chatFirstEventMs: Long? = null
+        var firstPhraseMs: Long? = null
+        var ttsFirstByteMs: Long? = null
+        var firstAudioMs: Long? = null
+        var fallback = false
+        var interrupted = false
+    }
+
     init {
         _state.update { it.copy(mode = awakeMode()) }
         voice.setSessionId(sessionId)
@@ -193,6 +225,8 @@ class MainViewModel(
         viewModelScope.launch {
             voice.connection.collect { up -> if (up) onConnectionRestored() else onConnectionLost() }
         }
+        viewModelScope.launch { voice.utteranceEnded.collect { onUtteranceEnded() } }
+        viewModelScope.launch { voice.speechEvents.collect(::onSpeechEvent) }
         voice.setLanguage(_state.value.lang) // подсказка языка серверному STT — с первой фразы
         loadQuickQuestions()
         wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
@@ -202,7 +236,42 @@ class MainViewModel(
 
     /** Робот занят: думает, смотрит, говорит или ведёт — посторонние реплики фильтруем. */
     private fun busyForVoice(): Boolean =
-        _state.value.phase in BUSY_PHASES || navJob?.isActive == true
+        if (thinkingEarly) navJob?.isActive == true
+        else _state.value.phase in BUSY_PHASES || navJob?.isActive == true
+
+    /**
+     * VAD: посетитель замолчал. Лицо сразу «думает» (финальный текст ещё в пути), запоминаем начало отсчёта
+     * таймингов и заранее уточняем ближайшую точку карты для запроса к агенту.
+     */
+    private fun onUtteranceEnded() {
+        utteranceEndAt = clock()
+        refreshPlaceHint()
+        if (busyForVoice() || requestJob?.isActive == true) return
+        thinkingEarly = true
+        setBusy(Phase.THINKING)
+        thinkingEarlyJob?.cancel()
+        thinkingEarlyJob = viewModelScope.launch {
+            delay(EARLY_THINKING_MAX_MILLIS) // финал так и не пришёл (ошибка STT) — не «думаем» вечно
+            clearThinkingEarly(resetPhase = true)
+        }
+    }
+
+    private fun clearThinkingEarly(resetPhase: Boolean) {
+        if (!thinkingEarly) return
+        thinkingEarly = false
+        thinkingEarlyJob?.cancel()
+        thinkingEarlyJob = null
+        if (resetPhase) setBusy(null)
+    }
+
+    private fun onSpeechEvent(event: SpeechEvent) {
+        val t = turn ?: return
+        val ms = clock() - t.origin
+        when (event) {
+            SpeechEvent.TTS_FIRST_BYTE -> if (t.ttsFirstByteMs == null) t.ttsFirstByteMs = ms
+            SpeechEvent.AUDIO_START -> if (t.firstAudioMs == null) t.firstAudioMs = ms
+        }
+    }
 
     /**
      * Фраза посетителя. Пока робот занят, принимаем только «стоп» или новую содержательную фразу
@@ -213,14 +282,18 @@ class MainViewModel(
         if (!t.isFinal) {
             if (busyNow) return
             wake()
+            if (_state.value.partialQuestion == null) refreshPlaceHint()
             _state.update { it.copy(partialQuestion = t.text.ifBlank { null }) }
             return
         }
         val text = t.text.trim()
         if (text.isEmpty()) {
+            clearThinkingEarly(resetPhase = true)
+            utteranceEndAt = null
             if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
             return
         }
+        clearThinkingEarly(resetPhase = false)
         if (UtteranceFilter.isStopCommand(text)) {
             Timber.i("voice command: stop (phase=%s)", _state.value.phase)
             _state.update { it.copy(partialQuestion = null) }
@@ -233,7 +306,7 @@ class MainViewModel(
         }
         // Разговор голосом — лицом к лицу: из меню возвращаемся к лицу (agent).
         if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
-        submitInternal(text, faqId = null, lang = t.lang)
+        submitInternal(text, faqId = null, lang = t.lang, fromVoice = true)
     }
 
     /** /v1/stt не прошёл из-за связи: бейдж + «нет связи» голосом (не чаще раза в минуту и не перебивая). */
@@ -356,9 +429,12 @@ class MainViewModel(
     /** Плитка или кнопка частого вопроса. */
     fun submitButton(text: String) = submitInternal(text, faqId = null)
 
-    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null) {
+    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false) {
         val question = text.trim()
-        if (question.isEmpty()) return
+        if (question.isEmpty()) {
+            if (thinkingEarly) clearThinkingEarly(resetPhase = true)
+            return
+        }
         // Повторное нажатие той же кнопки, пока ответ ещё готовится, — игнорируем (на роботе жали 6 раз подряд).
         val current = _state.value
         if (current.processing && requestJob?.isActive == true && current.question == question) {
@@ -376,13 +452,60 @@ class MainViewModel(
         } else {
             _state.update { it.copy(screen = Screen.FAQ, faqOpenId = faqId) }
         }
+        val now = clock()
+        val vadEnd = utteranceEndAt?.takeIf { fromVoice && now - it in 0..UTTERANCE_END_FRESH_MILLIS }
+        utteranceEndAt = null
+        val clockForTurn = TurnClock(origin = vadEnd ?: now, sttFinalMs = vadEnd?.let { now - it }, lang = lang ?: _state.value.lang)
+        turn = clockForTurn
         requestJob = viewModelScope.launch {
-            _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null) }
-            MoodRules.forUtterance(question)?.let { showEmotion(it) }
-            if (chatMode() == ChatMode.AGENT && !_state.value.offline && !chatUnsupported) {
-                handleAgent(question, lang ?: _state.value.lang)
-            } else {
-                handleLegacy(question)
+            try {
+                _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null) }
+                MoodRules.forUtterance(question)?.let { showEmotion(it) }
+                if (chatMode() == ChatMode.AGENT && !_state.value.offline && !chatUnsupported) {
+                    handleAgent(question, lang ?: _state.value.lang)
+                } else {
+                    clockForTurn.mode = TurnMetrics.MODE_ASK
+                    handleLegacy(question)
+                }
+            } catch (e: CancellationException) {
+                clockForTurn.interrupted = true
+                throw e
+            } finally {
+                if (turn === clockForTurn) turn = null
+                sendTurnMetrics(clockForTurn)
+            }
+        }
+    }
+
+    /** `POST /v1/metrics/turn` фоном; ошибка — только в лог. Текстов нет. */
+    private fun sendTurnMetrics(t: TurnClock) {
+        val metrics = TurnMetrics(
+            sessionId = sessionId,
+            requestId = t.requestId,
+            lang = t.lang,
+            mode = t.mode,
+            sttFinalMs = t.sttFinalMs,
+            chatFirstEventMs = t.chatFirstEventMs,
+            firstPhraseMs = t.firstPhraseMs,
+            ttsFirstByteMs = t.ttsFirstByteMs,
+            firstAudioMs = t.firstAudioMs,
+            vadSilenceMs = vadSilenceMillis(),
+            fallback = t.fallback,
+            interrupted = t.interrupted,
+        )
+        Timber.i(
+            "turn %s: stt=%s chat=%s phrase=%s ttsByte=%s audio=%s fallback=%s interrupted=%s",
+            metrics.mode, metrics.sttFinalMs, metrics.chatFirstEventMs, metrics.firstPhraseMs,
+            metrics.ttsFirstByteMs, metrics.firstAudioMs, metrics.fallback, metrics.interrupted,
+        )
+        viewModelScope.launch {
+            try {
+                val r = backend.postTurnMetrics(metrics)
+                if (r is ApiResult.Failure) Timber.w("turn metrics: %s", r.error.kind)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "turn metrics failed")
             }
         }
     }
@@ -403,6 +526,7 @@ class MainViewModel(
     /** «Где X?» — локально; место не узнали → вопрос к серверу. */
     private suspend fun handleWhereIs(question: String, subject: String) {
         val wf = wayFinder ?: return handleAsk(question)
+        turn?.mode = TurnMetrics.MODE_LOCAL
         setBusy(Phase.THINKING)
         val answer = wf.whereIs(subject.ifBlank { question }, _state.value.lang)
             ?: return handleAsk(question)
@@ -414,6 +538,7 @@ class MainViewModel(
 
     private suspend fun handleWhereAmI(question: String) {
         val wf = wayFinder ?: return handleAsk(question)
+        turn?.mode = TurnMetrics.MODE_LOCAL
         setBusy(Phase.THINKING)
         val answer = wf.whereAmI(_state.value.lang)
         setBusy(null)
@@ -424,6 +549,7 @@ class MainViewModel(
     /** «Проводи до X» — сразу ведём; место не узнали → честно говорим (без сервера это не решить). */
     private suspend fun handleGuide(question: String, subject: String) {
         val wf = wayFinder ?: return handleAsk(question)
+        turn?.mode = TurnMetrics.MODE_LOCAL
         setBusy(Phase.THINKING)
         val place = wf.find(subject.ifBlank { question })
         setBusy(null)
@@ -590,6 +716,7 @@ class MainViewModel(
 
     fun stop() {
         wake()
+        clearThinkingEarly(resetPhase = false)
         requestJob?.cancel()
         voice.stopSpeaking()
         if (stopNavigationOnly()) {
@@ -670,6 +797,10 @@ class MainViewModel(
             if (outcome.error?.httpStatus == 404) {
                 Timber.w("server without /v1/chat, using /v1/ask")
                 chatUnsupported = true
+            }
+            turn?.let {
+                it.fallback = true
+                it.mode = TurnMetrics.MODE_ASK
             }
             handleLegacy(question)
         }
@@ -773,16 +904,45 @@ class MainViewModel(
         }
 
         val scope: CoroutineScope = this
+        val clockForTurn = turn.takeIf { question != null }
+        fun markEvent(phrase: Boolean) {
+            val t = clockForTurn ?: return
+            val ms = clock() - t.origin
+            if (t.chatFirstEventMs == null) t.chatFirstEventMs = ms
+            if (phrase && t.firstPhraseMs == null) t.firstPhraseMs = ms
+        }
+
+        // Первая фраза агента не пришла за fillerMillis — короткое «хм…» из кеша голоса (раз за ход, только если
+        // ответа ещё нет). Уже звучащее «хм…» не обрываем: первая фраза встанет в очередь сразу за ним.
+        var responded = false
+        var fillerStarted = false
+        val filler: Job? = if (question != null && showThinking) launch {
+            delay(chatTimeouts.fillerMillis)
+            if (responded || spoken.isNotEmpty()) return@launch
+            fillerStarted = true
+            val key = PhraseKey.FILLERS[fillerIndex++ % PhraseKey.FILLERS.size]
+            voice.speakCached(phrases.get(key, lang), lang)
+        } else null
+        fun onResponse() {
+            responded = true
+            if (!fillerStarted) filler?.cancel()
+        }
+
         val handler = object : TurnHandler {
             override fun onEmotion(name: String) {
+                markEvent(phrase = false)
                 Emotion.fromName(name)?.let(::setEmotion)
             }
 
             override fun onPhrase(text: String) {
+                markEvent(phrase = true)
+                onResponse()
                 PhraseSplitter.normalize(listOf(text)).forEach { enqueue(TurnStep.Say(it, lang)) }
             }
 
             override fun onAction(action: ChatAction) {
+                markEvent(phrase = false)
+                onResponse()
                 Timber.i("agent action %s place=%s", action.type, action.placeId)
                 when (action.type) {
                     ChatAction.WHERE_IS -> enqueue(TurnStep.Run { agentWhereIs(action, lang, say) })
@@ -801,7 +961,7 @@ class MainViewModel(
             sessionId = sessionId,
             question = question.orEmpty(),
             lang = lang,
-            placeId = nearestPlaceId(),
+            placeId = quickPlaceId(),
             event = event,
         )
         val outcome = try {
@@ -809,6 +969,7 @@ class MainViewModel(
         } finally {
             streaming = false
             steps.close()
+            if (!fillerStarted) filler?.cancel()
         }
         if (outcome is TurnOutcome.Fallback) {
             speaker.cancel()
@@ -820,6 +981,7 @@ class MainViewModel(
         if (showThinking) setBusy(null)
         when (outcome) {
             is TurnOutcome.Completed -> {
+                clockForTurn?.requestId = outcome.done.requestId
                 _state.update { it.copy(offline = false) }
                 val doneLang = outcome.done.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
@@ -940,6 +1102,7 @@ class MainViewModel(
     }
 
     private suspend fun handleAsk(question: String) {
+        turn?.mode = TurnMetrics.MODE_ASK
         setBusy(Phase.THINKING)
         val context = askContext()
         var result = backend.ask(question, context)
@@ -950,6 +1113,7 @@ class MainViewModel(
     }
 
     private suspend fun handleLook(question: String) {
+        turn?.mode = TurnMetrics.MODE_ASK
         setBusy(Phase.LOOKING)
         val result = lookRequest(question) { setBusy(Phase.THINKING) }
         if (result == null) {
@@ -995,6 +1159,7 @@ class MainViewModel(
         when (result) {
             is ApiResult.Success -> {
                 val answer = result.value
+                turn?.requestId = answer.requestId
                 if (!langChosenExplicitly && answer.lang != null && answer.lang != _state.value.lang) {
                     _state.update { it.copy(lang = answer.lang) }
                     voice.setLanguage(answer.lang)
@@ -1076,6 +1241,37 @@ class MainViewModel(
         }
     }
 
+    /**
+     * Точка карты для запроса к агенту без ожидания: свежая, если робот ответил за [PLACE_FAST_MILLIS],
+     * иначе последняя известная (уточняется фоном — с первого промежуточного текста / конца речи).
+     */
+    private suspend fun quickPlaceId(): String? {
+        val wf = wayFinder ?: return null
+        if (placeJob?.isActive != true) {
+            val fresh = withTimeoutOrNull(PLACE_FAST_MILLIS) {
+                try {
+                    wf.nearestPlaceId()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.e(e, "nearest place")
+                    null
+                }
+            }
+            if (fresh != null) {
+                placeHint = fresh
+                return fresh
+            }
+        }
+        refreshPlaceHint()
+        return placeHint
+    }
+
+    private fun refreshPlaceHint() {
+        if (wayFinder == null || placeJob?.isActive == true) return
+        placeJob = viewModelScope.launch { nearestPlaceId()?.let { placeHint = it } }
+    }
+
     private fun touchSession() {
         val now = clock()
         if (now - lastInteraction > sessionIdleMillis) {
@@ -1118,6 +1314,13 @@ class MainViewModel(
         private const val MAX_HISTORY = 20
         const val NO_CONNECTION_REPEAT_MILLIS = 60_000L
         private const val PLACE_LOOKUP_TIMEOUT_MILLIS = 1_000L
+        private const val PLACE_FAST_MILLIS = 150L
+
+        /** «Думаю» по концу речи держим не дольше, если финальный текст так и не пришёл. */
+        const val EARLY_THINKING_MAX_MILLIS = 8_000L
+
+        /** Конец речи по VAD относится к финальному тексту, если тот пришёл не позже. */
+        private const val UTTERANCE_END_FRESH_MILLIS = 15_000L
         private const val MAX_QUICK_BUTTONS = 8
 
         /** В этих фазах посторонние реплики фильтруются ([UtteranceFilter]). */

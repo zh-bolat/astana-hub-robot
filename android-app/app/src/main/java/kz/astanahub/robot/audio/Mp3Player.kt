@@ -40,7 +40,16 @@ class Mp3Player : ClipPlayer {
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
-    override suspend fun prepare(bytes: ByteArray): AudioClip? = withContext(Dispatchers.Main.immediate) {
+    override suspend fun prepare(bytes: ByteArray): AudioClip? = prepareSource(ByteArrayDataSource(bytes))
+
+    /**
+     * Потоковый звук: MediaDataSource с неизвестным размером (getSize = -1), readAt ждёт байты в потоке плеера.
+     * prepareAsync завершается, когда пришло достаточно байт для заголовка MP3 — то есть вскоре после первых байт.
+     * ПРОВЕРИТЬ НА РОБОТЕ: MediaPlayer (NuPlayer) этой прошивки играет MP3 из MediaDataSource без размера.
+     */
+    override suspend fun prepareStream(audio: GrowingAudio): AudioClip? = prepareSource(GrowingDataSource(audio))
+
+    private suspend fun prepareSource(source: MediaDataSource): AudioClip? = withContext(Dispatchers.Main.immediate) {
         suspendCancellableCoroutine { cont ->
             val clip = Clip(MediaPlayer())
             cont.invokeOnCancellation { mainHandler.post { clip.releaseNow() } }
@@ -51,7 +60,7 @@ class Mp3Player : ClipPlayer {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
-                clip.player.setDataSource(ByteArrayDataSource(bytes))
+                clip.player.setDataSource(source)
                 clip.player.setOnPreparedListener {
                     if (clip.isReleased) return@setOnPreparedListener
                     // Отменили между prepared и возобновлением — клип никому не достался, освобождаем.
@@ -119,6 +128,15 @@ class Mp3Player : ClipPlayer {
     override fun stop() {
         val current = session ?: return
         mainHandler.post { current.finish(false) }
+    }
+
+    /** Растущий источник: блокирующее чтение на потоке MediaPlayer, конец — когда поток закончен/оборван. */
+    private class GrowingDataSource(private val audio: GrowingAudio) : MediaDataSource() {
+        override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int =
+            audio.readAt(position, buffer, offset, size, STREAM_WAIT_MILLIS)
+
+        override fun getSize(): Long = -1
+        override fun close() = Unit
     }
 
     private class ByteArrayDataSource(private val data: ByteArray) : MediaDataSource() {

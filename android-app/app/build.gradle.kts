@@ -62,11 +62,17 @@ android {
         buildConfigField("String", "DIAG_PIN_HASH", diagPinHashValue.asBuildConfigString())
         buildConfigField("String", "DIAG_PIN_SALT", diagPinSalt.asBuildConfigString())
         // Голос (меняется и без пересборки — экран диагностики): builtin | server.
-        // Распознавание: по умолчанию сервер (все языки). Синтез: ru/en — встроенный, kk — сервер.
+        // Распознавание: по умолчанию сервер (все языки). Синтез: все языки — сервер (ElevenLabs).
         buildConfigField("String", "VOICE_ASR", secret("VOICE_ASR").ifEmpty { "server" }.asBuildConfigString())
-        buildConfigField("String", "VOICE_TTS_RU", secret("VOICE_TTS_RU").ifEmpty { "builtin" }.asBuildConfigString())
+        buildConfigField("String", "VOICE_TTS_RU", secret("VOICE_TTS_RU").ifEmpty { "server" }.asBuildConfigString())
         buildConfigField("String", "VOICE_TTS_KK", secret("VOICE_TTS_KK").ifEmpty { "server" }.asBuildConfigString())
-        buildConfigField("String", "VOICE_TTS_EN", secret("VOICE_TTS_EN").ifEmpty { "builtin" }.asBuildConfigString())
+        buildConfigField("String", "VOICE_TTS_EN", secret("VOICE_TTS_EN").ifEmpty { "server" }.asBuildConfigString())
+        // Сбой /v1/tts -> встроенный голос робота (true) или текст без звука + фраза из кеша ElevenLabs (false, по умолчанию).
+        buildConfigField("boolean", "VOICE_BUILTIN_FALLBACK", (secret("VOICE_BUILTIN_FALLBACK").lowercase() == "true").toString())
+        // Конец фразы посетителя после стольких мс тишины (VAD приложения), по умолчанию 500.
+        buildConfigField("int", "VAD_END_SILENCE_MS", secret("VAD_END_SILENCE_MS").toIntOrNull()?.toString() ?: "500")
+        // Потоковый /v1/tts (звук с первых байт), по умолчанию true.
+        buildConfigField("boolean", "TTS_STREAMING", (secret("TTS_STREAMING").lowercase() != "false").toString())
         // Заставка и сброс сессии после N секунд бездействия (шаг 7.4); 0 — выключено.
         // Разговор: agent — POST /v1/chat (агент на сервере), legacy — локальные правила + /v1/ask. Меняется в диагностике.
         buildConfigField("String", "CHAT_MODE", secret("CHAT_MODE").ifEmpty { "agent" }.asBuildConfigString())

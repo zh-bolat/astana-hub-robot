@@ -112,6 +112,8 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =
         ApiResult.Success(Unit)
 
+    override suspend fun postTurnMetrics(metrics: TurnMetrics): ApiResult<Unit> = ApiResult.Success(Unit)
+
     private fun fakeText(lang: Lang, ru: String, kk: String, en: String) = when (lang) {
         Lang.RU -> ru
         Lang.KK -> kk

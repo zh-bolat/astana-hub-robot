@@ -86,22 +86,41 @@ object WayPhrases {
         Lang.EN -> "I don't know where I am right now."
     }
 
+    /** «Идите за мной.» — отдельным предложением: оно есть в кеше голоса и звучит сразу, пока синтезируется остальное. */
+    fun followMe(lang: Lang): String = when (lang) {
+        Lang.RU -> "Идите за мной."
+        Lang.KK -> "Менің артымнан жүріңіз."
+        Lang.EN -> "Please follow me."
+    }
+
     fun guideStart(name: String, lang: Lang): String = when (lang) {
-        Lang.RU -> "Идите за мной, провожу: $name."
-        Lang.KK -> "Менің артымнан жүріңіз, апарамын: $name."
-        Lang.EN -> "Please follow me to $name."
+        Lang.RU -> "${followMe(lang)} Провожу: $name."
+        Lang.KK -> "${followMe(lang)} Апарамын: $name."
+        Lang.EN -> "${followMe(lang)} Taking you to $name."
+    }
+
+    fun arrived(lang: Lang): String = when (lang) {
+        Lang.RU -> "Мы пришли."
+        Lang.KK -> "Келдік."
+        Lang.EN -> "Here we are."
     }
 
     fun guideArrived(name: String, lang: Lang): String = when (lang) {
-        Lang.RU -> "Мы пришли: $name."
-        Lang.KK -> "Келдік: $name."
-        Lang.EN -> "Here we are: $name."
+        Lang.RU -> "${arrived(lang)} Это $name."
+        Lang.KK -> "${arrived(lang)} Бұл — $name."
+        Lang.EN -> "${arrived(lang)} This is $name."
+    }
+
+    fun alreadyHere(lang: Lang): String = when (lang) {
+        Lang.RU -> "Мы уже здесь."
+        Lang.KK -> "Біз осындамыз."
+        Lang.EN -> "We are already here."
     }
 
     fun guideAlreadyThere(name: String, lang: Lang): String = when (lang) {
-        Lang.RU -> "Мы уже здесь: $name."
-        Lang.KK -> "Біз осындамыз: $name."
-        Lang.EN -> "We are already here: $name."
+        Lang.RU -> "${alreadyHere(lang)} Это $name."
+        Lang.KK -> "${alreadyHere(lang)} Бұл — $name."
+        Lang.EN -> "${alreadyHere(lang)} This is $name."
     }
 
     fun guideObstacle(lang: Lang): String = when (lang) {
@@ -127,4 +146,10 @@ object WayPhrases {
         Lang.KK -> "Жарайды, тоқтадым."
         Lang.EN -> "OK, I've stopped."
     }
+
+    /** Фразы без названий мест — их заранее синтезирует кеш голоса (voice/CachedPhrases). */
+    fun fixed(lang: Lang): List<String> = listOf(
+        offerGuide(lang), unknownPlace(lang), unknownPosition(lang), followMe(lang), arrived(lang), alreadyHere(lang),
+        guideObstacle(lang), guideNotLocalized(lang), guideFailed(lang), guideCancelled(lang),
+    )
 }

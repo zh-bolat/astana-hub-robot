@@ -12,6 +12,7 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /** Запрос без заголовка Authorization (контракт: `/health` вызывается без токена). */
 @Target(AnnotationTarget.FUNCTION)
@@ -50,6 +51,14 @@ internal interface HubService {
     /** Тело — audio/mpeg; Retrofit буферизует ResponseBody целиком (без @Streaming). */
     @POST("tts")
     suspend fun tts(@Body body: TtsRequestDto): Response<ResponseBody>
+
+    /** `?stream=true`: тело читается по мере прихода (@Streaming — Retrofit не буферизует). */
+    @Streaming
+    @POST("tts")
+    suspend fun ttsStream(@Body body: TtsRequestDto, @Query("stream") stream: Boolean = true): Response<ResponseBody>
+
+    @POST("metrics/turn")
+    suspend fun postTurnMetrics(@Body body: TurnMetricsDto): Response<ResponseBody>
 
     @POST("sessions/{sessionId}/messages")
     suspend fun postMessage(@Path("sessionId") sessionId: String, @Body body: LocalMessageDto): Response<ResponseBody>

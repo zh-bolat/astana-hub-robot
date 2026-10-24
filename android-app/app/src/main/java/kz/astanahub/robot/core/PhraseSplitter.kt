@@ -34,6 +34,10 @@ object PhraseSplitter {
         return result
     }
 
+    /** Предложения фразы (по . ! ? …), без склейки до [MAX_PHRASE_LENGTH]. */
+    fun sentences(text: String): List<String> =
+        text.trim().split(sentenceEnd).map { it.trim() }.filter { it.isNotEmpty() }
+
     /** Нормализует готовый список фраз (например, от сервера): без ссылок, каждая ≤ max. */
     fun normalize(phrases: List<String>, max: Int = MAX_PHRASE_LENGTH): List<String> =
         phrases.flatMap { split(it, max) }

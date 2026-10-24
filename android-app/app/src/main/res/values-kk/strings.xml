@@ -23,6 +23,11 @@
     <string name="phrase_not_heard">Кешіріңіз, естімей қалдым. Қайталап айтыңызшы.</string>
     <string name="phrase_one_moment">Бір сәт…</string>
     <string name="phrase_camera_unavailable">Кешіріңіз, камера қазір қолжетімсіз.</string>
+    <string name="phrase_cant_speak">Кешіріңіз, қазір сөйлей алмаймын. Жауап — экранда.</string>
+    <string name="phrase_looking">Қазір қараймын.</string>
+    <string name="phrase_filler_hm">Хм…</string>
+    <string name="phrase_filler_so">Сонымен…</string>
+    <string name="phrase_filler_now">Қазір…</string>
     <string name="mic_off_badge">Микрофон өшірулі: рұқсат жоқ</string>
     <string name="greet_title">Сәлеметсіз бе! Қалай көмектесейін?</string>
     <string name="greet_sub">Дауыспен сұраңыз немесе тақырып таңдаңыз</string>

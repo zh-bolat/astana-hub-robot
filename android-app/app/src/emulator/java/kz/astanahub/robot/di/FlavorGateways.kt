@@ -13,7 +13,7 @@ object FlavorGateways {
         val persons = FakePersonGateway()
         return Gateways(
             builtinVoice = FakeVoiceGateway(),
-            builtinMic = { enabled -> timber.log.Timber.d("FAKE builtin mic listening=%s", enabled) },
+            assistant = kz.astanahub.robot.fake.FakeAssistant(),
             robot = FakeRobotGateway(),
             camera = FakeCameraGateway(),
             persons = persons,

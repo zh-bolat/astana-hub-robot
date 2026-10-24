@@ -22,6 +22,7 @@ import kz.astanahub.robot.core.EchoGate
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.Reconnector
 import kz.astanahub.robot.core.sdkCall
+import kz.astanahub.robot.voice.BuiltinAssistant
 import kz.astanahub.robot.voice.BuiltinMicControl
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
@@ -42,7 +43,7 @@ class SkillVoiceGateway(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     skillApiFactory: () -> SkillApi = { SkillApi() },
     private val echo: EchoGate = EchoGate(),
-) : VoiceGateway, BuiltinMicControl {
+) : VoiceGateway, BuiltinMicControl, BuiltinAssistant {
 
     private val skillApi: SkillApi? = sdkCall("new SkillApi") { skillApiFactory() }
     private val listenerAdded = AtomicBoolean(false)
@@ -201,6 +202,15 @@ class SkillVoiceGateway(
         // В robotservice.jar есть setLangRec(LangJson) / setASRParams, формат не документирован — ПРОВЕРИТЬ НА РОБОТЕ.
         Timber.i("SkillApi setLanguage(%s): not implemented", lang.code)
     }
+
+    /**
+     * Приложение на переднем плане: системный помощник не распознаёт (setRecognizable(false)), если ASR=server;
+     * его запросы и так перехватываются в onSendRequest (return true), playText приложение само не зовёт.
+     */
+    override fun takeOver(listen: Boolean) = setBuiltinListening(listen)
+
+    /** Ушли в фон: распознавание системному помощнику — как по умолчанию (включено). */
+    override fun release() = setBuiltinListening(true)
 
     /** Встроенное распознавание вкл/выкл (на время серверного ASR). */
     override fun setBuiltinListening(enabled: Boolean) {

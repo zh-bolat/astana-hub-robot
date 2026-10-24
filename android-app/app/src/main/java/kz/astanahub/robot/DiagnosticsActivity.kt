@@ -118,6 +118,29 @@ class DiagnosticsActivity : AppCompatActivity() {
             settings.setTts(Lang.EN, it); log("TTS en: ${it.code}")
         }
 
+        // Только ElevenLabs: встроенный голос при сбое /v1/tts — лишь если включить явно.
+        binding.builtinFallbackSwitch.isChecked = settings.config.value.builtinFallback
+        binding.builtinFallbackSwitch.setOnCheckedChangeListener { _, on ->
+            settings.setBuiltinFallback(on)
+            log("Сбой /v1/tts → ${if (on) "встроенный голос" else "текст без звука + фраза из кеша"}")
+        }
+        binding.ttsStreamingSwitch.isChecked = settings.config.value.ttsStreaming
+        binding.ttsStreamingSwitch.setOnCheckedChangeListener { _, on ->
+            settings.setTtsStreaming(on)
+            log("Потоковый /v1/tts: ${if (on) "вкл" else "выкл"}")
+        }
+        val vad = settings.config.value.vadEndSilenceMillis
+        binding.vadSlider.value = (vad / 100 * 100).toFloat().coerceIn(binding.vadSlider.valueFrom, binding.vadSlider.valueTo)
+        binding.vadLabel.text = getString(R.string.diag_vad, vad)
+        binding.vadSlider.addOnChangeListener { _, value, fromUser ->
+            binding.vadLabel.text = getString(R.string.diag_vad, value.toInt())
+            if (fromUser) settings.setVadEndSilence(value.toInt())
+        }
+        binding.voiceCacheRefresh.setOnClickListener {
+            container.phraseCacheWarmer.warmUp(force = true)
+            log("Кеш голоса: синтез заново")
+        }
+
         // Подсказка языка для серверного STT
         val hintIds = mapOf<Lang?, Int>(null to R.id.hintAuto, Lang.RU to R.id.hintRu, Lang.KK to R.id.hintKk, Lang.EN to R.id.hintEn)
         binding.hintGroup.check(hintIds.getValue(server.sttLangHint))
@@ -249,6 +272,12 @@ class DiagnosticsActivity : AppCompatActivity() {
                 launch {
                     container.robot.connected.collect { c ->
                         binding.robotStatus.text = "RobotApi (${BuildConfig.PLATFORM}): " + if (c) "подключён" else "не подключён"
+                    }
+                }
+                launch {
+                    container.phraseCacheWarmer.status.collect { st ->
+                        binding.voiceCacheStatus.text = "Кеш голоса: ${st.cached}/${st.total}" +
+                            (if (st.running) " — синтез…" else "") + (st.lastError?.let { " (ошибка: $it)" } ?: "")
                     }
                 }
                 launch { server.micLevel.collect { binding.levelBar.setProgressCompat((it * 300).toInt().coerceAtMost(100), false) } }
