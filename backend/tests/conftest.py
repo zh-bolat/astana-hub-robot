@@ -194,7 +194,7 @@ def make_client(settings: Settings):
     clients: list[TestClient] = []
 
     def _make(
-        text_llm=None, vision_llm=None, speech=None, agent_models=None, **overrides
+        text_llm=None, vision_llm=None, speech=None, chat_client=None, **overrides
     ) -> TestClient:
         s = settings.model_copy(update=overrides)
         app = create_app(
@@ -202,7 +202,7 @@ def make_client(settings: Settings):
             text_llm or FakeProvider(),
             vision_llm or FakeProvider(),
             speech,
-            agent_models=agent_models,
+            chat_client=chat_client,
         )
         c = TestClient(app)
         clients.append(c)
@@ -211,8 +211,8 @@ def make_client(settings: Settings):
     yield _make
     for c in clients:
         c.close()
-        # lifespan у клиента без `with` не выполняется — пул соединений закрываем сами,
-        # иначе соединения висят до сборки мусора (Postgres: too many clients)
+        # lifespan без `with TestClient` не запускается — пул соединений закрываем сами,
+        # иначе тестовый Postgres упирается в max_connections
         c.app.state.log_writer.wait_idle(5)
         c.app.state.engine.dispose()
 

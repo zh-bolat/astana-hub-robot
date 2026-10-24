@@ -118,6 +118,101 @@
         }
       }
     },
+    "/v1/chat": {
+      "post": {
+        "summary": "Chat",
+        "description": "Агентский чат: модель помнит разговор и сама выбирает действие робота.",
+        "operationId": "chat_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE: emotion {name} перед первой phrase; phrase {text} и action {type, place_id} по мере готовности, затем done {request_id, lang, found, sources, actions} или error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/look": {
       "post": {
         "summary": "Look",
@@ -511,171 +606,6 @@
         }
       }
     },
-    "/v1/chat": {
-      "post": {
-        "summary": "Chat",
-        "description": "Ход разговора с агентом. Ответ — только SSE (заголовок Accept не обязателен).",
-        "operationId": "chat_v1_chat_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string",
-                  "description": "SSE: turn {turn_id, request_id} → emotion {name} → phrase {text} × N → action {name, args} × N → done {request_id, lang, tools} | error"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too Many Requests",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/chat/{turn_id}/frame": {
-      "post": {
-        "summary": "Chat Frame",
-        "description": "Кадр по запросу агента (action look). Кадр только в памяти, на диск и в логи не попадает.",
-        "operationId": "chat_frame_v1_chat__turn_id__frame_post",
-        "parameters": [
-          {
-            "name": "turn_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "title": "Turn Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad Request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Request Entity Too Large"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "image"
-                ],
-                "properties": {
-                  "image": {
-                    "type": "string",
-                    "format": "binary",
-                    "description": "JPEG ≤ 1 МБ"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/stt": {
       "post": {
         "summary": "Stt",
@@ -986,6 +916,36 @@
           "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10"
         }
       },
+      "ChatAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "where_is",
+              "guide_to",
+              "look"
+            ],
+            "title": "Type"
+          },
+          "place_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "ChatAction",
+        "description": "Действие робота из ответа агента: показать место, проводить, посмотреть камерой."
+      },
       "ChatMessage": {
         "properties": {
           "id": {
@@ -1069,16 +1029,10 @@
       },
       "ChatRequest": {
         "properties": {
-          "session_id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Session Id"
-          },
-          "text": {
+          "question": {
             "type": "string",
             "maxLength": 500,
-            "title": "Text",
+            "title": "Question",
             "default": ""
           },
           "lang": {
@@ -1097,21 +1051,23 @@
             ],
             "title": "Lang"
           },
-          "input": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Session Id"
+          },
+          "place_id": {
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "voice",
-                  "text",
-                  "button"
-                ]
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Input"
+            "title": "Place Id"
           },
           "event": {
             "anyOf": [
@@ -1124,16 +1080,6 @@
               }
             ],
             "title": "Event"
-          },
-          "robot_state": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RobotState"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object",
@@ -1141,16 +1087,82 @@
           "session_id"
         ],
         "title": "ChatRequest",
+        "description": "Запрос /v1/chat: как у /ask плюс `event` (v1.1). С visitor_arrived `question` может быть пустым.",
         "example": {
-          "input": "voice",
           "lang": "ru",
-          "robot_state": {
-            "navigating": false,
-            "nearest_place_id": "reception"
-          },
-          "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10",
-          "text": "Где тут можно поработать?"
+          "place_id": "reception",
+          "question": "Проводи меня в кафе",
+          "session_id": "6f1c2a9e-7d4b-4c1a-9f3e-2b8d5e6a7c10"
         }
+      },
+      "ChatResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "phrases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Phrases"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "ru",
+              "kk",
+              "en"
+            ],
+            "title": "Lang"
+          },
+          "found": {
+            "type": "boolean",
+            "title": "Found"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatAction"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "emotion": {
+            "type": "string",
+            "enum": [
+              "neutral",
+              "happy",
+              "thinking",
+              "surprised",
+              "sad",
+              "excited"
+            ],
+            "title": "Emotion",
+            "default": "neutral"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "answer",
+          "phrases",
+          "lang",
+          "found",
+          "sources"
+        ],
+        "title": "ChatResponse"
       },
       "ErrorDetail": {
         "properties": {
@@ -1401,29 +1413,6 @@
           "items"
         ],
         "title": "QuickQuestionsResponse"
-      },
-      "RobotState": {
-        "properties": {
-          "nearest_place_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Nearest Place Id"
-          },
-          "navigating": {
-            "type": "boolean",
-            "title": "Navigating",
-            "default": false
-          }
-        },
-        "type": "object",
-        "title": "RobotState"
       },
       "SessionMessagesResponse": {
         "properties": {

@@ -5,7 +5,7 @@
     uv run python -m eval.run_injection --fake          # без сети (FakeProvider)
     uv run python -m eval.run_injection --json report.json
     uv run python -m eval.run_injection --chat          # тот же набор через агента /v1/chat (AGENT_MODEL)
-    uv run python -m eval.run_injection --chat --fake   # /v1/chat без сети: агента нет → запасной путь /ask
+    uv run python -m eval.run_injection --chat --fake   # /v1/chat без сети: CHAT_PROVIDER=off → ответ как /ask
 
 Ответы 503/504 (провайдер недоступен / лимит) считаются отдельно как errors, не как провал защиты.
 Лог вопросов пишется во временную БД.
@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
 
 from app.config import Settings
 from app.knowledge.source import YamlKnowledgeSource
@@ -80,9 +81,10 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
 
 
 def _chat(client: TestClient, case: dict, token: str) -> tuple[int, dict]:
-    """Ход /v1/chat → (status, ответ в форме /ask: answer, phrases, lang)."""
-    body = {"session_id": f"inj-{case['id']}", "text": case["question"]}
-    r = client.post("/v1/chat", json=body, headers={"Authorization": f"Bearer {token}"})
+    """Реплика /v1/chat (SSE) → (status, ответ в форме /ask: answer, phrases, lang, actions)."""
+    body = {"question": case["question"], "session_id": f"inj-{case['id']}"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}
+    r = client.post("/v1/chat", json=body, headers=headers)
     if r.status_code != 200:
         return r.status_code, {}
     events = parse_sse(r.text)
@@ -91,7 +93,7 @@ def _chat(client: TestClient, case: dict, token: str) -> tuple[int, dict]:
         code = (last[1].get("error") or {}).get("code")
         return {"llm_unavailable": 503, "timeout": 504}.get(code, 500), {}
     phrases = [d["text"] for e, d in events if e == "phrase"]
-    actions = [d["name"] for e, d in events if e == "action"]
+    actions = [d["type"] for e, d in events if e == "action"]
     return 200, {
         "answer": " ".join(phrases),
         "phrases": phrases,
@@ -105,9 +107,10 @@ def run(
     sleep_s: float = 4.0,
     force_fake: bool = False,
     endpoint: str = "ask",
-    agent_models: list | None = None,
+    chat_client: AsyncOpenAI | None = None,
 ) -> dict:
-    """endpoint="chat" — прогон через агента /v1/chat; agent_models — подменить модели агента (тесты)."""
+    """endpoint="chat" — прогон через агента /v1/chat; chat_client — подменить клиент модели агента
+    (тесты: фейковый OpenAI-совместимый транспорт)."""
     cases = yaml.safe_load(cases_path.read_text(encoding="utf-8"))["cases"]
     token = secrets.token_hex(16)
     overrides: dict = {}
@@ -116,8 +119,8 @@ def run(
             "llm_provider": "fake",
             "vision_provider": "fake",
             "gemini_api_key": None,
-            # без сети: реальных моделей агента нет (подставленные agent_models — работают)
-            "agent_enabled": agent_models is not None,
+            # без сети: агента нет (подставленный chat_client — работает), /v1/chat отвечает как /ask
+            "chat_provider": "off",
         }
     with tempfile.TemporaryDirectory() as tmp:
         settings = Settings(
@@ -134,7 +137,7 @@ def run(
             settings,
             knowledge_source=YamlKnowledgeSource(settings.knowledge_dir),
             log_repo=MemoryQuestionLog(),  # type: ignore[arg-type]
-            agent_models=agent_models,
+            chat_client=chat_client,
         )
         provider = app.state.service.text_llm
         corpus = kb_corpus(app.state.store.get())
@@ -172,10 +175,10 @@ def run(
                     }
                 )
     scored = [r for r in results if not r["error"]]
-    agent = app.state.chat
+    chat = app.state.chat
     provider_label = (
-        ",".join(m.label for m in agent.models)
-        if endpoint == "chat" and agent.enabled
+        chat.name
+        if endpoint == "chat" and chat.model is not None
         else f"{provider.name}:{provider.model}"
     )
     return {
