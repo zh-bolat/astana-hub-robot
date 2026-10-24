@@ -356,8 +356,8 @@ class ServerVoiceGateway(
 
         /** Не сыгран: освободить клипы и остановить докачку. Идемпотентно. */
         fun release() {
+            finish() // сначала остановить докачку (readAt плеера проснётся), потом освободить плееры
             clips.forEach(player::release)
-            finish()
         }
 
         fun finish() {

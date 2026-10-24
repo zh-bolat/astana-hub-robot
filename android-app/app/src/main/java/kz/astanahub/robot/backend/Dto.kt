@@ -111,6 +111,7 @@ internal data class TurnMetricsDto(
     @SerialName("tts_first_byte_ms") val ttsFirstByteMs: Long? = null,
     @SerialName("first_audio_ms") val firstAudioMs: Long? = null,
     @SerialName("vad_silence_ms") val vadSilenceMs: Int? = null,
-    val fallback: Boolean = false,
-    val interrupted: Boolean = false,
+    // Без значений по умолчанию: флаги уходят всегда (encodeDefaults выключен).
+    val fallback: Boolean,
+    val interrupted: Boolean,
 )
