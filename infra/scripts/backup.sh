@@ -27,7 +27,7 @@ final="$BACKUP_DIR/postgres-$ts.dump"
 tmp="$(mktemp "$BACKUP_DIR/.postgres-$ts.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$tmp"
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' < /dev/null > "$tmp"
 
 # Проверка: архив читается и содержит объекты (pg_restore из того же образа, через stdin).
 toc="$(docker compose exec -T postgres pg_restore --list < "$tmp")"
