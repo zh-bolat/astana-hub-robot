@@ -52,6 +52,8 @@ import kz.astanahub.robot.robot.HeadController
 import kz.astanahub.robot.robot.NavEvent
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
+import kz.astanahub.robot.voice.SpeechChunk
+import kz.astanahub.robot.voice.SpeechListener
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
@@ -713,14 +715,56 @@ class MainViewModel(
         }
         val say: suspend (String, Lang) -> Unit = { part, partLang -> sayPart(part, partLang) }
 
+        fun stepDone(count: Int) {
+            if (pending.addAndGet(-count) == 0 && streaming && showThinking && navJob?.isActive != true) setBusy(Phase.THINKING)
+        }
+
+        // Подряд идущие фразы — одна непрерывная озвучка: голос склеивает их в куски ≤ 300 символов
+        // и готовит следующий кусок, пока звучит текущий (без пауз между фразами).
+        val chunkListener = object : SpeechListener {
+            override fun onChunkStart(chunk: SpeechChunk) {
+                spoken += chunk.phrases
+                _state.update { it.copy(answer = spoken.joinToString(" "), subtitle = chunk.text) }
+                setBusy(null)
+            }
+
+            override fun onChunkDone(chunk: SpeechChunk, completed: Boolean) {
+                touchSession()
+                stepDone(chunk.phrases.size)
+            }
+        }
+
         val speaker = launch {
+            var stream: Channel<String>? = null
+            var streamLang: Lang? = null
+            var streamJob: Job? = null
+            suspend fun finishStream() {
+                stream?.close()
+                streamJob?.join()
+                stream = null
+                streamJob = null
+            }
             for (step in steps) {
                 when (step) {
-                    is TurnStep.Say -> sayPart(step.text, step.lang)
-                    is TurnStep.Run -> step.block()
+                    is TurnStep.Say -> {
+                        // Прервали (озвучка вернула false) или сменился язык — следующая фраза открывает новую озвучку.
+                        if (stream == null || streamLang != step.lang || streamJob?.isActive != true) {
+                            finishStream()
+                            val channel = Channel<String>(Channel.UNLIMITED)
+                            stream = channel
+                            streamLang = step.lang
+                            streamJob = launch { voice.speakStream(channel, step.lang, chunkListener) }
+                        }
+                        stream?.trySend(step.text)
+                    }
+                    is TurnStep.Run -> {
+                        finishStream() // where_is — строго после уже пришедших фраз
+                        step.block()
+                        stepDone(1)
+                    }
                 }
-                if (pending.decrementAndGet() == 0 && streaming && showThinking && navJob?.isActive != true) setBusy(Phase.THINKING)
             }
+            finishStream()
         }
 
         fun enqueue(step: TurnStep) {

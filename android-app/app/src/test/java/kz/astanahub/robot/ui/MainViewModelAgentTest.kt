@@ -80,6 +80,18 @@ class MainViewModelAgentTest {
             return true
         }
 
+        /** Сколько непрерывных озвучек (speakStream) открыто за ход. */
+        var streams = 0
+
+        override suspend fun speakStream(
+            phrases: kotlinx.coroutines.channels.ReceiveChannel<String>,
+            lang: Lang,
+            listener: kz.astanahub.robot.voice.SpeechListener,
+        ): Boolean {
+            streams++
+            return super.speakStream(phrases, lang, listener)
+        }
+
         override fun stopSpeaking() { stops++ }
         override fun setLanguage(lang: Lang) = Unit
     }
@@ -177,6 +189,24 @@ class MainViewModelAgentTest {
         assertEquals(Emotion.NEUTRAL, vm.state.value.emotion)
         assertEquals(Phase.IDLE, vm.state.value.phase)
         coVerify(exactly = 0) { backend.ask(any(), any()) }
+    }
+
+    @Test
+    fun `agent phrases of one turn go to the voice as one continuous stream`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Раз."))
+            delay(50)
+            emit(ChatEvent.Phrase("Два."))
+            delay(300) // первая и вторая уже доиграли — пауза в потоке не рвёт озвучку
+            emit(ChatEvent.Phrase("Три."))
+            emit(done)
+        }
+        val vm = vm()
+        vm.submit("Расскажи")
+        advanceUntilIdle()
+        assertEquals(listOf("Раз.", "Два.", "Три."), voice.spoken)
+        assertEquals(1, voice.streams)
+        assertEquals("Раз. Два. Три.", vm.state.value.answer)
     }
 
     @Test

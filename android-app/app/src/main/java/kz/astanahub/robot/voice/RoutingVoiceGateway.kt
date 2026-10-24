@@ -1,12 +1,17 @@
 package kz.astanahub.robot.voice
 
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
@@ -62,11 +68,11 @@ class RoutingVoiceGateway(
     /** Экран диагностики открыт: главный экран не получает фраз, автопрослушивание сервера выключено. */
     private val diagnostics = MutableStateFlow(false)
 
-    /** Очередь озвучки: одновременно звучит только одна фраза. */
+    /** Очередь озвучки: одновременно звучит только одна озвучка (speak/speakStream). */
     private val queue = Mutex()
 
-    /** Номер «Стопа»: озвучка, вставшая в очередь до него, уже не звучит. */
-    private val stopGeneration = AtomicLong(0)
+    /** Номер «Стопа»: озвучка, вставшая в очередь до него, уже не звучит; текущая обрывается. */
+    private val stopGeneration = MutableStateFlow(0L)
 
     /** Сколько вызовов [speak] сейчас играет или ждёт очереди. */
     private val speakingCount = MutableStateFlow(0)
@@ -189,15 +195,27 @@ class RoutingVoiceGateway(
 
     override suspend fun speak(phrases: List<String>, lang: Lang): Boolean {
         if (phrases.isEmpty()) return true
-        val generation = stopGeneration.get()
+        val channel = Channel<String>(Channel.UNLIMITED)
+        phrases.forEach { channel.trySend(it) }
+        channel.close()
+        return speakStream(channel, lang)
+    }
+
+    /**
+     * Одна озвучка в очереди: фразы из [phrases] склеиваются в куски ≤ 300 символов, следующий кусок серверного TTS
+     * синтезируется, пока звучит текущий ([SpeechPipeline]). [speechGuard] поднят на всё время вызова — и в промежутках
+     * между кусками; хвост тишины — только после последнего.
+     */
+    override suspend fun speakStream(phrases: ReceiveChannel<String>, lang: Lang, listener: SpeechListener): Boolean {
+        val generation = stopGeneration.value
         speakingCount.update { it + 1 }
         try {
             return queue.withLock {
-                if (stopGeneration.get() != generation) {
-                    Timber.d("queued speech dropped after stop (%d phrases)", phrases.size)
+                if (stopGeneration.value != generation) {
+                    Timber.d("queued speech dropped after stop")
                     false
                 } else {
-                    speakNow(phrases, lang, generation)
+                    stoppable(generation) { speakNow(phrases, lang, listener, generation) }
                 }
             }
         } finally {
@@ -205,22 +223,67 @@ class RoutingVoiceGateway(
         }
     }
 
-    private suspend fun speakNow(phrases: List<String>, lang: Lang, generation: Long): Boolean {
-        if (settings.config.value.ttsFor(lang) == VoiceSource.BUILTIN) return builtinTts.speak(phrases, lang)
-        return when (val r = server.speakDetailed(phrases, lang)) {
-            ServerSpeakResult.Done -> true
-            ServerSpeakResult.Interrupted -> false
-            is ServerSpeakResult.Unavailable -> {
-                if (stopGeneration.get() != generation) return false
-                Timber.w("server TTS unavailable (%s: %s) → builtin", r.error.kind, r.error.message)
-                builtinTts.speak(r.remaining, lang)
-            }
+    /** «Стоп» обрывает сразу всё: проигрывание, синтез следующего куска, ожидание новых фраз. */
+    private suspend fun stoppable(generation: Long, block: suspend () -> Boolean): Boolean = coroutineScope {
+        val work = async { block() }
+        val watcher = launch {
+            stopGeneration.first { it != generation }
+            work.cancel()
+        }
+        try {
+            work.await()
+        } catch (e: CancellationException) {
+            ensureActive() // отменили нас самих — пробрасываем
+            false
+        } finally {
+            watcher.cancel()
         }
     }
 
+    private suspend fun speakNow(
+        phrases: ReceiveChannel<String>,
+        lang: Lang,
+        listener: SpeechListener,
+        generation: Long,
+    ): Boolean = coroutineScope {
+        val pending = PhraseQueue()
+        val feeder = launch {
+            try {
+                for (p in phrases) pending.add(p)
+            } finally {
+                pending.close()
+            }
+        }
+        try {
+            if (settings.config.value.ttsFor(lang) == VoiceSource.BUILTIN) {
+                return@coroutineScope speakBuiltin(pending, lang, listener, generation)
+            }
+            when (val r = server.speakQueue(pending, lang, listener)) {
+                ServerSpeakResult.Done -> true
+                ServerSpeakResult.Interrupted -> false
+                is ServerSpeakResult.Unavailable -> {
+                    if (stopGeneration.value != generation) return@coroutineScope false
+                    Timber.w("server TTS unavailable (%s: %s) → builtin", r.error.kind, r.error.message)
+                    speakBuiltin(pending, lang, listener, generation)
+                }
+            }
+        } finally {
+            feeder.cancel()
+        }
+    }
+
+    /** Встроенный голос: накопившиеся фразы — одним вызовом (кусок ≤ 300 символов), без пауз между вызовами. */
+    private suspend fun speakBuiltin(queue: PhraseQueue, lang: Lang, listener: SpeechListener, generation: Long): Boolean =
+        SpeechPipeline.sequential(
+            queue = queue,
+            speak = { chunk -> builtinTts.speak(listOf(chunk.text), lang) },
+            listener = listener,
+            isStopped = { stopGeneration.value != generation },
+        ) == PipelineResult.Done
+
     /** «Стоп»: замолчать сейчас и выбросить всё, что ждёт в очереди. */
     override fun stopSpeaking() {
-        stopGeneration.incrementAndGet()
+        stopGeneration.update { it + 1 }
         builtinTts.stopSpeaking()
         server.stopSpeaking()
         if (builtinAsr !== builtinTts) builtinAsr.stopSpeaking()

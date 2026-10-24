@@ -5,9 +5,11 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,6 +22,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kz.astanahub.robot.backend.ApiResult
+import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.core.Lang
@@ -100,9 +104,20 @@ class RoutingVoiceGatewayTest {
 
     // --- маршрутизация (было до волны 3) ---
 
+    /** Серверный голос-дублёр: забирает из очереди всё, что пришло (каждый кусок — в [serverSpoken]). */
+    private val serverSpoken = mutableListOf<String>()
+
+    private fun serverSpeaksAll() {
+        coEvery { server.speakQueue(any(), any(), any()) } coAnswers {
+            val q = firstArg<PhraseQueue>()
+            while (true) serverSpoken += (q.nextChunk() ?: break).text
+            ServerSpeakResult.Done
+        }
+    }
+
     @Test
     fun `defaults - ru and en builtin, kk server`() = runTest(UnconfinedTestDispatcher()) {
-        coEvery { server.speakDetailed(any(), any()) } returns ServerSpeakResult.Done
+        serverSpeaksAll()
         val tts = voiceMock()
         val r = router(builtinTts = tts)
 
@@ -112,28 +127,36 @@ class RoutingVoiceGatewayTest {
 
         coVerify { tts.speak(listOf("Привет."), Lang.RU) }
         coVerify { tts.speak(listOf("Hi."), Lang.EN) }
-        coVerify { server.speakDetailed(listOf("Сәлем."), Lang.KK) }
+        coVerify { server.speakQueue(any(), Lang.KK, any()) }
+        assertEquals(listOf("Сәлем."), serverSpoken)
         coVerify(exactly = 0) { tts.speak(any(), Lang.KK) }
     }
 
     @Test
     fun `server TTS unavailable or fake falls back to builtin for remaining phrases`() = runTest(UnconfinedTestDispatcher()) {
-        coEvery { server.speakDetailed(any(), any()) } returns
-            ServerSpeakResult.Unavailable(listOf("Екі."), BackendError(ErrorKind.SPEECH_UNAVAILABLE, message = "speech provider is fake"))
+        // Первый кусок сыгран, на втором синтез ответил 503 / fake: «Екі.» остаётся в очереди.
+        coEvery { server.speakQueue(any(), any(), any()) } coAnswers {
+            val q = firstArg<PhraseQueue>()
+            serverSpoken += q.nextChunk(single = true)!!.text
+            ServerSpeakResult.Unavailable(q.pending(), BackendError(ErrorKind.SPEECH_UNAVAILABLE, message = "speech provider is fake"))
+        }
         val tts = voiceMock()
         coEvery { tts.speak(any(), any()) } returns true
 
         assertTrue(router(builtinTts = tts).speak(listOf("Бір.", "Екі."), Lang.KK))
 
+        assertEquals(listOf("Бір."), serverSpoken)
+        coVerify(exactly = 1) { tts.speak(any(), Lang.KK) }
         coVerify { tts.speak(listOf("Екі."), Lang.KK) }
     }
 
     @Test
     fun `per-language override from settings`() = runTest(UnconfinedTestDispatcher()) {
         config.value = VoiceConfig(tts = mapOf(Lang.RU to VoiceSource.SERVER))
-        coEvery { server.speakDetailed(any(), any()) } returns ServerSpeakResult.Done
+        serverSpeaksAll()
         router().speak(listOf("Привет."), Lang.RU)
-        coVerify { server.speakDetailed(listOf("Привет."), Lang.RU) }
+        coVerify { server.speakQueue(any(), Lang.RU, any()) }
+        assertEquals(listOf("Привет."), serverSpoken)
     }
 
     @Test
@@ -327,5 +350,109 @@ class RoutingVoiceGatewayTest {
     fun `session id is forwarded to server STT`() = runTest(UnconfinedTestDispatcher()) {
         router().setSessionId("s-1")
         verify { server.setSessionId("s-1") }
+    }
+
+    // --- плавная речь: поток фраз хода ---
+
+    @Test
+    fun `builtin voice - phrases queued while one plays go out as one call up to 300 chars`() = runTest(StandardTestDispatcher()) {
+        val tts = FakeVoice()
+        val r = router(builtinTts = tts)
+        val phrases = Channel<String>(Channel.UNLIMITED)
+        val chunks = mutableListOf<String>()
+        val listener = object : SpeechListener {
+            override fun onChunkStart(chunk: SpeechChunk) { chunks += chunk.text }
+        }
+        val speech = async { r.speakStream(phrases, Lang.RU, listener) }
+        phrases.send("Раз.")
+        runCurrent()
+        phrases.send("Два.")
+        phrases.send("Три.")
+        phrases.send("А".repeat(298) + ".") // не влезает к «Два. Три.» — отдельным куском
+        phrases.close()
+
+        assertTrue(speech.await())
+        assertEquals(listOf("Раз.", "Два. Три.", "А".repeat(298) + "."), tts.spoken)
+        assertEquals(tts.spoken, chunks)
+    }
+
+    @Test
+    fun `speech guard stays up between chunks and drops only after the last one`() = runTest(StandardTestDispatcher()) {
+        val tts = FakeVoice(millisPerPhrase = 1_000)
+        val r = router(builtinTts = tts)
+        runCurrent()
+        val phrases = Channel<String>(Channel.UNLIMITED)
+        val speech = async { r.speakStream(phrases, Lang.RU) }
+        phrases.send("Первая.")
+        runCurrent()
+        assertTrue(r.speechGuard.value)
+
+        advanceTimeBy(1_000 + RoutingVoiceGateway.SPEECH_TAIL_MS + 500) // кусок доиграл, следующая фраза ещё не пришла
+        assertEquals(listOf("Первая."), tts.spoken)
+        assertTrue("микрофон заглушён и в промежутке между кусками", r.speechGuard.value)
+        verify(exactly = 1) { server.setSpeechActive(false) } // только начальное «тихо», до озвучки
+
+        phrases.send("Вторая.")
+        phrases.close()
+        assertTrue(speech.await())
+        runCurrent()
+        assertTrue("хвост после последнего куска", r.speechGuard.value)
+        advanceTimeBy(RoutingVoiceGateway.SPEECH_TAIL_MS + 1)
+        assertFalse(r.speechGuard.value)
+    }
+
+    @Test
+    fun `stop ends a stream at once - even while it waits for the next phrase`() = runTest(StandardTestDispatcher()) {
+        val tts = FakeVoice()
+        val r = router(builtinTts = tts)
+        val phrases = Channel<String>(Channel.UNLIMITED)
+        val speech = async { r.speakStream(phrases, Lang.RU) }
+        phrases.send("Раз.")
+        advanceTimeBy(1_500) // доиграл, ждём следующую
+        assertEquals(listOf("Раз."), tts.spoken)
+
+        r.stopSpeaking()
+        runCurrent()
+        assertTrue(speech.isCompleted)
+        assertFalse(speech.await())
+        phrases.trySend("Два.")
+        advanceTimeBy(2_000)
+        assertEquals(listOf("Раз."), tts.spoken)
+    }
+
+    @Test
+    fun `server voice - stop interrupts current chunk and cancels preload and the rest`() = runTest(StandardTestDispatcher()) {
+        config.value = VoiceConfig(tts = mapOf(Lang.RU to VoiceSource.SERVER))
+        val clips = FakeClipPlayer(this, millisPerChar = 100)
+        val backend = mockk<BackendApi>()
+        var synthCancelled = 0
+        coEvery { backend.tts(any(), any()) } coAnswers {
+            try {
+                delay(300)
+            } catch (e: CancellationException) {
+                synthCancelled++
+                throw e
+            }
+            ApiResult.Success(firstArg<String>().toByteArray())
+        }
+        val realServer = ServerVoiceGateway(backend, mockk(relaxed = true), clips, scope = backgroundScope)
+        val r = RoutingVoiceGateway(voiceMock(), voiceMock(), realServer, settings, mic, continuousServerAsr = false, scope = backgroundScope)
+        val phrases = Channel<String>(Channel.UNLIMITED)
+        val speech = async { r.speakStream(phrases, Lang.RU) }
+        phrases.send("Первая фраза.")
+        phrases.send("Вторая.")
+        advanceTimeBy(500) // первая звучит (с 300 мс), вторая синтезируется (с 450 мс: склейка ждёт 150 мс)
+        assertEquals(listOf("Первая фраза."), clips.started.map { it.first })
+        assertTrue(realServer.activity.value == VoiceActivity.SPEAKING)
+
+        r.stopSpeaking()
+        runCurrent()
+        assertFalse(speech.await())
+        assertEquals(1, synthCancelled)
+        phrases.trySend("Третья.")
+        advanceTimeBy(5_000)
+        assertEquals(1, clips.started.size)
+        assertEquals("все подготовленные плееры освобождены", clips.prepared.toSet(), clips.released)
+        assertEquals(VoiceActivity.IDLE, realServer.activity.value)
     }
 }

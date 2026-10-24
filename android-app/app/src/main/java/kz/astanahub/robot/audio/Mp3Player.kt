@@ -15,25 +15,71 @@ import timber.log.Timber
 /**
  * Проигрывание MP3 из памяти через MediaPlayer (без ExoPlayer). Один звук за раз.
  * У каждого проигрывания своя сессия: [stop] завершает именно текущую, а не «последний сохранённый хук».
+ *
+ * Бесшовность: [prepare] готовит следующий MediaPlayer (prepareAsync из памяти), пока звучит текущий;
+ * [play] подготовленного клипа — только `start()`. Всё на [Dispatchers.Main.immediate]: продолжение после
+ * onCompletion выполняется прямо в колбэке, и следующий клип стартует в том же такте главного потока.
+ * Каждый MediaPlayer освобождается ровно один раз: по завершении/ошибке/стопу [play], отменой [prepare]
+ * или [release] для не сыгранного клипа.
  */
-class Mp3Player {
+class Mp3Player : ClipPlayer {
+
+    private class Clip(val player: MediaPlayer) : AudioClip {
+        private val released = AtomicBoolean(false)
+        val isReleased: Boolean get() = released.get()
+
+        /** Только на главном потоке (там живёт MediaPlayer). */
+        fun releaseNow() {
+            if (released.compareAndSet(false, true)) runCatching { player.release() }
+        }
+    }
 
     private class Session(val finish: (Boolean) -> Unit)
 
     @Volatile private var session: Session? = null
 
-    /** true — доиграно до конца; false — остановлено [stop], отменено или ошибка. */
-    suspend fun play(bytes: ByteArray): Boolean = withContext(Dispatchers.Main) {
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    override suspend fun prepare(bytes: ByteArray): AudioClip? = withContext(Dispatchers.Main.immediate) {
         suspendCancellableCoroutine { cont ->
-            val player = MediaPlayer()
-            val released = AtomicBoolean(false)
-            fun release() {
-                if (released.compareAndSet(false, true)) runCatching { player.release() }
+            val clip = Clip(MediaPlayer())
+            cont.invokeOnCancellation { mainHandler.post { clip.releaseNow() } }
+            try {
+                clip.player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                clip.player.setDataSource(ByteArrayDataSource(bytes))
+                clip.player.setOnPreparedListener {
+                    if (clip.isReleased) return@setOnPreparedListener
+                    // Отменили между prepared и возобновлением — клип никому не достался, освобождаем.
+                    if (cont.isActive) cont.resume(clip) { _, _, _ -> clip.releaseNow() } else clip.releaseNow()
+                }
+                clip.player.setOnErrorListener { _, what, extra ->
+                    Timber.w("MediaPlayer prepare error %d/%d", what, extra)
+                    clip.releaseNow()
+                    if (cont.isActive) cont.resume(null)
+                    true
+                }
+                clip.player.prepareAsync()
+            } catch (e: Exception) {
+                Timber.e(e, "MediaPlayer setup")
+                clip.releaseNow()
+                if (cont.isActive) cont.resume(null)
             }
+        }
+    }
+
+    override suspend fun play(clip: AudioClip): Boolean = withContext(Dispatchers.Main.immediate) {
+        val c = clip as Clip
+        if (c.isReleased) return@withContext false
+        suspendCancellableCoroutine { cont ->
             lateinit var self: Session
             fun finish(ok: Boolean) {
                 if (session === self) session = null
-                release()
+                c.releaseNow()
                 if (cont.isActive) cont.resume(ok)
             }
             self = Session(::finish)
@@ -42,38 +88,38 @@ class Mp3Player {
             session = self
             cont.invokeOnCancellation {
                 if (session === self) session = null
-                // release — на главном потоке, где живёт MediaPlayer.
-                mainHandler.post { release() }
+                mainHandler.post { c.releaseNow() }
             }
             try {
-                player.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build(),
-                )
-                player.setDataSource(ByteArrayDataSource(bytes))
-                player.setOnCompletionListener { finish(true) }
-                player.setOnErrorListener { _, what, extra ->
+                c.player.setOnCompletionListener { finish(true) }
+                c.player.setOnErrorListener { _, what, extra ->
                     Timber.w("MediaPlayer error %d/%d", what, extra)
                     finish(false); true
                 }
-                player.setOnPreparedListener { if (!released.get()) it.start() }
-                player.prepareAsync()
+                c.player.start()
             } catch (e: Exception) {
-                Timber.e(e, "MediaPlayer setup")
+                Timber.e(e, "MediaPlayer start")
                 finish(false)
             }
         }
     }
 
+    /** Подготовить и сыграть (одиночный звук, экран диагностики). */
+    suspend fun play(bytes: ByteArray): Boolean {
+        val clip = prepare(bytes) ?: return false
+        return play(clip)
+    }
+
+    override fun release(clip: AudioClip) {
+        val c = clip as Clip
+        if (Looper.myLooper() == Looper.getMainLooper()) c.releaseNow() else mainHandler.post { c.releaseNow() }
+    }
+
     /** Остановить текущее проигрывание (из любого потока). Нечего играть — ничего не делает. */
-    fun stop() {
+    override fun stop() {
         val current = session ?: return
         mainHandler.post { current.finish(false) }
     }
-
-    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     private class ByteArrayDataSource(private val data: ByteArray) : MediaDataSource() {
         override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {

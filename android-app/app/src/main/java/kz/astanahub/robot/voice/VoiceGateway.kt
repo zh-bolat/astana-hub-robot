@@ -1,5 +1,6 @@
 package kz.astanahub.robot.voice
 
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -27,6 +28,27 @@ interface VoiceGateway {
      * Возвращает false, если озвучка прервана (посетитель заговорил, stopSpeaking, ошибка TTS).
      */
     suspend fun speak(phrases: List<String>, lang: Lang): Boolean
+
+    /**
+     * Озвучивает фразы по мере прихода (ход агента: SSE `phrase` по одной). Возвращается, когда [phrases]
+     * закрыт и всё доиграно, либо озвучка прервана (false). [listener] — какой кусок звучит (субтитры).
+     * По умолчанию — по одной фразе; [RoutingVoiceGateway] склеивает их в куски ≤ 300 символов и
+     * предзагружает следующий кусок, чтобы не было пауз.
+     */
+    suspend fun speakStream(
+        phrases: ReceiveChannel<String>,
+        lang: Lang,
+        listener: SpeechListener = SpeechListener.NONE,
+    ): Boolean {
+        for (p in phrases) {
+            val chunk = SpeechChunk(listOf(p))
+            listener.onChunkStart(chunk)
+            val ok = speak(chunk.phrases, lang)
+            listener.onChunkDone(chunk, ok)
+            if (!ok) return false
+        }
+        return true
+    }
 
     fun stopSpeaking()
 

@@ -3,7 +3,6 @@ package kz.astanahub.robot.voice
 import android.os.SystemClock
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -23,7 +22,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kz.astanahub.robot.audio.MicRecorder
-import kz.astanahub.robot.audio.Mp3Player
+import kz.astanahub.robot.audio.AudioClip
+import kz.astanahub.robot.audio.ClipPlayer
 import kz.astanahub.robot.audio.VadConfig
 import kz.astanahub.robot.audio.WavEncoder
 import kz.astanahub.robot.backend.ApiResult
@@ -57,13 +57,13 @@ sealed interface ServerSpeakResult {
 /**
  * Голос через backend (вариант B, docs/api-contract.md «Голос через сервер»):
  * микрофон → WS /v1/stt/stream (live: текст по ходу речи, конец фразы находит сервер);
- * если live недоступен — микрофон → VAD → WAV → /v1/stt; фразы → /v1/tts (следующая грузится, пока играет текущая) → MediaPlayer.
+ * если live недоступен — микрофон → VAD → WAV → /v1/stt; фразы → куски ≤ 300 символов → /v1/tts (следующий синтезируется, пока играет текущий) → MediaPlayer без пауз.
  * Работает на эмуляторе (микрофон хоста) и на роботе.
  */
 class ServerVoiceGateway(
     private val backend: BackendApi,
     private val recorder: MicRecorder,
-    private val player: Mp3Player,
+    private val player: ClipPlayer,
     private val vadConfig: VadConfig = VadConfig(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
 ) : VoiceGateway {
@@ -86,7 +86,7 @@ class ServerVoiceGateway(
     /** Подсказка языка для STT; null — автоопределение на сервере. */
     @Volatile var sttLangHint: Lang? = null
 
-    /** Своя озвучка (speakDetailed). */
+    /** Своя озвучка (speakQueue). */
     private val ownSpeaking = MutableStateFlow(false)
     /** Любая озвучка робота + хвост тишины — от RoutingVoiceGateway. */
     private val externalSpeech = MutableStateFlow(false)
@@ -279,33 +279,64 @@ class ServerVoiceGateway(
     override suspend fun speak(phrases: List<String>, lang: Lang): Boolean =
         speakDetailed(phrases, lang) == ServerSpeakResult.Done
 
-    /** Озвучка с предзагрузкой следующей фразы. */
+    /** Озвучка готового списка (экран диагностики): склейка и предзагрузка — как у [speakQueue]. */
     suspend fun speakDetailed(phrases: List<String>, lang: Lang): ServerSpeakResult {
         if (phrases.isEmpty()) return ServerSpeakResult.Done
+        val queue = PhraseQueue()
+        phrases.forEach(queue::add)
+        queue.close()
+        return speakQueue(queue, lang)
+    }
+
+    /**
+     * Озвучка очереди фраз через /v1/tts без пауз ([SpeechPipeline.lookahead]): пока играет кусок, следующий
+     * синтезируется и готовится в MediaPlayer. Ошибка синтеза → [ServerSpeakResult.Unavailable], неозвученные фразы
+     * остаются в [queue] (их доскажет встроенный голос). Микрофон серверного ASR глушится на всё время вызова.
+     */
+    suspend fun speakQueue(
+        queue: PhraseQueue,
+        lang: Lang,
+        listener: SpeechListener = SpeechListener.NONE,
+    ): ServerSpeakResult {
         stopRequested = false
         ownSpeaking.value = true
         _activity.value = VoiceActivity.SPEAKING
-        var next: Deferred<ApiResult<ByteArray>> = scope.async { backend.tts(phrases[0], lang) }
         try {
-            for (i in phrases.indices) {
-                val audio = next.await()
-                if (i + 1 < phrases.size) next = scope.async { backend.tts(phrases[i + 1], lang) }
-                if (stopRequested) return ServerSpeakResult.Interrupted
-                when (audio) {
-                    is ApiResult.Failure -> {
-                        Timber.w("TTS failed: %s", audio.error)
-                        return ServerSpeakResult.Unavailable(phrases.drop(i), audio.error)
-                    }
-                    is ApiResult.Success -> if (!player.play(audio.value) || stopRequested) {
-                        return ServerSpeakResult.Interrupted
-                    }
-                }
+            val result = SpeechPipeline.lookahead(
+                queue = queue,
+                prepare = { chunk -> synthesize(chunk, lang) },
+                play = player::play,
+                release = player::release,
+                listener = listener,
+                isStopped = { stopRequested },
+            )
+            return when (result) {
+                PipelineResult.Done -> ServerSpeakResult.Done
+                PipelineResult.Interrupted -> ServerSpeakResult.Interrupted
+                is PipelineResult.Failed -> ServerSpeakResult.Unavailable(queue.pending(), result.error)
             }
-            return ServerSpeakResult.Done
         } finally {
-            next.cancel()
             ownSpeaking.value = false
             _activity.value = VoiceActivity.IDLE
+        }
+    }
+
+    private suspend fun synthesize(chunk: SpeechChunk, lang: Lang): Prepared<AudioClip> {
+        val started = SystemClock.elapsedRealtime()
+        return when (val audio = backend.tts(chunk.text, lang)) {
+            is ApiResult.Failure -> {
+                Timber.w("TTS failed: %s", audio.error)
+                Prepared.Failed(audio.error)
+            }
+            is ApiResult.Success -> {
+                val clip = player.prepare(audio.value)
+                Timber.i(
+                    "TTS %s: %d chars (%d phrases), %d bytes, ready in %d ms",
+                    lang.code, chunk.text.length, chunk.phrases.size, audio.value.size, SystemClock.elapsedRealtime() - started,
+                )
+                if (clip != null) Prepared.Ready(clip)
+                else Prepared.Failed(BackendError(ErrorKind.UNKNOWN, message = "MP3 не воспроизводится"))
+            }
         }
     }
 
