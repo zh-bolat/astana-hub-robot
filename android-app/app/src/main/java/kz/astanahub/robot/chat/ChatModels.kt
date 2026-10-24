@@ -3,18 +3,16 @@ package kz.astanahub.robot.chat
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.core.Lang
 
-/** Откуда пришла реплика (`input` в `POST /v1/chat`, для аналитики). */
-enum class ChatInput(val code: String) { VOICE("voice"), TEXT("text"), BUTTON("button") }
-
-/** Запрос `POST /v1/chat` (docs/api-contract.md). Пустой [text] допустим только с [event]. */
+/**
+ * Запрос `POST /v1/chat` (docs/api-contract.md) — как у `/ask`: `question`, `lang`, `session_id`, `place_id`;
+ * плюс `event` (v1.1). Пустой [question] допустим только с [event].
+ */
 data class ChatRequest(
     val sessionId: String,
-    val text: String,
+    val question: String,
     val lang: Lang?,
-    val input: ChatInput? = null,
+    val placeId: String? = null,
     val event: String? = null,
-    val nearestPlaceId: String? = null,
-    val navigating: Boolean = false,
 ) {
     companion object {
         /** `event: visitor_arrived` — к роботу подошёл человек, агент здоровается. */
@@ -22,28 +20,41 @@ data class ChatRequest(
     }
 }
 
-/** События SSE `/v1/chat`. `turn` — всегда первое, `done` или `error` — всегда последнее. */
-sealed interface ChatEvent {
-    data class Turn(val turnId: String, val requestId: String?) : ChatEvent
+/** Действие робота из ответа агента: `{type, place_id}`. */
+data class ChatAction(val type: String, val placeId: String? = null) {
+    companion object {
+        /** Показать, где место (направление — WayFinder робота); робот не едет. */
+        const val WHERE_IS = "where_is"
 
-    /** `neutral`/`happy`/`thinking`/`surprised`/`sad`/`excited` (неизвестное имя — как есть, лицо решит само). */
+        /** Проводить: ехать после того, как доиграла последняя фраза ответа. */
+        const val GUIDE_TO = "guide_to"
+
+        /** Кадр → `POST /v1/look` (вопрос — реплика посетителя), описание озвучить. */
+        const val LOOK = "look"
+    }
+}
+
+/** События SSE `/v1/chat`. `done` или `error` — всегда последнее. */
+sealed interface ChatEvent {
+    /** v1.1: `neutral`/`happy`/`thinking`/`surprised`/`sad`/`excited` (неизвестное имя — как есть, лицо решит само). */
     data class Emotion(val name: String) : ChatEvent
 
     data class Phrase(val text: String) : ChatEvent
 
-    data class Action(val name: String, val args: Map<String, String>) : ChatEvent {
-        val placeId: String? get() = args["place_id"]?.takeIf { it.isNotBlank() }
-        val mapName: String? get() = args["map_name"]?.takeIf { it.isNotBlank() }
-
-        companion object {
-            const val WHERE_IS = "where_is"
-            const val GUIDE_TO = "guide_to"
-            const val STOP = "stop"
-            const val LOOK = "look"
-        }
+    /** Приходит до фраз, которые его описывают. */
+    data class Action(val action: ChatAction) : ChatEvent {
+        val type: String get() = action.type
+        val placeId: String? get() = action.placeId
     }
 
-    data class Done(val requestId: String?, val lang: Lang?, val tools: List<String>) : ChatEvent
+    data class Done(
+        val requestId: String?,
+        val lang: Lang?,
+        val found: Boolean = true,
+        val sources: List<String> = emptyList(),
+        /** Все действия ответа (те же, что пришли событиями `action`). */
+        val actions: List<ChatAction> = emptyList(),
+    ) : ChatEvent
 
     /**
      * `event: error` с сервера, HTTP-ошибка до начала потока или обрыв потока без `done`

@@ -9,27 +9,21 @@ import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
 import timber.log.Timber
 
-/** Таймауты робота для `/v1/chat` (раздел «`POST /v1/chat`» контракта) и верхние границы хода. */
+/** Таймауты робота для `/v1/chat` (раздел «`POST /v1/chat`», дополнения v1.1) и верхняя граница хода. */
 data class ChatTimeouts(
-    /** Первое событие (`turn`) — не позже. */
-    val turnMillis: Long = 4_000,
-    /** Первая `phrase` (или действие агента) — не позже, иначе запасной путь `/v1/ask`. */
+    /** Первая `phrase` или `action` — не позже, иначе запасной путь `/v1/ask` + локальные правила. */
     val firstPhraseMillis: Long = 8_000,
     /** Приветствие `visitor_arrived`: не ждём дольше — говорим своё. */
     val greetingPhraseMillis: Long = 2_000,
-    /** Весь ход (сервер обещает ≤ 20 с; с `look` — ≤ 30 с) + запас на сеть. */
+    /** Весь поток до `done` (сервер ограничивает ответ 4 фразами) + запас на сеть. */
     val maxTurnMillis: Long = 25_000,
-    val maxLookTurnMillis: Long = 35_000,
-    /** Кадр для `look` — в течение 8 с. */
-    val frameMillis: Long = 8_000,
 )
 
 /** Обработчик событий хода. Вызовы не должны долго блокировать: озвучка — через очередь. */
 interface TurnHandler {
-    fun onTurn(turnId: String) = Unit
     fun onEmotion(name: String)
     fun onPhrase(text: String)
-    fun onAction(action: ChatEvent.Action, turnId: String?)
+    fun onAction(action: ChatAction)
 }
 
 sealed interface TurnOutcome {
@@ -44,9 +38,9 @@ sealed interface TurnOutcome {
 
 /**
  * Один ход агента: читает SSE, раздаёт события [TurnHandler] и следит за таймаутами контракта:
- * нет `turn` за [ChatTimeouts.turnMillis] или нет первой фразы/действия за `firstPhraseMillis` → поток
- * обрывается и возвращается [TurnOutcome.Fallback]. Отмена корутины обрывает поток (посетитель перебил).
- * Все таймеры — через `delay`, поэтому тесты идут на виртуальном времени.
+ * нет первой фразы или действия за `firstPhraseMillis` → поток обрывается и возвращается [TurnOutcome.Fallback].
+ * Действия, которые пришли только в `done.actions` (без событий `action`), тоже отдаются обработчику — после фраз.
+ * Отмена корутины обрывает поток (посетитель перебил). Таймеры — через `delay` (тесты на виртуальном времени).
  */
 class AgentTurnRunner(
     private val api: BackendApi,
@@ -57,10 +51,8 @@ class AgentTurnRunner(
         handler: TurnHandler,
         firstPhraseMillis: Long = timeouts.firstPhraseMillis,
     ): TurnOutcome = coroutineScope {
-        var turnSeen = false
         var responded = false
-        var look = false
-        var turnId: String? = null
+        var actionsSeen = false
         var timeout: String? = null
         var outcome: TurnOutcome? = null
 
@@ -70,27 +62,20 @@ class AgentTurnRunner(
                     .transformWhile { emit(it); it !is ChatEvent.Done && it !is ChatEvent.Error }
                     .collect { event ->
                         when (event) {
-                            is ChatEvent.Turn -> {
-                                turnSeen = true
-                                turnId = event.turnId
-                                handler.onTurn(event.turnId)
-                            }
-                            is ChatEvent.Emotion -> {
-                                turnSeen = true
-                                handler.onEmotion(event.name)
-                            }
+                            is ChatEvent.Emotion -> handler.onEmotion(event.name)
                             is ChatEvent.Phrase -> {
-                                turnSeen = true
                                 responded = true
                                 handler.onPhrase(event.text)
                             }
                             is ChatEvent.Action -> {
-                                turnSeen = true
                                 responded = true
-                                if (event.name == ChatEvent.Action.LOOK) look = true
-                                handler.onAction(event, turnId)
+                                actionsSeen = true
+                                handler.onAction(event.action)
                             }
-                            is ChatEvent.Done -> outcome = TurnOutcome.Completed(event)
+                            is ChatEvent.Done -> {
+                                if (!actionsSeen) event.actions.forEach(handler::onAction)
+                                outcome = TurnOutcome.Completed(event)
+                            }
                             is ChatEvent.Error -> outcome =
                                 if (responded) TurnOutcome.Broken("error", event.error)
                                 else TurnOutcome.Fallback("error", event.error)
@@ -106,16 +91,11 @@ class AgentTurnRunner(
 
         val watchdogs = launch {
             launch {
-                delay(timeouts.turnMillis)
-                if (!turnSeen) { timeout = "turn_timeout"; collector.cancel() }
-            }
-            launch {
                 delay(firstPhraseMillis)
                 if (!responded) { timeout = "first_phrase_timeout"; collector.cancel() }
             }
             launch {
                 delay(timeouts.maxTurnMillis)
-                if (look) delay((timeouts.maxLookTurnMillis - timeouts.maxTurnMillis).coerceAtLeast(0))
                 timeout = "turn_cap"
                 collector.cancel()
             }

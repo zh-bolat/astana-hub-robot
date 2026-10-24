@@ -31,14 +31,11 @@ interface BackendApi {
 
     /**
      * `POST /v1/chat` (SSE). Поток заканчивается [ChatEvent.Done] или [ChatEvent.Error];
-     * отмена сборщика обрывает соединение (посетитель перебил).
+     * отмена сборщика обрывает соединение (посетитель перебил). Действие `look` клиент выполняет сам
+     * через [look] (`POST /v1/look`), отдельного эндпоинта для кадра нет.
      */
     fun chat(request: ChatRequest): Flow<ChatEvent> =
         flowOf(ChatEvent.Error(BackendError(ErrorKind.NOT_CONFIGURED, message = "chat is not supported")))
-
-    /** `POST /v1/chat/{turn_id}/frame` — кадр по запросу агента (`action: look`). */
-    suspend fun chatFrame(turnId: String, jpeg: ByteArray): ApiResult<Unit> =
-        ApiResult.Failure(BackendError(ErrorKind.NOT_CONFIGURED))
 
     /** `POST /v1/sessions/{session_id}/messages` — ответ, который робот дал сам (история и лог). */
     suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =

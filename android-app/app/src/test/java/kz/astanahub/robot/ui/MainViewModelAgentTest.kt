@@ -32,7 +32,7 @@ import kz.astanahub.robot.backend.PlacesResult
 import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.camera.CameraGateway
 import kz.astanahub.robot.chat.ChatEvent
-import kz.astanahub.robot.chat.ChatInput
+import kz.astanahub.robot.chat.ChatAction
 import kz.astanahub.robot.chat.ChatMode
 import kz.astanahub.robot.chat.ChatRequest
 import kz.astanahub.robot.core.Lang
@@ -149,14 +149,13 @@ class MainViewModelAgentTest {
         ).also { if (screensaverMillis == null) advanceUntilIdle() else runCurrent() }
     }
 
-    private val done = ChatEvent.Done("req", Lang.RU, emptyList())
+    private val done = ChatEvent.Done("req", Lang.RU)
 
     // --- события хода ---
 
     @Test
     fun `phrases are spoken in order, emotion shown and relaxed afterwards`() = runTest(dispatcher) {
         chat {
-            emit(ChatEvent.Turn("t1", "r1"))
             emit(ChatEvent.Emotion("happy"))
             emit(ChatEvent.Phrase("Есть коворкинг на втором этаже."))
             delay(500)
@@ -172,8 +171,8 @@ class MainViewModelAgentTest {
         advanceTimeBy(1_000); runCurrent()
         assertEquals(listOf("Есть коворкинг на втором этаже.", "Проводить вас?"), voice.spoken)
         assertEquals("Есть коворкинг на втором этаже. Проводить вас?", vm.state.value.answer)
-        assertEquals(ChatInput.VOICE, requests.single().input)
-        assertEquals("Где тут можно поработать?", requests.single().text)
+        assertEquals("Где тут можно поработать?", requests.single().question)
+        assertEquals(null, requests.single().event)
         advanceUntilIdle()
         assertEquals(Emotion.NEUTRAL, vm.state.value.emotion)
         assertEquals(Phase.IDLE, vm.state.value.phase)
@@ -181,18 +180,32 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `where_is action - robot computes and speaks the direction, not duplicated in history`() = runTest(dispatcher) {
+    fun `where_is action - robot speaks the direction before the agent phrase, not duplicated in history`() = runTest(dispatcher) {
         chat {
-            emit(ChatEvent.Turn("t", null))
-            emit(ChatEvent.Action("where_is", mapOf("place_id" to "cafe", "map_name" to "Кафе")))
-            emit(done)
+            emit(ChatEvent.Action(ChatAction("where_is", "cafe")))
+            emit(ChatEvent.Phrase("Могу проводить."))
+            emit(done.copy(actions = listOf(ChatAction("where_is", "cafe"))))
         }
         val vm = vm()
         vm.submit("Где поесть?")
         advanceUntilIdle()
-        assertTrue(voice.spoken.toString(), voice.spoken.joinToString(" ").contains("Кафе"))
+        assertEquals(voice.spoken.toString(), "Могу проводить.", voice.spoken.last())
+        assertTrue(voice.spoken.toString(), voice.spoken.first().contains("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
+        coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
         coVerify(exactly = 0) { backend.postLocalMessage(any(), any()) }
+    }
+
+    @Test
+    fun `where_is for a place the robot does not know - silent, only the agent phrase`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Action(ChatAction("where_is", "mars")))
+            emit(ChatEvent.Phrase("Это на третьем этаже."))
+            emit(done)
+        }
+        vm().submit("Где Марс?")
+        advanceUntilIdle()
+        assertEquals(listOf("Это на третьем этаже."), voice.spoken)
     }
 
     @Test
@@ -207,21 +220,27 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `guide_to action drives the robot, head stops following while driving`() = runTest(dispatcher) {
+    fun `guide_to action - robot drives only after the last phrase, head stops following while driving`() = runTest(dispatcher) {
         coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(5_000); NavigationResult.Arrived }
         chat {
-            emit(ChatEvent.Turn("t", null))
-            emit(ChatEvent.Phrase("Пойдёмте!"))
-            emit(ChatEvent.Action("guide_to", mapOf("place_id" to "cafe", "map_name" to "Кафе")))
+            emit(ChatEvent.Action(ChatAction("guide_to", "cafe")))
+            emit(ChatEvent.Phrase("Провожаю вас в кафе."))
+            emit(ChatEvent.Phrase("Идите за мной."))
             emit(done)
         }
         val vm = vm()
         presence.emit(PresenceEvent.Arrived(9, greet = false))
         runCurrent()
         vm.submit("Да, проводи")
+        advanceTimeBy(150); runCurrent()
+        // первая фраза доиграла, вторая ещё звучит — не едем
+        assertEquals(listOf("Провожаю вас в кафе.", "Идите за мной."), voice.spoken)
+        coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
         advanceTimeBy(1_000); runCurrent()
         assertEquals(Phase.NAVIGATING, vm.state.value.phase)
         assertEquals("Кафе", vm.state.value.guidingTo)
+        // агент уже сказал «Провожаю» — своя фраза старта не звучит
+        assertEquals(listOf("Провожаю вас в кафе.", "Идите за мной."), voice.spoken)
         assertEquals(listOf("follow:9", "stop"), headGateway.calls)
         advanceUntilIdle()
         coVerify { robot.navigateTo("Кафе", any()) }
@@ -230,71 +249,58 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `stop action stops navigation`() = runTest(dispatcher) {
-        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(60_000); NavigationResult.Arrived }
-        mode = ChatMode.LEGACY
-        val vm = vm()
-        vm.submit("Проводи до кафе")
-        advanceTimeBy(1_000)
-        assertEquals("Кафе", vm.state.value.guidingTo)
-        mode = ChatMode.AGENT
+    fun `look action - frame goes to v1 look with the visitor question, description spoken after agent phrases`() = runTest(dispatcher) {
+        coEvery { camera.captureJpeg(any()) } returns byteArrayOf(1, 2, 3)
+        coEvery { backend.look(any(), any(), any()) } coAnswers {
+            delay(1_000); ApiResult.Success(Answer("r", "Вижу стенд стартапов.", listOf("Вижу стенд стартапов."), Lang.RU, true))
+        }
         chat {
-            emit(ChatEvent.Turn("t", null))
-            emit(ChatEvent.Action("stop", emptyMap()))
-            emit(ChatEvent.Phrase("Остановился."))
+            emit(ChatEvent.Emotion("thinking"))
+            emit(ChatEvent.Action(ChatAction("look")))
+            emit(ChatEvent.Phrase("Сейчас посмотрю."))
             emit(done)
         }
-        vm.submit("Подожди, остановись пожалуйста сейчас")
-        advanceTimeBy(2_000); runCurrent()
-        verify { robot.stopNavigation() }
-        assertEquals(null, vm.state.value.guidingTo)
-        assertTrue(requests.single().navigating)
+        val vm = vm()
+        vm.lookAround()
+        advanceTimeBy(500); runCurrent()
+        assertEquals(Phase.LOOKING, vm.state.value.phase)
+        advanceUntilIdle()
+        coVerify { backend.look(byteArrayOf(1, 2, 3), "Что это?", any()) }
+        assertEquals(listOf("Сейчас посмотрю.", "Вижу стенд стартапов."), voice.spoken)
+        assertEquals("Сейчас посмотрю. Вижу стенд стартапов.", vm.state.value.answer)
+        assertEquals("Что это?", requests.single().question)
     }
 
     @Test
-    fun `look action - frame is posted to the turn`() = runTest(dispatcher) {
-        coEvery { camera.captureJpeg(any()) } returns byteArrayOf(1, 2, 3)
-        coEvery { backend.chatFrame(any(), any()) } returns ApiResult.Success(Unit)
+    fun `look action - no camera or look failure gives a ready phrase`() = runTest(dispatcher) {
+        coEvery { camera.captureJpeg(any()) } returns null
         chat {
-            emit(ChatEvent.Turn("trn_look", null))
-            emit(ChatEvent.Action("look", emptyMap()))
-            delay(3_000)
-            emit(ChatEvent.Phrase("Вижу стенд стартапов."))
+            emit(ChatEvent.Action(ChatAction("look")))
+            emit(ChatEvent.Phrase("Сейчас посмотрю."))
             emit(done)
         }
         val vm = vm()
         vm.lookAround()
         advanceUntilIdle()
-        coVerify { backend.chatFrame("trn_look", byteArrayOf(1, 2, 3)) }
-        assertEquals(listOf("Вижу стенд стартапов."), voice.spoken)
-        assertEquals(ChatInput.BUTTON, requests.single().input)
+        assertEquals(listOf("Сейчас посмотрю.", phrases.get(PhraseKey.CAMERA_UNAVAILABLE, Lang.RU)), voice.spoken)
         coVerify(exactly = 0) { backend.look(any(), any(), any()) }
-    }
 
-    @Test
-    fun `look action - slow camera gives up after 8 s`() = runTest(dispatcher) {
-        coEvery { camera.captureJpeg(any()) } coAnswers { delay(20_000); byteArrayOf(1) }
-        chat {
-            emit(ChatEvent.Turn("t", null))
-            emit(ChatEvent.Action("look", emptyMap()))
-            delay(9_000)
-            emit(ChatEvent.Phrase("Без кадра не вижу."))
-            emit(done)
-        }
-        vm().lookAround()
+        voice.spoken.clear()
+        coEvery { camera.captureJpeg(any()) } returns byteArrayOf(1)
+        coEvery { backend.look(any(), any(), any()) } returns ApiResult.Failure(BackendError(ErrorKind.LLM_UNAVAILABLE))
+        vm.submit("Что ты видишь перед собой?")
         advanceUntilIdle()
-        coVerify(exactly = 0) { backend.chatFrame(any(), any()) }
-        assertEquals(listOf("Без кадра не вижу."), voice.spoken)
+        assertEquals(listOf("Сейчас посмотрю.", phrases.get(PhraseKey.NO_CONNECTION, Lang.RU)), voice.spoken)
     }
 
     // --- запасной путь ---
 
     @Test
-    fun `no turn in 4 s - fallback to ask`() = runTest(dispatcher) {
-        chat { awaitCancellation() }
+    fun `no phrase or action in 8 s - fallback to ask`() = runTest(dispatcher) {
+        chat { emit(ChatEvent.Emotion("thinking")); awaitCancellation() }
         val vm = vm(withMap = false)
         vm.submit("Что такое Astana Hub?")
-        advanceTimeBy(3_900); runCurrent()
+        advanceTimeBy(7_900); runCurrent()
         coVerify(exactly = 0) { backend.ask(any(), any()) }
         advanceUntilIdle()
         coVerify { backend.ask("Что такое Astana Hub?", any()) }
@@ -303,7 +309,7 @@ class MainViewModelAgentTest {
 
     @Test
     fun `error event before a reply - fallback to local rules`() = runTest(dispatcher) {
-        chat { emit(ChatEvent.Turn("t", null)); emit(ChatEvent.Error(BackendError(ErrorKind.LLM_UNAVAILABLE))) }
+        chat { emit(ChatEvent.Error(BackendError(ErrorKind.LLM_UNAVAILABLE))) }
         val vm = vm()
         vm.submit("Где кафе?")
         advanceUntilIdle()
@@ -313,7 +319,19 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `offline - local rules right away, no chat request`() = runTest(dispatcher) {
+    fun `server without chat (404) - fallback now and ask directly afterwards`() = runTest(dispatcher) {
+        chat { emit(ChatEvent.Error(BackendError(ErrorKind.UNKNOWN, httpStatus = 404, serverCode = "not_found"))) }
+        val vm = vm(withMap = false)
+        vm.submit("Что такое Astana Hub?")
+        advanceUntilIdle()
+        vm.submit("Во сколько открывается хаб?")
+        advanceUntilIdle()
+        assertEquals(1, requests.size)
+        coVerify(exactly = 2) { backend.ask(any(), any()) }
+    }
+
+    @Test
+    fun `offline - local rules right away, no chat request`()= runTest(dispatcher) {
         chat { emit(done) }
         val vm = vm()
         voice.conn.emit(false)
@@ -332,12 +350,11 @@ class MainViewModelAgentTest {
             requests += firstArg<ChatRequest>()
             if (requests.size == 1) {
                 flow<ChatEvent> {
-                    emit(ChatEvent.Turn("t1", null))
                     emit(ChatEvent.Phrase("Длинный ответ, часть первая."))
                     awaitCancellation()
                 }.onCompletion { if (it != null) cancelled++ }
             } else {
-                flow { emit(ChatEvent.Turn("t2", null)); emit(ChatEvent.Phrase("Второй.")); emit(done) }
+                flow { emit(ChatEvent.Phrase("Второй.")); emit(done) }
             }
         }
         val vm = vm()
@@ -370,7 +387,6 @@ class MainViewModelAgentTest {
     @Test
     fun `visitor arrives - wakes from sleep, greets through the agent with a new session`() = runTest(dispatcher) {
         chat {
-            emit(ChatEvent.Turn("t", null))
             emit(ChatEvent.Phrase("Здравствуйте! Чем помочь?"))
             emit(done)
         }
@@ -384,7 +400,7 @@ class MainViewModelAgentTest {
         advanceTimeBy(2_000); runCurrent()
         val req = requests.single()
         assertEquals(ChatRequest.EVENT_VISITOR_ARRIVED, req.event)
-        assertEquals("", req.text)
+        assertEquals("", req.question)
         assertEquals(listOf("Здравствуйте! Чем помочь?"), voice.spoken)
         assertEquals("follow:4", headGateway.calls.last())
         vm.submit("Привет")
@@ -397,7 +413,7 @@ class MainViewModelAgentTest {
 
     @Test
     fun `no phrase from the agent in 2 s - local greeting`() = runTest(dispatcher) {
-        chat { emit(ChatEvent.Turn("t", null)); delay(5_000); emit(ChatEvent.Phrase("Поздно")); emit(done) }
+        chat { delay(5_000); emit(ChatEvent.Phrase("Поздно")); emit(done) }
         vm()
         presence.emit(PresenceEvent.Arrived(1, greet = true))
         advanceUntilIdle()
@@ -454,7 +470,7 @@ class MainViewModelAgentTest {
 
     @Test
     fun `agent language from done switches the screen language`() = runTest(dispatcher) {
-        chat { emit(ChatEvent.Turn("t", null)); emit(ChatEvent.Phrase("Hello!")); emit(ChatEvent.Done("r", Lang.EN, emptyList())) }
+        chat { emit(ChatEvent.Phrase("Hello!")); emit(ChatEvent.Done("r", Lang.EN)) }
         val vm = vm()
         voice.asr.emit(Transcript("Hi there, what is this place?", isFinal = true, lang = Lang.EN))
         advanceUntilIdle()

@@ -31,8 +31,6 @@ data class BackendTimeouts(
     val referenceMillis: Long = 5_000,
     val sttMillis: Long = 6_000,
     val ttsMillis: Long = 5_000,
-    /** Кадр для `look` агента: контракт — в течение 8 с. */
-    val frameMillis: Long = 8_000,
 )
 
 /**
@@ -120,15 +118,6 @@ class RetrofitBackendApi(
     private val chatClient by lazy { OkHttpChatClient(baseUrl, token, client) }
 
     override fun chat(request: ChatRequest): Flow<ChatEvent> = chatClient.chat(request)
-
-    override suspend fun chatFrame(turnId: String, jpeg: ByteArray): ApiResult<Unit> {
-        val image = MultipartBody.Part.createFormData("image", "frame.jpg", jpeg.toRequestBody(JPEG_MEDIA_TYPE))
-        return guard(timeouts.frameMillis) {
-            val response = service.chatFrame(turnId, image)
-            response.body()?.close()
-            if (response.isSuccessful) ApiResult.Success(Unit) else ApiResult.Failure(parseError(response))
-        }
-    }
 
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =
         guard(timeouts.referenceMillis) {

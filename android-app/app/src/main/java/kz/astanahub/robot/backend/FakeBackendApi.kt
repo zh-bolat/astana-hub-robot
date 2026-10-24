@@ -3,6 +3,7 @@ package kz.astanahub.robot.backend
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kz.astanahub.robot.chat.ChatAction
 import kz.astanahub.robot.chat.ChatEvent
 import kz.astanahub.robot.chat.ChatRequest
 import kz.astanahub.robot.core.Lang
@@ -58,21 +59,20 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
     override suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray> =
         ApiResult.Failure(BackendError(ErrorKind.SPEECH_UNAVAILABLE, message = "fake backend"))
 
-    @Volatile private var lastFrameBytes: Int? = null
-
     /**
      * Агент-заглушка для эмулятора: приветствие на `visitor_arrived`, «где X» → `where_is`, «проводи» → `guide_to`,
-     * «что это» → `look` (ждёт кадр до 8 с), остальное — шаблонный ответ.
+     * «что это» → `look` (кадр робот сам отправит в [look]), остальное — шаблонный ответ.
+     * Как у настоящего сервера: `action` приходит до фраз, которые его описывают.
      */
     override fun chat(request: ChatRequest): Flow<ChatEvent> = flow {
-        val turnId = "trn_fake_${System.nanoTime()}"
-        emit(ChatEvent.Turn(turnId, "req_fake"))
         delay(latencyMillis / 2)
         val lang = request.lang ?: Lang.RU
-        val text = request.text.lowercase()
+        val text = request.question.lowercase()
         val place = FAKE_PLACES.firstOrNull { p ->
             (p.names.values + p.synonyms + p.mapName).any { it.isNotBlank() && text.contains(it.lowercase()) }
         }
+        val actions = mutableListOf<ChatAction>()
+        suspend fun action(a: ChatAction) { actions += a; emit(ChatEvent.Action(a)) }
         when {
             request.event == ChatRequest.EVENT_VISITOR_ARRIVED -> {
                 emit(ChatEvent.Emotion("happy"))
@@ -82,44 +82,31 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
             }
             place != null && GUIDE_WORDS.any { text.contains(it) } -> {
                 emit(ChatEvent.Emotion("excited"))
+                action(ChatAction(ChatAction.GUIDE_TO, place.id))
                 emit(ChatEvent.Phrase(fakeText(lang, "Пойдёмте, провожу!", "Жүріңіз, бастап барамын!", "Let's go, follow me!")))
-                emit(ChatEvent.Action(ChatEvent.Action.GUIDE_TO, mapOf("place_id" to place.id, "map_name" to place.mapName)))
             }
             place != null -> {
-                emit(ChatEvent.Action(ChatEvent.Action.WHERE_IS, mapOf("place_id" to place.id, "map_name" to place.mapName)))
+                action(ChatAction(ChatAction.WHERE_IS, place.id))
+                emit(ChatEvent.Phrase(fakeText(lang, "Могу проводить, если хотите.", "Қаласаңыз, бастап барамын.", "I can take you there if you like.")))
             }
             LOOK_WORDS.any { text.contains(it) } -> {
-                lastFrameBytes = null
                 emit(ChatEvent.Emotion("thinking"))
-                emit(ChatEvent.Action(ChatEvent.Action.LOOK, emptyMap()))
-                var waited = 0L
-                while (lastFrameBytes == null && waited < 8_000) { delay(100); waited += 100 }
-                emit(ChatEvent.Emotion("surprised"))
-                val kb = lastFrameBytes?.let { it / 1024 }
-                emit(ChatEvent.Phrase(
-                    if (kb == null) fakeText(lang, "Кадр не пришёл, но я стараюсь!", "Кадр келмеді.", "The frame did not arrive.")
-                    else fakeText(lang, "Вижу тестовый кадр на $kb килобайт.", "$kb килобайттық кадрды көріп тұрмын.", "I see a $kb KB test frame."),
-                ))
+                action(ChatAction(ChatAction.LOOK))
+                emit(ChatEvent.Phrase(fakeText(lang, "Сейчас посмотрю.", "Қазір қараймын.", "Let me take a look.")))
             }
             else -> {
-                emit(ChatEvent.Emotion("thinking"))
-                delay(latencyMillis)
                 emit(ChatEvent.Emotion("happy"))
+                delay(latencyMillis)
                 splitSentences(fakeText(lang,
-                    "Это ответ агента-заглушки на: «${request.text}». Настоящий ответ даст сервер.",
-                    "Бұл «${request.text}» сұрағына агент-тұйықтың жауабы.",
-                    "This is a stub agent answer to: \"${request.text}\".")).forEach {
+                    "Это ответ агента-заглушки на: «${request.question}». Настоящий ответ даст сервер.",
+                    "Бұл «${request.question}» сұрағына агент-тұйықтың жауабы.",
+                    "This is a stub agent answer to: \"${request.question}\".")).forEach {
                     emit(ChatEvent.Phrase(it))
                     delay(latencyMillis / 3)
                 }
             }
         }
-        emit(ChatEvent.Done("req_fake", lang, emptyList()))
-    }
-
-    override suspend fun chatFrame(turnId: String, jpeg: ByteArray): ApiResult<Unit> {
-        lastFrameBytes = jpeg.size
-        return ApiResult.Success(Unit)
+        emit(ChatEvent.Done("req_fake", lang, found = true, actions = actions))
     }
 
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =

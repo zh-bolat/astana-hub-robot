@@ -47,7 +47,6 @@ class SwitchableBackendApi(
     override suspend fun tts(text: String, lang: Lang) = delegate.tts(text, lang)
     override fun openLiveStt(lang: Lang?, sessionId: String) = delegate.openLiveStt(lang, sessionId)
     override fun chat(request: ChatRequest) = delegate.chat(request)
-    override suspend fun chatFrame(turnId: String, jpeg: ByteArray) = delegate.chatFrame(turnId, jpeg)
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage) =
         delegate.postLocalMessage(sessionId, message)
 
