@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from app.config import Settings
 from app.lang import Lang
 from app.logging_setup import logger
@@ -120,6 +122,38 @@ class FallbackTtsProvider:
                 extra={"error": str(exc), "primary": self.primary.name, "used": self.fallback.name},
             )
             return await self.fallback.tts(text, lang)
+
+    async def tts_stream(self, text: str, lang: Lang) -> AsyncIterator[bytes]:
+        """Поток основного; его ошибка до первых байт — запасной целиком (без потока, одним куском)."""
+        primary_stream = getattr(self.primary, "tts_stream", None)
+        if primary_stream is None:
+            yield await self.tts(text, lang)
+            return
+        chunks = primary_stream(text, lang).__aiter__()
+        try:
+            try:
+                first = await chunks.__anext__()
+            except StopAsyncIteration:
+                return
+            except SpeechError as exc:
+                logger.warning(
+                    "tts_fallback",
+                    extra={
+                        "error": str(exc),
+                        "primary": self.primary.name,
+                        "used": self.fallback.name,
+                        "stream": True,
+                    },
+                )
+                yield await self.fallback.tts(text, lang)
+                return
+            yield first
+            async for chunk in chunks:
+                yield chunk
+        finally:
+            aclose = getattr(chunks, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _tts_by_name(settings: Settings, name: str) -> TtsProvider:

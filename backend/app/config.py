@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     kb_rate_limit_per_min: int = 60
     # /docs, /redoc, /openapi.json: в проде выключены (схема — backend/openapi.json)
     expose_docs: bool = False
+    # Статистика задержек (GET /v1/admin/metrics, /v1/admin/metrics/page): отдельный токен админа.
+    # Не задан — оба адреса отвечают 404.
+    admin_token: SecretStr | None = None
+    admin_rate_limit_per_min: int = 30
 
     # LLM: auto = gemini (GEMINI_API_KEY) → openrouter (OPENROUTER_API_KEY) → fake
     llm_provider: Literal["auto", "gemini", "openrouter", "deepseek", "fake"] = "auto"
@@ -163,7 +167,9 @@ class Settings(BaseSettings):
     yandex_voice_kk: str = "amira"
     yandex_voice_en: str = "john"
     stt_timeout_s: float = 5.0  # робот ждёт /stt 6 с
-    tts_timeout_s: float = 4.0  # робот ждёт /tts 5 с
+    tts_timeout_s: float = 4.0  # робот ждёт /tts 5 с (в потоке — до первых байт)
+    # Потоковый /v1/tts?stream=true: весь поток не дольше, сек (дальше — обрыв, клиент дозапрашивает)
+    tts_stream_total_s: float = 20.0
     max_audio_bytes: int = 600 * 1024
     max_audio_seconds: float = 15.0
     # Отдельный бакет для /stt и /tts: на один вопрос робот делает 1 stt + N tts
@@ -193,6 +199,7 @@ class Settings(BaseSettings):
         "yandex_api_key",
         "gemini_api_key",
         "sentry_dsn",
+        "admin_token",
         "openrouter_api_key",
         "tts_fallback_provider",
         mode="before",

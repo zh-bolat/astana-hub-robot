@@ -16,7 +16,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.db.models import FeedbackRow, MessageRow, QuestionLog, RobotRow, SessionRow
+from app.db.models import (
+    FeedbackRow,
+    LatencyEvent,
+    MessageRow,
+    QuestionLog,
+    RobotRow,
+    SessionRow,
+)
 
 CSV_FIELDS = [
     "id",
@@ -58,6 +65,8 @@ class QuestionLogRepo:
             result = s.execute(delete(QuestionLog).where(QuestionLog.created_at < cutoff))
             s.execute(delete(MessageRow).where(MessageRow.created_at < cutoff))
             s.execute(delete(SessionRow).where(SessionRow.last_seen_at < cutoff))
+            # тайминги этапов — тот же срок хранения
+            s.execute(delete(LatencyEvent).where(LatencyEvent.ts < cutoff))
             s.commit()
             return result.rowcount or 0
 

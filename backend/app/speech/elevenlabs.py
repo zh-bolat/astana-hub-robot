@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 
 from app.lang import Lang, normalize_lang
@@ -55,11 +57,37 @@ class ElevenLabsProvider:
     def voice_id(self, lang: Lang) -> str:
         return f"{self.voices[lang]}:{self.tts_model(lang)}:{self.output_format}"
 
-    async def tts(self, text: str, lang: Lang) -> bytes:
+    def _tts_body(self, text: str, lang: Lang) -> dict:
         model = self.tts_model(lang)
         body: dict = {"text": text, "model_id": model}
         if "multilingual_v2" not in model:
             body["language_code"] = lang
+        return body
+
+    async def tts_stream(self, text: str, lang: Lang) -> AsyncIterator[bytes]:
+        """Потоковый синтез: POST /v1/text-to-speech/{voice_id}/stream — куски MP3 по мере готовности.
+        Сверено с elevenlabs.io/docs (2026-10): тело и output_format — как у обычного TTS;
+        optimize_streaming_latency помечен deprecated — не передаём (задержку снижает модель flash_v2_5).
+        Ошибка HTTP до первых байт → SpeechError (эндпоинт отвечает 503)."""
+        url = f"{self.base_url}/v1/text-to-speech/{self.voices[lang]}/stream"
+        try:
+            async with self.client.stream(
+                "POST",
+                url,
+                params={"output_format": self.output_format},
+                json=self._tts_body(text, lang),
+            ) as r:
+                if r.status_code != 200:
+                    detail = (await r.aread())[:200].decode("utf-8", "replace")
+                    raise SpeechError(f"elevenlabs tts stream http {r.status_code}: {detail}")
+                async for chunk in r.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPError as exc:
+            raise SpeechError(f"elevenlabs tts stream network error: {type(exc).__name__}") from exc
+
+    async def tts(self, text: str, lang: Lang) -> bytes:
+        body = self._tts_body(text, lang)
         url = f"{self.base_url}/v1/text-to-speech/{self.voices[lang]}"
         try:
             r = await self.client.post(url, params={"output_format": self.output_format}, json=body)

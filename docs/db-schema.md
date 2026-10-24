@@ -88,6 +88,9 @@
 ### `feedback` — оценки ответов (сотрудники хаба, будущая панель)
 `id` bigint PK · `question_log_id` → `question_log.id` ON DELETE CASCADE · `rating` smallint (-1/1) · `comment` text null · `created_by` text · `created_at`.
 
+### `latency_events` — тайминги этапов (миграция 0003, без текстов)
+`id` bigint identity PK · `ts` timestamptz (индекс) · `kind` (`stt`/`chat`/`ask`/`look`/`tts`/`robot`) · `stage` (`stt_ms`, `llm_first_token_ms`, `first_phrase_ms`, `llm_total_ms`, `tts_first_byte_ms`, `tts_total_ms`, поля `/v1/metrics/turn`, `turn`) · `ms` int null (null — строка хода с флагами) · `lang` · `provider` (провайдер или модель) · `request_id` · `session_id` · `ok` bool · `extra` jsonb (только скаляры: `fallback`, `action`, `cache`, `chars`, …). Индекс `(kind, ts)`. Срок хранения — как у `question_log`.
+
 ## Порядок внедрения
 1. **Шаг 1 (сейчас):** образ с pgvector, Alembic, все таблицы выше (включая `kb_chunks` без заполнения), синк таблица/YAML → Postgres, сервер читает знания из Postgres, сид из YAML для разработки.
 2. **Шаг 2:** эмбеддинги (Gemini), заполнение `kb_chunks`, гибридный поиск, `RETRIEVAL_MODE=hybrid`, загрузка документов из Drive.

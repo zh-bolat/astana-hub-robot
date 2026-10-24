@@ -138,5 +138,8 @@ def test_openapi_matches_contract_paths(client):
         "/v1/stt",
         "/v1/tts",
         "/v1/sessions/{session_id}/messages",
+        "/v1/metrics/turn",
+        "/v1/admin/metrics",
+        "/v1/admin/metrics/page",
     }
     assert "multipart/form-data" in spec["paths"]["/v1/look"]["post"]["requestBody"]["content"]
