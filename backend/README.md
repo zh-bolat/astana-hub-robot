@@ -109,6 +109,9 @@ Eval использует провайдер из `.env`: без ключа — 
 | `RATE_LIMIT_PER_MIN` | 30 | /ask и /look, на токен, in-memory (один процесс) |
 | `KB_RATE_LIMIT_PER_MIN` | 60 | отдельный бакет для /places и /quick-questions |
 | `EXPOSE_DOCS` | `false` | отдавать `/docs`, `/redoc`, `/openapi.json` (только локально) |
+| `ADMIN_TOKEN` | — | токен администратора для статистики задержек (`/v1/admin/metrics`, `/v1/admin/metrics/page`); пусто — оба адреса 404 |
+| `ADMIN_RATE_LIMIT_PER_MIN` | 30 | лимит запросов к админ-сводке (общий) |
+| `TTS_STREAM_TOTAL_S` | 20 | `/v1/tts?stream=true`: предел на весь поток (до первых байт — `TTS_TIMEOUT_S`) |
 | `LLM_MAX_OUTPUT_TOKENS` | 320 | потолок длины ответа модели; при включённых размышлениях Gemini поднять |
 | `KNOWLEDGE_DIR` | `./knowledge` | YAML-база: сид для разработки и запасной вариант без БД |
 | `KB_SEED_YAML_IF_EMPTY` | `true` | пустая база знаний и нет таблицы → сид из YAML при старте |
@@ -120,7 +123,7 @@ Eval использует провайдер из `.env`: без ключа — 
 | `DATABASE_URL` | `postgresql+psycopg://hub@127.0.0.1:5432/hub` (в compose — `…@postgres:5432/hub`) | Postgres 16 + pgvector; SQLite не поддерживается |
 | `DB_AUTO_MIGRATE` | `true` | миграции Alembic при старте, до приёма запросов; ошибка миграции — процесс завершается с ненулевым кодом |
 | `DB_TIMEOUT_S` | 2 | подключение/запрос Postgres (`connect_timeout`, `statement_timeout`, `lock_timeout`) |
-| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов, сессий и сообщений (0 — вечно); очистка раз в сутки фоном |
+| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов, сессий, сообщений и таймингов `latency_events` (0 — вечно); очистка раз в сутки фоном |
 | `KNOWLEDGE_SNAPSHOT_PATH`, `TTS_CACHE_DIR` | `backend/data/...` (в образе `/data/...`) | снимок базы знаний (старт без БД) и кеш синтеза |
 | `KNOWLEDGE_SYNC_TIMEOUT_S` | 5 | общий таймаут загрузки всех вкладок таблицы |
 | `TRUSTED_PROXIES` | `172.16.0.0/12,127.0.0.1` | откуда принимать `X-Forwarded-For` (IP клиента в access-логе; в образе — и для uvicorn `--forwarded-allow-ips`) |
@@ -257,6 +260,18 @@ STT и TTS выбираются раздельно (`app/speech/`):
   (`Api-Key`); API v1 доступен в регионе Россия Yandex Cloud.
 - Кеш TTS по (провайдер, голос+модель, язык, текст): LRU в памяти + `data/tts_cache` с лимитом размера;
   заголовок `X-Cache: hit|miss`.
+- **Потоковый TTS** (`POST /v1/tts?stream=true`): у ElevenLabs — `POST /v1/text-to-speech/{voice_id}/stream`
+  (те же модели, голоса и `output_format`; `optimize_streaming_latency` у ElevenLabs помечен deprecated и не
+  передаётся). Ответ `audio/mpeg` кусками (chunked) по мере синтеза; первый кусок сервер ждёт до заголовков, поэтому
+  ошибка провайдера до первых байт — обычный `503 speech_unavailable` (таймаут — `504`). Поток копится в памяти и после
+  успешного окончания кладётся в кеш; обрыв посередине — соединение закрывается без завершающего куска (клиент
+  дозапрашивает без `stream`), в кеш ничего не идёт. Кеш hit — фраза целиком сразу (`X-Cache: hit`). Провайдеры без
+  потока (OpenRouter, Yandex, fake) и запасной TTS отдают фразу целиком. Без `stream` — как раньше.
+
+```bash
+curl -N -X POST 'http://127.0.0.1:8000/v1/tts?stream=true' -H "Authorization: Bearer $ROBOT_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"text": "Кафе на первом этаже.", "lang": "ru"}' -o phrase.mp3
+```
 
 ## База знаний
 
@@ -343,6 +358,32 @@ uv run python -m app.cli export-csv --out questions.csv               # всё
 uv run python -m app.cli export-csv --out unanswered.csv --unanswered # только «без ответа»
 ```
 
+## Мониторинг задержек
+
+Каждый этап пишется в таблицу `latency_events` (миграция 0003): `ts, kind, stage, ms, lang, provider, request_id,
+session_id, ok, extra`. Только числа и метки — тексты реплик, аудио и кадры туда не попадают. Запись фоном, той же
+очередью, что лог вопросов (`app/metrics.py`, `LatencyRecorder`); срок хранения — `QUESTION_LOG_RETENTION_DAYS`.
+
+| kind | stage | что меряется |
+|---|---|---|
+| `stt` | `stt_ms` | `POST /v1/stt`: вызов провайдера (тишина без вызова не пишется) |
+| `stt` | `stt_live_final_ms` | live STT: от конца речи (`end` / VAD / лимит) до финала |
+| `chat` | `llm_first_token_ms`, `first_phrase_ms`, `llm_total_ms` | `/v1/chat` от начала запроса; `provider` — модель; `extra`: `action`, `fallback`, `tools`, `category`, `error` |
+| `ask` | `llm_first_token_ms`, `first_phrase_ms` (SSE), `llm_total_ms` | `/v1/ask` |
+| `look` | `llm_total_ms` | `/v1/look` |
+| `tts` | `tts_first_byte_ms`, `tts_total_ms` | `/v1/tts`; `extra`: `cache` (hit/miss), `chars`, `stream` |
+| `robot` | `stt_final_ms`, `first_audio_ms`, … и `turn` (без ms) | `POST /v1/metrics/turn` с робота; `provider` = `mode` |
+
+Как смотреть статистику:
+
+1. Задать `ADMIN_TOKEN` в `.env` сервера (`openssl rand -hex 32`) и перезапустить api.
+2. Открыть `https://<домен>/v1/admin/metrics/page`, вставить токен, выбрать период — таблицы p50/p95/count по
+   этапам, по моделям/провайдерам и языкам, доля фолбэков агента и робота, разбивка по часам. Токен хранится в
+   `sessionStorage` вкладки и уходит только заголовком `Authorization`; у страницы строгий CSP (без внешних ресурсов).
+3. Или JSON: `curl -H "Authorization: Bearer $ADMIN_TOKEN" 'https://<домен>/v1/admin/metrics?hours=24'`.
+
+Без `ADMIN_TOKEN` оба адреса отвечают 404; токен робота к ним не подходит.
+
 ## Прочее
 
 ```bash
@@ -365,11 +406,13 @@ app/
   text.py          очистка для TTS, разбиение на фразы ≤ 300 символов
   llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
   speech/          STT/TTS: gemini_stt.py, openrouter.py, streaming.py (live STT), elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
-  speech_api.py    эндпоинты /v1/stt, /v1/tts, WebSocket /v1/stt/stream
+  speech_api.py    эндпоинты /v1/stt, /v1/tts (и ?stream=true), WebSocket /v1/stt/stream
+  metrics.py       LatencyRecorder: тайминги этапов → latency_events (фоном, без текстов)
+  metrics_api.py   POST /v1/metrics/turn, GET /v1/admin/metrics, страница metrics_page.html
   knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML
   db/              engine, модели всех таблиц (models.py), репозитории (repos.py), Alembic (migrate.py)
   cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|status, export-csv, openapi, check-kb
-migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted)
+migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted; 0003 — latency_events)
 knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
 eval/              questions.yaml + run_eval.py (шаг 3.8)
 tests/             pytest
