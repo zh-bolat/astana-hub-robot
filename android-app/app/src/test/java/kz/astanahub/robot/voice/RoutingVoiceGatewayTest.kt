@@ -75,7 +75,15 @@ class RoutingVoiceGatewayTest {
         override fun setLanguage(lang: Lang) = Unit
     }
 
-    private val config = MutableStateFlow(VoiceConfig())
+    /**
+     * Прежняя настройка (ru/en — встроенный голос, сбой /tts — встроенный): на ней проверены очередь, «Стоп» и
+     * speechGuard со встроенным голосом. Новые умолчания (только ElevenLabs) — в ElevenLabsOnlyVoiceTest.
+     */
+    private val legacyConfig = VoiceConfig(
+        tts = mapOf(Lang.RU to VoiceSource.BUILTIN, Lang.KK to VoiceSource.SERVER, Lang.EN to VoiceSource.BUILTIN),
+        builtinFallback = true,
+    )
+    private val config = MutableStateFlow(legacyConfig)
     private val settings = mockk<VoiceSettings> { every { config } returns this@RoutingVoiceGatewayTest.config }
     private val sttEvents = MutableSharedFlow<SttEvent>(extraBufferCapacity = 8)
     private val server = mockk<ServerVoiceGateway>(relaxed = true) {
@@ -116,7 +124,7 @@ class RoutingVoiceGatewayTest {
     }
 
     @Test
-    fun `defaults - ru and en builtin, kk server`() = runTest(UnconfinedTestDispatcher()) {
+    fun `explicit builtin for ru and en, kk server`() = runTest(UnconfinedTestDispatcher()) {
         serverSpeaksAll()
         val tts = voiceMock()
         val r = router(builtinTts = tts)
@@ -186,7 +194,10 @@ class RoutingVoiceGatewayTest {
 
     @Test
     fun `config description`() {
-        assertEquals("ASR=server; TTS ru=builtin, kk=server, en=builtin", VoiceConfig().describe())
+        assertEquals(
+            "ASR=server; TTS ru=server, kk=server, en=server; builtinFallback=false; vad=500ms; stream=true",
+            VoiceConfig().describe(),
+        )
     }
 
     // --- волна 3: одна очередь озвучки и «Стоп» ---
@@ -263,7 +274,7 @@ class RoutingVoiceGatewayTest {
 
     @Test
     fun `builtin ASR results are ignored while robot speaks and during the tail`() = runTest(StandardTestDispatcher()) {
-        config.value = VoiceConfig(asr = VoiceSource.BUILTIN)
+        config.value = legacyConfig.copy(asr = VoiceSource.BUILTIN)
         val voice = FakeVoice()
         val r = router(builtinAsr = voice, builtinTts = voice)
         val heard = mutableListOf<String>()

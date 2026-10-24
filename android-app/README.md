@@ -53,9 +53,18 @@ cd android-app
 ## Голос
 Настройка (secrets `VOICE_ASR`, `VOICE_TTS_RU/KK/EN`: `builtin` | `server`; на роботе без пересборки —
 **удержание «Astana Hub» ≥ 3 с + PIN** → экран диагностики). По умолчанию во всех flavor-ах:
-- распознавание — `server` (наш микрофон → VAD → `/v1/stt`), встроенный ASR робота — опция;
-- синтез: ru и en — встроенный (robotos: SkillApi.playText; robot: AgentOS; emulator: Android TTS),
-  kk — `/v1/tts`; при `503 speech_unavailable` или `X-Speech-Provider: fake` — встроенный.
+- распознавание — `server` (live `WS /v1/stt/stream`, конец фразы — свой VAD после `VAD_END_SILENCE_MS` = 500 мс
+  тишины, шлём `end`), встроенный ASR робота — только если выбран явно;
+- синтез — только голос ElevenLabs через `/v1/tts` на всех языках, потоково (`?stream=true`, `TTS_STREAMING`):
+  MediaPlayer читает растущий буфер (`GrowingAudio` → MediaDataSource), обрыв потока — дозапрос фразы без stream;
+- сбой `/v1/tts` (ошибка, таймаут, 503, `X-Speech-Provider: fake`) → 1 повтор → текст субтитрами без звука +
+  «не могу сейчас говорить» из кеша (не чаще раза в минуту). Встроенный голос — только при `VOICE_BUILTIN_FALLBACK=true`;
+- кеш голоса: фразы, которые робот говорит сам (`PhraseKey`, фиксированные фразы навигации, «хм…/так…/сейчас…»),
+  синтезируются фоном при старте, смене сервера и восстановлении связи и лежат в `filesDir/voice_cache` — играются без сети;
+- встроенный ассистент заглушён, пока приложение на экране (robotos: `SkillApi.setRecognizable(false)`; robot:
+  `AgentCore.isMicrophoneMuted/isDisablePlan`), в фоне — возвращается как было;
+- быстрый отклик: лицо «думает» сразу по концу речи; нет первой фразы агента за 1,2 с — «хм…» из кеша;
+  тайминги хода уходят в `POST /v1/metrics/turn`.
 
 Экран диагностики: тесты TTS (встроенный / серверный / Android) RU/KZ/EN, лог встроенного ASR и серверного STT,
 уровень микрофона, статус RobotApi, дамп `getPlaceList` / `getPosition`, `/v1/places`, масштаб интерфейса, метрики экрана.

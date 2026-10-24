@@ -31,5 +31,34 @@ class AstanaHubApp : Application() {
         }
         // На роботе здесь же создаётся единственный AppAgent (см. src/robot/.../FlavorGateways.kt).
         container = AppContainer(this)
+        registerActivityLifecycleCallbacks(ForegroundTracker { visible, force ->
+            container.assistantGuard.setForeground(visible, force)
+        })
+    }
+
+    /**
+     * Приложение на переднем плане, пока виден хоть один его экран. onResume — применить заново (AgentOS сам
+     * открывает микрофон при выходе приложения на передний план, глушим после него).
+     */
+    private class ForegroundTracker(private val onChange: (visible: Boolean, force: Boolean) -> Unit) :
+        ActivityLifecycleCallbacks {
+        private var started = 0
+
+        override fun onActivityStarted(activity: android.app.Activity) {
+            started++
+            if (started == 1) onChange(true, false)
+        }
+
+        override fun onActivityResumed(activity: android.app.Activity) = onChange(true, true)
+
+        override fun onActivityStopped(activity: android.app.Activity) {
+            started = (started - 1).coerceAtLeast(0)
+            if (started == 0) onChange(false, false)
+        }
+
+        override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+        override fun onActivityPaused(activity: android.app.Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+        override fun onActivityDestroyed(activity: android.app.Activity) = Unit
     }
 }

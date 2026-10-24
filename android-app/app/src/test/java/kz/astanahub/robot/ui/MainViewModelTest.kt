@@ -345,9 +345,9 @@ class MainViewModelTest {
         assertEquals("Кафе", vm.state.value.guidingTo)
         advanceUntilIdle()
 
-        assertEquals("Мы пришли: Кафе.", vm.state.value.answer)
+        assertEquals("Мы пришли. Это Кафе.", vm.state.value.answer)
         assertNull(vm.state.value.guidingTo)
-        assertTrue(voice.spoken.flatten().contains("Идите за мной, провожу: Кафе."))
+        assertTrue(voice.spoken.flatten().contains("Идите за мной. Провожу: Кафе."))
     }
 
     @Test

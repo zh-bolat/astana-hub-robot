@@ -112,6 +112,52 @@ class RetrofitBackendApi(
         call(timeouts.ttsMillis, check = ::rejectFakeSpeech) { service.tts(TtsRequestDto(text, lang.code)) }
             .map { body -> body.use { it.bytes() } }
 
+    /**
+     * Таймаут [BackendTimeouts.ttsMillis] — до заголовков (ошибка провайдера до первых байт приходит обычным ответом);
+     * тело читается потом из [TtsStream] (верхняя граница — callTimeout клиента).
+     */
+    override suspend fun ttsStream(text: String, lang: Lang): ApiResult<TtsStream> =
+        guard(timeouts.ttsMillis) {
+            val response = service.ttsStream(TtsRequestDto(text, lang.code))
+            val body = response.body()
+            val rejected = if (response.isSuccessful) rejectFakeSpeech(response) else null
+            when {
+                rejected != null -> {
+                    body?.close()
+                    ApiResult.Failure(rejected)
+                }
+                response.isSuccessful && body != null -> ApiResult.Success(
+                    InputTtsStream(
+                        body.byteStream(),
+                        onClose = { body.close() },
+                        fromCache = response.headers()["X-Cache"].equals("hit", ignoreCase = true),
+                    ),
+                )
+                else -> ApiResult.Failure(parseError(response))
+            }
+        }
+
+    override suspend fun postTurnMetrics(metrics: TurnMetrics): ApiResult<Unit> =
+        guard(timeouts.referenceMillis) {
+            val dto = TurnMetricsDto(
+                sessionId = metrics.sessionId,
+                requestId = metrics.requestId,
+                lang = metrics.lang?.code,
+                mode = metrics.mode,
+                sttFinalMs = metrics.sttFinalMs,
+                chatFirstEventMs = metrics.chatFirstEventMs,
+                firstPhraseMs = metrics.firstPhraseMs,
+                ttsFirstByteMs = metrics.ttsFirstByteMs,
+                firstAudioMs = metrics.firstAudioMs,
+                vadSilenceMs = metrics.vadSilenceMs,
+                fallback = metrics.fallback,
+                interrupted = metrics.interrupted,
+            )
+            val response = service.postTurnMetrics(dto)
+            response.body()?.close()
+            if (response.isSuccessful) ApiResult.Success(Unit) else ApiResult.Failure(parseError(response))
+        }
+
     override fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession =
         OkHttpLiveSttSession(client, baseUrl, token, lang, sessionId)
 

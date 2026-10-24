@@ -10,6 +10,9 @@ import kz.astanahub.robot.core.Lang
 /** [lang] — язык, определённый распознавателем (серверный STT), если известен. */
 data class Transcript(val text: String, val isFinal: Boolean, val lang: Lang? = null)
 
+/** События озвучки для таймингов хода (`/v1/metrics/turn`): первый байт синтеза и старт звука. */
+enum class SpeechEvent { TTS_FIRST_BYTE, AUDIO_START }
+
 /** Что сейчас делает голосовой канал (для индикатора на экране). */
 enum class VoiceActivity { IDLE, LISTENING, SPEAKING }
 
@@ -63,4 +66,16 @@ interface VoiceGateway {
      * true — связь восстановилась (проверка /v1/health). По умолчанию событий нет.
      */
     val connection: Flow<Boolean> get() = emptyFlow()
+
+    /** VAD приложения решил, что посетитель закончил фразу (финальный текст ещё распознаётся). */
+    val utteranceEnded: Flow<Unit> get() = emptyFlow()
+
+    /** Первый байт синтеза / старт звука озвучки (не «хм…» из [speakCached]). */
+    val speechEvents: Flow<SpeechEvent> get() = emptyFlow()
+
+    /**
+     * Короткая фраза только из кеша голоса (без сети, без субтитров): «хм…», «секунду…».
+     * false — фразы нет в кеше (ничего не звучит) или озвучку прервали.
+     */
+    suspend fun speakCached(text: String, lang: Lang): Boolean = false
 }

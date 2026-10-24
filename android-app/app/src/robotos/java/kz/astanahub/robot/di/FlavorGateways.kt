@@ -41,7 +41,7 @@ object FlavorGateways {
         })
         return Gateways(
             builtinVoice = voice,
-            builtinMic = voice,
+            assistant = voice,
             robot = robot,
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,

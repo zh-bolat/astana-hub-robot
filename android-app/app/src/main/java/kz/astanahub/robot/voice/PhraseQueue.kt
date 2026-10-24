@@ -18,6 +18,9 @@ interface SpeechListener {
     /** [completed] — доиграно до конца (false — стоп, перебивание, ошибка). */
     fun onChunkDone(chunk: SpeechChunk, completed: Boolean) = Unit
 
+    /** Пришёл первый байт синтеза куска (или кусок взят из кеша) — для таймингов хода. */
+    fun onTtsFirstByte(chunk: SpeechChunk) = Unit
+
     companion object {
         val NONE = object : SpeechListener {}
     }
