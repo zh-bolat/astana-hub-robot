@@ -51,11 +51,6 @@ internal interface HubService {
     @POST("tts")
     suspend fun tts(@Body body: TtsRequestDto): Response<ResponseBody>
 
-    /** Кадр по запросу агента; ответ 204 без тела. */
-    @Multipart
-    @POST("chat/{turnId}/frame")
-    suspend fun chatFrame(@Path("turnId") turnId: String, @Part image: MultipartBody.Part): Response<ResponseBody>
-
     @POST("sessions/{sessionId}/messages")
     suspend fun postMessage(@Path("sessionId") sessionId: String, @Body body: LocalMessageDto): Response<ResponseBody>
 }

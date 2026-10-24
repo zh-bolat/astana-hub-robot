@@ -49,30 +49,6 @@ class Settings(BaseSettings):
     # strict — только база + small talk, иначе отказ «обратитесь на ресепшен»
     answer_mode: Literal["open", "strict"] = "open"
 
-    # Агентский чат /v1/chat (ADR 0001): OpenAI Agents SDK + LiteLLM. Модели — строки LiteLLM
-    # (anthropic/…, gemini/…, openrouter/…). Модель без ключа своего провайдера пропускается.
-    # false — /v1/chat отвечает запасным путём (логика /v1/ask) в том же формате SSE.
-    agent_enabled: bool = True
-    agent_model: str = "anthropic/claude-haiku-5-5"
-    # Резерв через запятую: пробуются по порядку, если модель упала до первого события роботу
-    agent_fallback_models: str = "gemini/gemini-3.1-flash-lite"
-    agent_max_tool_calls: int = 3
-    # Весь ход (без look); с look — плюс agent_look_extra_s (контракт: ≤ 20 с / ≤ 30 с)
-    agent_turn_timeout_s: float = 20.0
-    agent_look_extra_s: float = 10.0
-    # Нет ни фразы, ни действия за это время → ход отдаётся запасному пути (робот ждёт phrase 8 с)
-    agent_first_phrase_timeout_s: float = 5.0
-    # Сколько ждать кадр от робота после action look (контракт: 8 с)
-    agent_look_frame_timeout_s: float = 8.0
-    # Память: сколько последних сообщений (посетитель + ассистент) сессии видит агент
-    agent_history_messages: int = 10
-    agent_max_output_tokens: int = 400
-    # auto — minimal для gemini/*, иначе дефолт модели; или none|minimal|low|medium|high
-    agent_reasoning_effort: str = "auto"
-    anthropic_api_key: SecretStr | None = None
-    # Трассировка Agents SDK выключена всегда (тексты посетителей не уходят в OpenAI); false игнорируется
-    openai_agents_disable_tracing: bool = True
-
     # Таймауты вызова LLM на стороне сервера (робот ждёт 8 / 12 с)
     ask_timeout_s: float = 6.5
     look_timeout_s: float = 11.0
@@ -137,6 +113,24 @@ class Settings(BaseSettings):
     openrouter_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
     openrouter_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
     openrouter_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
+    # Агентский чат /v1/chat (docs/decisions/0001-agent-chat-stack.md): OpenAI Agents SDK + Claude Haiku
+    # через OpenRouter. auto — включён при OPENROUTER_API_KEY; off — /v1/chat отвечает как /v1/ask.
+    chat_provider: Literal["auto", "openrouter", "off"] = "auto"
+    agent_model: str = "anthropic/claude-haiku-5.5"
+    agent_max_tokens: int = 400
+    # До первой фразы (включая вызовы тулов), сек; робот ждёт ответ 8 с
+    agent_timeout_s: float = 6.5
+    # visitor_arrived: до приветствия модели, сек; дольше — готовое приветствие (робот ждёт 2 с)
+    agent_greeting_timeout_s: float = 1.8
+    # Весь ответ агента, сек
+    agent_total_s: float = 15.0
+    # Запросов к модели на одну реплику (ответ + вызовы тулов)
+    agent_max_turns: int = 4
+    # Сколько последних сообщений разговора агент видит (память — таблица messages)
+    agent_history_messages: int = 12
+    # Устаревшее (агент на LiteLLM): AGENT_ENABLED=false при CHAT_PROVIDER=auto = off; иначе игнорируется.
+    # AGENT_FALLBACK_MODELS больше не читается (резерв агента — ответ как /ask).
+    agent_enabled: bool | None = None
     # ElevenLabs
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
@@ -200,7 +194,6 @@ class Settings(BaseSettings):
         "gemini_api_key",
         "sentry_dsn",
         "openrouter_api_key",
-        "anthropic_api_key",
         "tts_fallback_provider",
         mode="before",
     )
@@ -208,15 +201,17 @@ class Settings(BaseSettings):
     def _empty_to_none(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
 
+    @field_validator("agent_model", mode="before")
+    @classmethod
+    def _agent_model_openrouter_id(cls, v):
+        # Совместимость со строками LiteLLM: openrouter/anthropic/… → anthropic/… (id OpenRouter)
+        return v.strip().removeprefix("openrouter/") if isinstance(v, str) else v
+
     def gemini_fallback_list(self) -> list[str]:
         return _split(self.gemini_fallback_models)
 
     def gemini_stt_fallback_list(self) -> list[str]:
         return _split(self.gemini_stt_fallback_models)
-
-    def agent_model_list(self) -> list[str]:
-        """Основная модель агента + резервные, без повторов."""
-        return list(dict.fromkeys([self.agent_model.strip(), *_split(self.agent_fallback_models)]))
 
     def openrouter_fallback_list(self) -> list[str]:
         return _split(self.openrouter_fallback_models)
@@ -251,6 +246,13 @@ class Settings(BaseSettings):
         if self.yandex_api_key:
             return "yandex"
         return "openrouter" if self.openrouter_api_key else "fake"
+
+    def resolved_chat_provider(self) -> str:
+        if self.chat_provider != "auto":
+            return self.chat_provider
+        if self.agent_enabled is False:
+            return "off"
+        return "openrouter" if self.openrouter_api_key else "off"
 
     def resolved_stt_stream_provider(self) -> str:
         if self.stt_stream_provider != "auto":

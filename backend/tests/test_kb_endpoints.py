@@ -131,13 +131,12 @@ def test_openapi_matches_contract_paths(client):
     assert set(spec["paths"]) == {
         "/v1/health",
         "/v1/ask",
+        "/v1/chat",
         "/v1/look",
         "/v1/places",
         "/v1/quick-questions",
         "/v1/stt",
         "/v1/tts",
         "/v1/sessions/{session_id}/messages",
-        "/v1/chat",
-        "/v1/chat/{turn_id}/frame",
     }
     assert "multipart/form-data" in spec["paths"]["/v1/look"]["post"]["requestBody"]["content"]

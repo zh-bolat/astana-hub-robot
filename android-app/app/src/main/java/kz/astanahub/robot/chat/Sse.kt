@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kz.astanahub.robot.backend.BackendError
@@ -60,18 +61,25 @@ object ChatEventDecoder {
     fun decode(message: SseMessage): ChatEvent? {
         val obj = runCatching { json.parseToJsonElement(message.data).jsonObject }.getOrNull()
         return when (message.event) {
-            "turn" -> obj?.str("turn_id")?.let { ChatEvent.Turn(it, obj.str("request_id")) }
-            "emotion" -> obj?.str("name")?.let { ChatEvent.Emotion(it) }
+            "emotion" -> obj?.str("name")?.takeIf { it.isNotBlank() }?.let { ChatEvent.Emotion(it) }
             "phrase" -> obj?.str("text")?.takeIf { it.isNotBlank() }?.let { ChatEvent.Phrase(it) }
-            "action" -> obj?.str("name")?.let { name -> ChatEvent.Action(name, obj.args()) }
+            "action" -> obj?.action()?.let { ChatEvent.Action(it) }
             "done" -> ChatEvent.Done(
                 requestId = obj?.str("request_id"),
                 lang = Lang.fromCode(obj?.str("lang")),
-                tools = (obj?.get("tools") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+                found = (obj?.get("found") as? JsonPrimitive)?.booleanOrNull ?: true,
+                sources = (obj?.get("sources") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+                actions = (obj?.get("actions") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.action() }.orEmpty(),
             )
             "error" -> ChatEvent.Error(errorOf(obj))
             else -> null
         }
+    }
+
+    /** `{type, place_id}`; без `type` — не действие. */
+    private fun JsonObject.action(): ChatAction? {
+        val type = str("type")?.takeIf { it.isNotBlank() } ?: return null
+        return ChatAction(type, str("place_id")?.takeIf { it.isNotBlank() })
     }
 
     /** Общий формат ошибок: `{"error": {"code", "message"}, "request_id"}`. */
@@ -88,12 +96,4 @@ object ChatEventDecoder {
 
     private fun JsonObject.str(key: String): String? =
         (get(key) as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
-
-    private fun JsonObject.args(): Map<String, String> {
-        val args = get("args") as? JsonObject ?: return emptyMap()
-        return args.mapNotNull { (k, v) ->
-            val p = v as? JsonPrimitive ?: return@mapNotNull null
-            if (p is JsonNull) null else p.contentOrNull?.let { k to it }
-        }.toMap()
-    }
 }

@@ -19,6 +19,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.types import Send
 
 from app import __version__
+from app.agent.service import ChatService
 from app.errors import (
     bad_request,
     payload_too_large,
@@ -31,6 +32,8 @@ from app.schemas import (
     AnswerResponse,
     AskRequest,
     ChatMessage,
+    ChatRequest,
+    ChatResponse,
     ErrorResponse,
     HealthResponse,
     LocalMessageRequest,
@@ -149,6 +152,46 @@ async def ask(body: AskRequest, request: Request):
     async def stream() -> AsyncIterator[bytes]:
         # Настоящий стриминг: фразы уходят по мере того, как модель дописывает предложения
         async with aclosing(service.ask_stream(body, request_id)) as events:
+            async for event, data in events:
+                yield _sse(event, data)
+
+    return ClosingStreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    responses={
+        **_LLM_ERRORS,
+        200: {
+            "content": {
+                "application/json": {},
+                "text/event-stream": {
+                    "schema": {
+                        "type": "string",
+                        "description": "SSE: emotion {name} перед первой phrase; phrase {text} и action "
+                        "{type, place_id} по мере готовности, затем done {request_id, lang, found, "
+                        "sources, actions} или error",
+                    }
+                },
+            }
+        },
+    },
+    dependencies=[Depends(require_robot)],
+)
+async def chat(body: ChatRequest, request: Request):
+    """Агентский чат: модель помнит разговор и сама выбирает действие робота."""
+    service: ChatService = request.app.state.chat
+    request_id = _request_id()
+    if "text/event-stream" not in request.headers.get("accept", ""):
+        return await service.chat(body, request_id)
+
+    async def stream() -> AsyncIterator[bytes]:
+        async with aclosing(service.chat_stream(body, request_id)) as events:
             async for event, data in events:
                 yield _sse(event, data)
 
@@ -393,4 +436,6 @@ async def add_local_message(
         latency_ms=0,
         interrupted=body.interrupted,
     )
+    # и в память агента: «проводи туда» после локального «где кафе?»
+    request.app.state.chat.remember(session_id, body.lang, body.question, body.answer)
     return LocalMessageResponse(request_id=request_id)
