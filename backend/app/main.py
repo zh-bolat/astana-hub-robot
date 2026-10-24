@@ -18,7 +18,7 @@ from app.agent.service import ChatService, build_chat_client
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
-from app.db import MessageRepo, QuestionLogRepo, SessionRepo, make_engine
+from app.db import LatencyRepo, MessageRepo, QuestionLogRepo, SessionRepo, make_engine
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
@@ -36,6 +36,8 @@ from app.logging_setup import (
     reset_request_id,
     set_request_id,
 )
+from app.metrics import NULL_RECORDER, LatencyRecorder
+from app.metrics_api import router as metrics_router
 from app.ratelimit import RateLimiter
 from app.sentry_setup import init_sentry
 from app.service import AnswerService
@@ -205,7 +207,14 @@ def create_app(
         sessions=SessionRepo(engine) if log_repo is None else None,
         max_pending=settings.question_log_queue_max,
     )
-    service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
+    latency_repo = LatencyRepo(engine)
+    # Тайминги этапов — той же фоновой очередью; при подменённом логе (eval, openapi) — выключены
+    metrics = (
+        LatencyRecorder(log_writer.submit_job, latency_repo.add_many)
+        if log_repo is None
+        else NULL_RECORDER
+    )
+    service = AnswerService(settings, store, text_llm, vision_llm, log_writer, metrics)
     chat = ChatService(
         settings,
         store,
@@ -214,6 +223,7 @@ def create_app(
         chat_client or build_chat_client(settings),
         messages=MessageRepo(engine) if log_repo is None else None,
         sessions=SessionRepo(engine) if log_repo is None else None,
+        metrics=metrics,
     )
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
@@ -264,6 +274,9 @@ def create_app(
     app.state.chat = chat
     app.state.log_repo = repo
     app.state.log_writer = log_writer
+    app.state.metrics = metrics
+    app.state.latency_repo = latency_repo
+    app.state.admin_rate_limiter = RateLimiter(settings.admin_rate_limit_per_min)
     app.state.stt = stt
     app.state.tts = tts_provider
     app.state.stt_stream = stt_stream or build_stt_stream_provider(settings, stt)
@@ -277,6 +290,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(router)
     app.include_router(speech_router)
+    app.include_router(metrics_router)
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(

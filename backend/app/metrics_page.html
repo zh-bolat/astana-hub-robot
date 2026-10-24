@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Задержки робота</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+  --p50: #2f6fdb; --p95: #a9c3f2; --bad: #c0392b; --ok: #1e8449;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #202020; --text: #ecebe6; --muted: #9a9993; --line: #34332f;
+    --p50: #6d9ef0; --p95: #34507f; --bad: #e57368; --ok: #58c27d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 28px 0 8px; }
+p.hint { color: var(--muted); margin: 0 0 16px; }
+form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+input, select, button { font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+input[type=password] { flex: 1 1 240px; min-width: 0; }
+button { cursor: pointer; background: var(--p50); color: #fff; border-color: var(--p50); }
+button.secondary { background: transparent; color: var(--text); border-color: var(--line); }
+#status { color: var(--muted); margin: 10px 0 0; min-height: 1.4em; }
+#status.error { color: var(--bad); }
+.wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tr:last-child td { border-bottom: 0; }
+td.bar { width: 40%; min-width: 140px; }
+.track { position: relative; height: 12px; }
+.track span { position: absolute; left: 0; top: 0; height: 12px; border-radius: 3px; }
+.track .p95 { background: var(--p95); }
+.track .p50 { background: var(--p50); }
+.legend { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.legend .l50 { background: var(--p50); } .legend .l95 { background: var(--p95); }
+.empty { color: var(--muted); padding: 10px; }
+.bad { color: var(--bad); }
+#hourly-controls { margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Задержки робота</h1>
+  <p class="hint">Сводка p50 / p95 по этапам: «посетитель замолчал → робот заговорил». Токен администратора
+    хранится только в этой вкладке браузера и в адресную строку не попадает.</p>
+  <form id="form" autocomplete="off">
+    <input id="token" type="password" placeholder="ADMIN_TOKEN" aria-label="Токен администратора">
+    <select id="hours" aria-label="Период">
+      <option value="1">1 час</option>
+      <option value="6">6 часов</option>
+      <option value="24" selected>24 часа</option>
+      <option value="72">3 дня</option>
+      <option value="168">7 дней</option>
+    </select>
+    <button type="submit">Показать</button>
+    <button type="button" class="secondary" id="forget">Забыть токен</button>
+  </form>
+  <div id="status" role="status"></div>
+  <div id="out"></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var KEY = "hub_admin_token";
+  var STAGES = {
+    stt_final_ms: "робот: финал распознавания",
+    chat_first_event_ms: "робот: первое событие чата",
+    first_phrase_ms: "первая фраза",
+    tts_first_byte_ms: "первый байт синтеза",
+    first_audio_ms: "робот: начал говорить",
+    vad_silence_ms: "робот: пауза VAD",
+    stt_ms: "распознавание (файл)",
+    stt_live_final_ms: "live: конец речи → финал",
+    llm_first_token_ms: "первый токен модели",
+    llm_total_ms: "ответ целиком",
+    tts_total_ms: "синтез целиком"
+  };
+  var KINDS = { robot: "робот", stt: "STT", chat: "агент /chat", ask: "/ask", look: "/look", tts: "TTS" };
+  var $ = function (id) { return document.getElementById(id); };
+  var data = null;
+
+  function store(fn) { try { return fn(window.sessionStorage); } catch (e) { return null; } }
+  var saved = store(function (s) { return s.getItem(KEY); });
+  if (saved) { $("token").value = saved; }
+
+  function el(tag, text, cls) {
+    var e = document.createElement(tag);
+    if (text !== undefined && text !== null) { e.textContent = String(text); }
+    if (cls) { e.className = cls; }
+    return e;
+  }
+  function ms(v) { return v === null || v === undefined ? "—" : v.toLocaleString("ru-RU") + " мс"; }
+  function stageName(s) { return STAGES[s] ? STAGES[s] + " (" + s + ")" : s; }
+  function status(text, isError) { var s = $("status"); s.textContent = text; s.className = isError ? "error" : ""; }
+
+  function bar(p50, p95, max) {
+    var td = el("td", null, "bar"), track = el("div", null, "track");
+    [["p95", p95], ["p50", p50]].forEach(function (pair) {
+      if (pair[1] === null || !max) { return; }
+      var s = el("span", null, pair[0]);
+      s.style.width = Math.max(1, Math.round(100 * pair[1] / max)) + "%";
+      track.appendChild(s);
+    });
+    td.appendChild(track);
+    return td;
+  }
+
+  function table(title, rows, cols, withBar) {
+    var box = document.createElement("section");
+    box.appendChild(el("h2", title));
+    var wrap = el("div", null, "wrap");
+    if (!rows.length) { wrap.appendChild(el("div", "Нет данных за период", "empty")); box.appendChild(wrap); return box; }
+    var max = 0;
+    rows.forEach(function (r) { if (r.p95 !== null && r.p95 > max) { max = r.p95; } });
+    var t = el("table"), head = el("tr");
+    cols.forEach(function (c) { head.appendChild(el("th", c[1], c[2] ? "num" : "")); });
+    if (withBar) { head.appendChild(el("th", "p50 / p95")); }
+    t.appendChild(head);
+    rows.forEach(function (r) {
+      var tr = el("tr");
+      cols.forEach(function (c) {
+        var v = typeof c[0] === "function" ? c[0](r) : r[c[0]];
+        var td = el("td", v === null || v === undefined ? "—" : v, c[2] ? "num" : "");
+        if (c[0] === "errors" && r.errors > 0) { td.className += " bad"; }
+        tr.appendChild(td);
+      });
+      if (withBar) { tr.appendChild(bar(r.p50, r.p95, max)); }
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+    box.appendChild(wrap);
+    if (withBar) {
+      var lg = el("div", null, "legend");
+      lg.appendChild(el("i", null, "l50")); lg.appendChild(document.createTextNode("p50"));
+      lg.appendChild(el("i", null, "l95")); lg.appendChild(document.createTextNode("p95"));
+      box.appendChild(lg);
+    }
+    return box;
+  }
+
+  var BASE = [
+    [function (r) { return KINDS[r.kind] || r.kind; }, "часть"],
+    [function (r) { return stageName(r.stage); }, "этап"]
+  ];
+  var NUMS = [
+    ["count", "замеров", true], ["errors", "ошибок", true],
+    [function (r) { return ms(r.p50); }, "p50", true], [function (r) { return ms(r.p95); }, "p95", true]
+  ];
+
+  function hourly(box) {
+    var sec = document.createElement("section");
+    sec.appendChild(el("h2", "По часам"));
+    var keys = [];
+    data.hourly.forEach(function (r) { var k = r.kind + "/" + r.stage; if (keys.indexOf(k) < 0) { keys.push(k); } });
+    if (!keys.length) { sec.appendChild(el("div", "Нет данных за период", "empty")); box.appendChild(sec); return; }
+    var ctl = el("div", null, ""); ctl.id = "hourly-controls";
+    var sel = el("select"); sel.setAttribute("aria-label", "Этап");
+    keys.forEach(function (k) {
+      var parts = k.split("/"), o = el("option", (KINDS[parts[0]] || parts[0]) + " — " + stageName(parts[1]));
+      o.value = k; sel.appendChild(o);
+    });
+    var pref = ["robot/first_audio_ms", "chat/first_phrase_ms", "tts/tts_first_byte_ms"];
+    for (var i = 0; i < pref.length; i++) { if (keys.indexOf(pref[i]) >= 0) { sel.value = pref[i]; break; } }
+    ctl.appendChild(sel); sec.appendChild(ctl);
+    var holder = el("div"); sec.appendChild(holder);
+    function draw() {
+      holder.textContent = "";
+      var parts = sel.value.split("/");
+      var rows = data.hourly.filter(function (r) { return r.kind === parts[0] && r.stage === parts[1]; })
+        .map(function (r) {
+          var d = new Date(r.hour);
+          return { label: d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }),
+                   count: r.count, errors: r.errors, p50: r.p50, p95: r.p95 };
+        });
+      holder.appendChild(table("", rows, [["label", "час"]].concat(NUMS), true));
+    }
+    sel.addEventListener("change", draw);
+    draw();
+    box.appendChild(sec);
+  }
+
+  function render() {
+    var out = $("out");
+    out.textContent = "";
+    out.appendChild(table("Этапы", data.stages, BASE.concat(NUMS), true));
+    out.appendChild(table("Доля фолбэков", data.fallback, [
+      [function (r) { return KINDS[r.kind] || r.kind; }, "часть"],
+      ["turns", "ходов", true], ["fallbacks", "фолбэков", true],
+      [function (r) { return (100 * r.fallback_share).toFixed(1) + " %"; }, "доля", true],
+      ["interrupted", "перебили", true]
+    ], false));
+    out.appendChild(table("По моделям и провайдерам", data.by_provider,
+      BASE.concat([[function (r) { return r.provider || "—"; }, "модель / провайдер"]], NUMS), true));
+    out.appendChild(table("По языкам", data.by_lang,
+      BASE.concat([[function (r) { return r.lang || "—"; }, "язык"]], NUMS), true));
+    hourly(out);
+  }
+
+  function load() {
+    var token = $("token").value.trim();
+    if (!token) { status("Введите токен администратора", true); return; }
+    store(function (s) { s.setItem(KEY, token); });
+    status("Загрузка…");
+    var hours = encodeURIComponent($("hours").value);
+    fetch("/v1/admin/metrics?hours=" + hours, {
+      headers: { "Authorization": "Bearer " + token, "Accept": "application/json" },
+      cache: "no-store", credentials: "omit"
+    }).then(function (r) {
+      if (r.status === 401) { throw new Error("Неверный токен"); }
+      if (r.status === 429) { throw new Error("Слишком много запросов, повторите через минуту"); }
+      if (!r.ok) { throw new Error("Ошибка сервера: " + r.status); }
+      return r.json();
+    }).then(function (json) {
+      data = json;
+      render();
+      status("Обновлено " + new Date(json.generated_at).toLocaleString("ru-RU") + ", период — " + json.hours + " ч");
+    }).catch(function (e) { status(e.message, true); });
+  }
+
+  $("form").addEventListener("submit", function (e) { e.preventDefault(); load(); });
+  $("forget").addEventListener("click", function () {
+    store(function (s) { s.removeItem(KEY); });
+    $("token").value = ""; $("out").textContent = ""; data = null; status("Токен удалён из вкладки");
+  });
+  if (saved) { load(); }
+})();
+</script>
+</body>
+</html>

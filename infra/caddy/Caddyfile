@@ -75,6 +75,11 @@
 		import proxy_api
 	}
 
+	# Страница статистики задержек — сама страница без токена (данные она запрашивает с ADMIN_TOKEN).
+	handle /v1/admin/metrics/page {
+		import proxy_api
+	}
+
 	handle /v1/* {
 		# Без Bearer-заголовка — 401 на краю, тело не проксируется.
 		# Сам токен проверяет backend.

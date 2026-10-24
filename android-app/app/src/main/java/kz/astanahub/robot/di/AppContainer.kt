@@ -24,7 +24,16 @@ import kz.astanahub.robot.places.PlaceRepository
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.voice.AndroidTtsVoiceGateway
-import kz.astanahub.robot.voice.BuiltinMicControl
+import kz.astanahub.robot.voice.AssistantGuard
+import kz.astanahub.robot.voice.BuiltinAssistant
+import kz.astanahub.robot.voice.FileAudioStore
+import kz.astanahub.robot.voice.PhraseAudioCache
+import kz.astanahub.robot.voice.PhraseCacheWarmer
+import kz.astanahub.robot.audio.VadConfig
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kz.astanahub.robot.voice.RoutingVoiceGateway
 import kz.astanahub.robot.voice.ServerVoiceGateway
 import kz.astanahub.robot.voice.VoiceGateway
@@ -52,7 +61,8 @@ import kz.astanahub.robot.robot.HeadGateway
 class Gateways(
     /** Встроенный голос: AgentOS на роботе, текстовая заглушка на эмуляторе. */
     val builtinVoice: VoiceGateway,
-    val builtinMic: BuiltinMicControl,
+    /** Встроенный ассистент (SkillApi / AgentOS): глушится, пока приложение на переднем плане. */
+    val assistant: BuiltinAssistant,
     val robot: RobotGateway,
     val camera: CameraGateway,
     /** Есть настоящее встроенное распознавание (robot/robotos) — на него откат без связи. */
@@ -72,7 +82,10 @@ class AppContainer(app: Application) {
     private val gateways: Gateways = FlavorGateways.create(app)
     val robot: RobotGateway get() = gateways.robot
     val camera: CameraGateway get() = gateways.camera
-    val builtinMic: BuiltinMicControl get() = gateways.builtinMic
+
+    /** Встроенный ассистент молчит, пока приложение видно; микрофон ему — только при ASR=builtin. */
+    val assistantGuard = AssistantGuard(gateways.assistant)
+    val builtinMic: AssistantGuard get() = assistantGuard
     val presenceSimulator: PresenceSimulator? get() = gateways.presenceSimulator
 
     /** Голова: один контроллер на приложение (слежение, сброс, кивки). */
@@ -125,15 +138,33 @@ class AppContainer(app: Application) {
         VoiceConfig(
             asr = VoiceSource.fromCode(BuildConfig.VOICE_ASR) ?: VoiceSource.SERVER,
             tts = mapOf(
-                Lang.RU to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_RU) ?: VoiceSource.BUILTIN),
+                Lang.RU to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_RU) ?: VoiceSource.SERVER),
                 Lang.KK to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_KK) ?: VoiceSource.SERVER),
-                Lang.EN to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_EN) ?: VoiceSource.BUILTIN),
+                Lang.EN to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_EN) ?: VoiceSource.SERVER),
             ),
+            builtinFallback = BuildConfig.VOICE_BUILTIN_FALLBACK,
+            vadEndSilenceMillis = BuildConfig.VAD_END_SILENCE_MS,
+            ttsStreaming = BuildConfig.TTS_STREAMING,
         ),
     )
 
+    /** Фразы робота голосом ElevenLabs в файлах приложения (играются и без сети). */
+    val phraseCache = PhraseAudioCache(FileAudioStore(java.io.File(app.filesDir, "voice_cache")))
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     val micRecorder = MicRecorder(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
-    val serverVoice = ServerVoiceGateway(backend, micRecorder, Mp3Player())
+    val serverVoice = ServerVoiceGateway(
+        backend = backend,
+        recorder = micRecorder,
+        player = Mp3Player(),
+        vadConfig = { VadConfig(endSilenceMillis = voiceSettings.config.value.vadEndSilenceMillis) },
+        cache = phraseCache,
+        streaming = { voiceSettings.config.value.ttsStreaming },
+    )
+
+    /** Синтез кеша фраз: при старте — недостающие, при смене сервера — все заново, при восстановлении связи — недостающие. */
+    val phraseCacheWarmer = PhraseCacheWarmer(backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO))
 
     /**
      * Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики.
@@ -149,9 +180,21 @@ class AppContainer(app: Application) {
         builtinTts = if (BuildConfig.IS_ROBOT) gateways.builtinVoice else androidTts,
         server = serverVoice,
         settings = voiceSettings,
-        micControl = gateways.builtinMic,
+        micControl = assistantGuard,
         continuousServerAsr = BuildConfig.IS_ROBOT,
         builtinAsrAvailable = gateways.builtinAsrAvailable,
         healthCheck = { backend.health() is ApiResult.Success },
+        cache = phraseCache,
+        phrases = text,
     )
+
+    init {
+        phraseCacheWarmer.warmUp(force = false)
+        appScope.launch {
+            backend.url.drop(1).distinctUntilChanged().collect { phraseCacheWarmer.warmUp(force = true) }
+        }
+        appScope.launch {
+            voice.connection.filter { it }.collect { phraseCacheWarmer.warmUp(force = false) }
+        }
+    }
 }

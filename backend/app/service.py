@@ -26,6 +26,7 @@ from app.lang import Lang, resolve_lang
 from app.llm.base import LLMAnswer, LLMError, LLMProvider, LLMRequest
 from app.log_writer import BackgroundLogWriter
 from app.logging_setup import logger
+from app.metrics import NULL_RECORDER, LatencyRecorder, elapsed_ms
 from app.prompts import (
     LOOK_REFUSALS,
     REFUSALS,
@@ -58,6 +59,12 @@ class _StreamState:
     lang: str | None = None
     model: str | None = None
     logged: bool = False
+    # тайминги (latency_events): от начала запроса
+    started: float = 0.0
+    provider: str | None = None
+    first_token_ms: int | None = None
+    first_phrase_ms: int | None = None
+    error: str | None = None
 
 
 def decide_category(category: str | None, found: bool | None, mode: str) -> str | None:
@@ -81,12 +88,14 @@ class AnswerService:
         text_llm: LLMProvider,
         vision_llm: LLMProvider,
         log_writer: BackgroundLogWriter,
+        metrics: LatencyRecorder | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.text_llm = text_llm
         self.vision_llm = vision_llm
         self.log_writer = log_writer
+        self.metrics = metrics or NULL_RECORDER
 
     @property
     def mode(self) -> str:
@@ -222,10 +231,39 @@ class AnswerService:
 
     async def ask(self, req: AskRequest, request_id: str) -> AnswerResponse:
         started = time.perf_counter()
+        try:
+            resp, category, provider = await self._ask_json(req, request_id, started)
+        except ApiError as exc:
+            self.metrics.record(
+                "ask",
+                {"llm_total_ms": elapsed_ms(started)},
+                lang=req.lang,
+                provider=self._provider_id(self.text_llm, None),
+                request_id=request_id,
+                session_id=req.session_id,
+                ok=False,
+                extra={"stream": False, "error": exc.code},
+            )
+            raise
+        self.metrics.record(
+            "ask",
+            {"llm_total_ms": elapsed_ms(started)},
+            lang=resp.lang,
+            provider=provider,
+            request_id=request_id,
+            session_id=req.session_id,
+            extra={"stream": False, "category": category},
+        )
+        return resp
+
+    async def _ask_json(
+        self, req: AskRequest, request_id: str, started: float
+    ) -> tuple[AnswerResponse, str, str]:
+        """Ответ целиком (без записи таймингов): (ответ, категория, провайдер:модель)."""
         quick = self._quick(req, request_id)
         if quick is not None:
             await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
-            return quick
+            return quick, "small_talk", "local:smalltalk"
         llm_req = self._ask_request(req)
         res = await self._call(self.text_llm.answer(llm_req), self.settings.ask_timeout_s)
         assert llm_req.kb is not None
@@ -239,10 +277,9 @@ class AnswerService:
             self.mode,
             kb_corpus(llm_req.kb),
         )
-        await self._log_ask(
-            req, resp, category, self._provider_id(self.text_llm, res.model), started
-        )
-        return resp
+        provider = self._provider_id(self.text_llm, res.model)
+        await self._log_ask(req, resp, category, provider, started)
+        return resp, category, provider
 
     async def _log_ask(
         self,
@@ -274,20 +311,28 @@ class AnswerService:
         Клиент оборвал поток до done (посетитель перебил робота) → в лог идут вопрос и уже отправленные
         фразы с interrupted=true. Ошибка LLM (event error) в лог не пишется, как и в JSON-режиме."""
         started = time.perf_counter()
-        st = _StreamState()
+        st = _StreamState(started=started)
         finished = False
         try:
             # aclosing: при отмене/обрыве SSE внутренний генератор (и стрим LLM) закрывается сразу
             async with aclosing(self._ask_stream(req, request_id, st)) as events:
                 async for event, data in events:
+                    if event == "phrase" and st.first_phrase_ms is None:
+                        st.first_phrase_ms = elapsed_ms(started)
+                    elif event == "error":
+                        st.error = data["error"]["code"]
+                    elif event == "done":
+                        st.lang = data["lang"]
                     if event in ("done", "error"):
                         finished = True
                     yield event, data
         except Exception:
             logger.exception("ask_stream_failed")
             if not finished:
+                st.error = "internal_error"
                 yield "error", error_body("internal_error", "Internal server error")
         finally:
+            total_ms = elapsed_ms(started)
             if not finished and not st.logged and st.emitted:
                 # _log не ждёт БД (запись фоном), поэтому отмена задачи обрыва его не прервёт
                 await self._log_ask(
@@ -305,6 +350,26 @@ class AnswerService:
                     started,
                     interrupted=True,
                 )
+            # после лога вопросов: он важнее и не должен ждать в очереди за таймингами
+            self.metrics.record(
+                "ask",
+                {
+                    "llm_first_token_ms": st.first_token_ms,
+                    "first_phrase_ms": st.first_phrase_ms,
+                    "llm_total_ms": total_ms,
+                },
+                lang=resolve_lang(req.lang, st.lang, req.question),
+                provider=st.provider or self._provider_id(self.text_llm, st.model),
+                request_id=request_id,
+                session_id=req.session_id,
+                ok=st.error is None,
+                extra={
+                    "stream": True,
+                    "category": st.category,
+                    "interrupted": not finished,
+                    "error": st.error,
+                },
+            )
 
     async def _ask_stream(
         self, req: AskRequest, request_id: str, st: _StreamState
@@ -313,6 +378,7 @@ class AnswerService:
         quick = self._quick(req, request_id)
         if quick is not None:
             st.logged = True  # короткий локальный ответ: пишем как полный
+            st.provider, st.category = "local:smalltalk", "small_talk"
             await self._log_ask(req, quick, "small_talk", "local:smalltalk", started)
             for phrase in quick.phrases:
                 yield "phrase", {"text": phrase}
@@ -321,7 +387,7 @@ class AnswerService:
 
         if not hasattr(self.text_llm, "answer_stream"):
             try:
-                resp = await self.ask(req, request_id)
+                resp, st.category, st.provider = await self._ask_json(req, request_id, started)
             except ApiError as exc:
                 yield "error", error_body(exc.code, exc.message)
                 return
@@ -369,6 +435,8 @@ class AnswerService:
                     chunk = await asyncio.wait_for(stream.__anext__(), timeout=max(0.01, timeout))
                 except StopAsyncIteration:
                     break
+                if first:
+                    st.first_token_ms = elapsed_ms(st.started)
                 first = False
                 sentences = parser.feed(chunk)
                 category = decide_category(parser.category, parser.found, self.mode)
@@ -413,6 +481,7 @@ class AnswerService:
                 emitted.append(phrase)
                 yield "phrase", {"text": phrase}
         answer = " ".join(emitted)
+        st.category = category
         st.logged = True  # до done: клиент может закрыть поток сразу после него
         resp = AnswerResponse(
             request_id=request_id,
@@ -450,6 +519,18 @@ class AnswerService:
             res = await self._call(
                 self.vision_llm.describe_image(llm_req), self.settings.look_timeout_s
             )
+        except ApiError as exc:
+            self.metrics.record(
+                "look",
+                {"llm_total_ms": elapsed_ms(started)},
+                lang=meta.lang,
+                provider=self._provider_id(self.vision_llm, None),
+                request_id=request_id,
+                session_id=meta.session_id,
+                ok=False,
+                extra={"error": exc.code},
+            )
+            raise
         finally:
             llm_req.image = None  # кадр живёт только в памяти и только на время запроса
         # /look: любое описание кадра — ответ; отказ — только если модель не смогла описать
@@ -475,6 +556,15 @@ class AnswerService:
             category=category,
             provider_id=self._provider_id(self.vision_llm, res.model),
             started=started,
+        )
+        self.metrics.record(
+            "look",
+            {"llm_total_ms": elapsed_ms(started)},
+            lang=resp.lang,
+            provider=self._provider_id(self.vision_llm, res.model),
+            request_id=request_id,
+            session_id=meta.session_id,
+            extra={"category": category},
         )
         return resp
 

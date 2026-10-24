@@ -10,6 +10,7 @@ from __future__ import annotations
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, make_url
 
+from app.db.latency import LatencyRepo
 from app.db.models import Base, QuestionLog
 from app.db.repos import (
     CSV_FIELDS,
@@ -24,6 +25,7 @@ __all__ = [
     "CSV_FIELDS",
     "Base",
     "FeedbackRepo",
+    "LatencyRepo",
     "MessageRepo",
     "QuestionLog",
     "QuestionLogRepo",

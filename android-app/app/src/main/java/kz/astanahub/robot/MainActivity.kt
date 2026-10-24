@@ -81,6 +81,7 @@ class MainActivity : AppCompatActivity() {
                     chatMode = { container.chatSettings.mode.value },
                     presence = container.presence,
                     head = container.head,
+                    vadSilenceMillis = { container.voiceSettings.config.value.vadEndSilenceMillis },
                 )
             }
         }

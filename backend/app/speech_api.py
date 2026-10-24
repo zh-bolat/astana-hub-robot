@@ -8,15 +8,17 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException
+from starlette.types import Receive, Scope, Send
 
 from app.api import _InMemoryMultiPartParser, _read_body_limited, check_token
-from app.errors import ApiError, bad_request, payload_too_large, rate_limited
+from app.errors import ApiError, bad_request, error_response, payload_too_large, rate_limited
 from app.lang import Lang, detect_lang, normalize_lang
 from app.logging_setup import (
     get_request_id,
@@ -25,6 +27,7 @@ from app.logging_setup import (
     reset_request_id,
     set_request_id,
 )
+from app.metrics import LatencyRecorder, elapsed_ms
 from app.schemas import ErrorResponse, LangField
 from app.speech.base import SpeechError, SttProvider, SttResult, TtsProvider
 from app.speech.cache import TtsCache, cache_key
@@ -174,16 +177,41 @@ async def stt(request: Request) -> SttResponse:
             raise payload_too_large(f"Audio longer than {settings.max_audio_seconds:g} s")
 
         started = time.perf_counter()
+        metrics: LatencyRecorder = request.app.state.metrics
+        audio_s = round(audio.duration_s, 2)
+        silence = peak_amplitude(audio.pcm) < settings.stt_silence_peak or audio.duration_s < 0.15
         try:
-            if peak_amplitude(audio.pcm) < settings.stt_silence_peak or audio.duration_s < 0.15:
+            if silence:
                 # тишина — не тратим запрос к провайдеру и не ловим «галлюцинации»
                 result = SttResult(text="", lang=meta.lang or "ru")
             else:
-                result = await _with_timeout(
-                    provider.stt(audio.pcm, audio.sample_rate, meta.lang), settings.stt_timeout_s
-                )
+                try:
+                    result = await _with_timeout(
+                        provider.stt(audio.pcm, audio.sample_rate, meta.lang),
+                        settings.stt_timeout_s,
+                    )
+                except ApiError as exc:
+                    metrics.record(
+                        "stt",
+                        {"stt_ms": elapsed_ms(started)},
+                        lang=meta.lang,
+                        provider=provider.name,
+                        session_id=meta.session_id,
+                        ok=False,
+                        extra={"audio_s": audio_s, "error": exc.code},
+                    )
+                    raise
         finally:
             audio.pcm = b""  # аудио посетителя не храним
+        if not silence:  # тишина без вызова провайдера не искажает задержку STT
+            metrics.record(
+                "stt",
+                {"stt_ms": elapsed_ms(started)},
+                lang=result.lang,
+                provider=provider.name,
+                session_id=meta.session_id,
+                extra={"audio_s": audio_s, "empty": not result.text},
+            )
         logger.info(
             "stt_recognized",
             extra={
@@ -261,7 +289,14 @@ async def _stt_stream_session(ws, settings, session_id, lang_raw, hint) -> None:
         await _ws_error(ws, "speech_unavailable", "Speech provider is unavailable")
         return
 
-    state = {"bytes": 0, "ended_by": None, "ended_at": None, "partials": 0, "peak": 0}
+    state = {
+        "bytes": 0,
+        "ended_by": None,
+        "ended_at": None,
+        "partials": 0,
+        "peak": 0,
+        "final_at": None,
+    }
     max_bytes = int(settings.max_audio_seconds * _BYTES_PER_S)
 
     async def end(by: str) -> None:
@@ -312,6 +347,7 @@ async def _stt_stream_session(ws, settings, session_id, lang_raw, hint) -> None:
                 state["partials"] += 1
                 await ws.send_json({"type": "partial", "text": ev.text})
                 continue
+            state["final_at"] = time.perf_counter()
             return {
                 "type": "final",
                 "request_id": get_request_id() or "",
@@ -362,6 +398,28 @@ async def _stt_stream_session(ws, settings, session_id, lang_raw, hint) -> None:
     elif error is not None:
         await _ws_error(ws, *error, 1008 if error[0] == "bad_request" else 1011)
     ended_at = state["ended_at"] or time.perf_counter()
+    if state["ended_at"] is not None and (final is not None or error is not None):
+        # live: от конца речи (end клиента / VAD / лимит) до финала
+        ws.app.state.metrics.record(
+            "stt",
+            {
+                "stt_live_final_ms": int(
+                    ((state["final_at"] or time.perf_counter()) - ended_at) * 1000
+                )
+            },
+            lang=final["lang"] if final else hint,
+            provider=session.provider,
+            request_id=get_request_id(),
+            session_id=session_id,
+            ok=error is None,
+            extra={
+                "ended_by": state["ended_by"],
+                "partials": state["partials"],
+                "audio_s": round(state["bytes"] / _BYTES_PER_S, 2),
+                "empty": not (final and final["text"]),
+                "error": error[0] if error else None,
+            },
+        )
     logger.info(
         "stt_stream_recognized",
         extra={
@@ -380,49 +438,202 @@ async def _stt_stream_session(ws, settings, session_id, lang_raw, hint) -> None:
     )
 
 
+# ---------- TTS ----------
+
+
+async def _first_chunk(chunks: AsyncIterator[bytes]) -> bytes:
+    async for chunk in chunks:
+        if chunk:
+            return chunk
+    raise SpeechError("tts stream returned empty audio")
+
+
+async def _aclose(chunks: AsyncIterator[bytes]) -> None:
+    aclose = getattr(chunks, "aclose", None)
+    if aclose is not None:
+        try:
+            await aclose()
+        except Exception as exc:  # закрытие потока провайдера не должно ронять ответ
+            logger.warning("tts_stream_close_failed", extra={"error": type(exc).__name__})
+
+
+class TtsStreamResponse(Response):
+    """audio/mpeg кусками по мере синтеза (chunked, без Content-Length).
+
+    Первый кусок ждём до отправки заголовков: ошибка/таймаут провайдера до первых байт → обычный ответ
+    об ошибке (503 speech_unavailable / 504 timeout). Обрыв посреди потока → соединение закрывается без
+    завершающего куска (клиент видит обрыв и дозапрашивает фразу без stream). Весь поток копится в памяти
+    и после успешного окончания кладётся в кеш. Все шаги потока провайдера — в одной задаче."""
+
+    media_type = "audio/mpeg"
+
+    def __init__(
+        self,
+        chunks: AsyncIterator[bytes],
+        *,
+        first_timeout_s: float,
+        total_timeout_s: float,
+        headers: dict[str, str],
+        on_first: Callable[[int], None],
+        on_done: Callable[[bytes | None, str | None], None],
+    ) -> None:
+        super().__init__(media_type=self.media_type)
+        self.chunks = chunks
+        self.first_timeout_s = first_timeout_s
+        self.total_timeout_s = total_timeout_s
+        self.extra_headers = headers
+        self.on_first = on_first
+        self.on_done = on_done
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        audio: list[bytes] = []
+        error: str | None = "interrupted"
+        try:
+            try:
+                async with asyncio.timeout(self.first_timeout_s):
+                    first = await _first_chunk(self.chunks)
+            except TimeoutError:
+                error = "timeout"
+                err: ApiError = speech_timeout()
+            except SpeechError as exc:
+                logger.error("speech_error", extra={"error": str(exc), "stream": True})
+                error = "speech_unavailable"
+                err = speech_unavailable()
+            else:
+                err = None  # type: ignore[assignment]
+            if err is not None:
+                headers = {**err.headers, **self.extra_headers, "Cache-Control": "no-store"}
+                await error_response(err.status, err.code, err.message, headers)(
+                    scope, receive, send
+                )
+                return
+            self.on_first(int((loop.time() - started) * 1000))
+            headers = [
+                (b"content-type", b"audio/mpeg"),
+                *((k.lower().encode(), v.encode()) for k, v in self.extra_headers.items()),
+            ]
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            audio.append(first)
+            await send({"type": "http.response.body", "body": first, "more_body": True})
+            try:
+                async with asyncio.timeout(max(0.01, started + self.total_timeout_s - loop.time())):
+                    async for chunk in self.chunks:
+                        if chunk:
+                            audio.append(chunk)
+                            await send(
+                                {"type": "http.response.body", "body": chunk, "more_body": True}
+                            )
+            except (TimeoutError, SpeechError) as exc:
+                error = "timeout" if isinstance(exc, TimeoutError) else "speech_unavailable"
+                logger.warning("tts_stream_broken", extra={"error": str(exc) or error})
+                return  # без завершающего куска: сервер закроет соединение, клиент увидит обрыв
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            error = None
+        finally:
+            await _aclose(self.chunks)
+            self.on_done(b"".join(audio) if error is None else None, error)
+
+
 @router.post(
     "/tts",
     response_class=Response,
     responses={
-        200: {"content": {"audio/mpeg": {"schema": {"type": "string", "format": "binary"}}}},
+        200: {
+            "description": "MP3 целиком; с stream=true — кусками по мере синтеза (chunked)",
+            "content": {"audio/mpeg": {"schema": {"type": "string", "format": "binary"}}},
+        },
         **_ERRORS,
     },
     dependencies=[Depends(require_robot_speech)],
 )
-async def tts(body: TtsRequest, request: Request) -> Response:
+async def tts(
+    body: TtsRequest,
+    request: Request,
+    stream: Annotated[
+        bool, Query(description="Потоковый режим: audio/mpeg кусками по мере синтеза")
+    ] = False,
+) -> Response:
     settings = request.app.state.settings
     provider: TtsProvider = request.app.state.tts
     cache: TtsCache = request.app.state.tts_cache
+    metrics: LatencyRecorder = request.app.state.metrics
     lang: Lang = body.lang or detect_lang(body.text)
     key = cache_key(provider.name, provider.voice_id(lang), lang, body.text)
+    common = {"X-Speech-Provider": provider.name, "Cache-Control": "no-store"}
+
+    def record(first_ms: int | None, total_ms: int, hit: bool, ok: bool, extra: dict) -> None:
+        metrics.record(
+            "tts",
+            {"tts_first_byte_ms": first_ms, "tts_total_ms": total_ms},
+            lang=lang,
+            provider=provider.name,
+            ok=ok,
+            extra={"cache": "hit" if hit else "miss", "chars": len(body.text), "stream": stream}
+            | extra,
+        )
+
+    def log(hit: bool, size: int, latency_ms: int, **extra) -> None:
+        logger.info(
+            "tts_synthesized",
+            extra={
+                "lang": lang,
+                "chars": len(body.text),
+                "cache": "hit" if hit else "miss",
+                "bytes": size,
+                "provider": provider.name,
+                "latency_ms": latency_ms,
+                "stream": stream,
+                **extra,
+            },
+        )
 
     started = time.perf_counter()
     audio = cache.get(key)
-    hit = audio is not None
-    if audio is None:
+    if audio is not None:  # готовая фраза — сразу целиком, и в потоковом режиме тоже
+        ms = elapsed_ms(started)
+        record(ms, ms, hit=True, ok=True, extra={})
+        log(True, len(audio), ms)
+        return Response(
+            content=audio, media_type="audio/mpeg", headers={"X-Cache": "hit", **common}
+        )
+
+    stream_fn = getattr(provider, "tts_stream", None) if stream else None
+    if stream_fn is not None:
+
+        def on_first(first_ms: int) -> None:
+            state["first_ms"] = first_ms
+
+        def on_done(full: bytes | None, error: str | None) -> None:
+            total = elapsed_ms(started)
+            if full is not None:
+                cache.put(key, full)
+            record(state["first_ms"], total, hit=False, ok=full is not None, extra={"error": error})
+            log(False, len(full or b""), total, first_byte_ms=state["first_ms"], error=error)
+
+        state: dict = {"first_ms": None}
+        return TtsStreamResponse(
+            stream_fn(body.text, lang),
+            first_timeout_s=settings.tts_timeout_s,
+            total_timeout_s=settings.tts_stream_total_s,
+            headers={"X-Cache": "miss", **common},
+            on_first=on_first,
+            on_done=on_done,
+        )
+
+    try:
         audio = await _with_timeout(
             provider.tts(body.text, lang),
             settings.tts_timeout_s,
             headers={"X-Speech-Provider": provider.name},
         )
-        cache.put(key, audio)
-    logger.info(
-        "tts_synthesized",
-        extra={
-            "lang": lang,
-            "chars": len(body.text),
-            "cache": "hit" if hit else "miss",
-            "bytes": len(audio),
-            "provider": provider.name,
-            "latency_ms": int((time.perf_counter() - started) * 1000),
-        },
-    )
-    return Response(
-        content=audio,
-        media_type="audio/mpeg",
-        headers={
-            "X-Cache": "hit" if hit else "miss",
-            "X-Speech-Provider": provider.name,
-            "Cache-Control": "no-store",
-        },
-    )
+    except ApiError as exc:
+        record(None, elapsed_ms(started), hit=False, ok=False, extra={"error": exc.code})
+        raise
+    cache.put(key, audio)
+    ms = elapsed_ms(started)
+    # без потока первый байт уходит вместе со всем ответом
+    record(ms, ms, hit=False, ok=True, extra={})
+    log(False, len(audio), ms)
+    return Response(content=audio, media_type="audio/mpeg", headers={"X-Cache": "miss", **common})

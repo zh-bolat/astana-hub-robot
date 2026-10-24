@@ -1,7 +1,7 @@
 package kz.astanahub.robot.di
 
 import android.app.Application
-import kz.astanahub.robot.agent.AgentMicControl
+import kz.astanahub.robot.agent.AgentAssistant
 import kz.astanahub.robot.agent.AgentVoiceGateway
 import kz.astanahub.robot.agent.HubAppAgent
 import kz.astanahub.robot.robotapi.PersonApiGateway
@@ -19,7 +19,7 @@ object FlavorGateways {
         HubAppAgent.install(app, voice)
         return Gateways(
             builtinVoice = voice,
-            builtinMic = AgentMicControl,
+            assistant = AgentAssistant,
             robot = RobotApiGateway(app),
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,

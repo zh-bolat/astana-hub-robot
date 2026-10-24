@@ -12,8 +12,8 @@ data class VadConfig(
     val noiseFactor: Double = 3.0,
     /** Сколько подряд «громкого» нужно для старта (отсекает щелчки). */
     val startMillis: Int = 120,
-    /** Тишина после речи, после которой фраза закончена. */
-    val endSilenceMillis: Int = 800,
+    /** Тишина после речи, после которой фраза закончена (меняется на экране диагностики). */
+    val endSilenceMillis: Int = DEFAULT_END_SILENCE_MS,
     val maxUtteranceMillis: Int = 15_000,
     /** Сколько звука до старта сохранить, чтобы не обрезать первый слог. */
     val preRollMillis: Int = 300,
@@ -21,6 +21,11 @@ data class VadConfig(
     val noSpeechTimeoutMillis: Int = 8_000,
 ) {
     val frameSamples: Int get() = sampleRate * frameMillis / 1000
+
+    companion object {
+        /** Было 0,8 с; 0,5 с — робот начинает думать заметно раньше. */
+        const val DEFAULT_END_SILENCE_MS = 500
+    }
 }
 
 enum class VadEvent { NONE, SPEECH_STARTED, SPEECH_ENDED, MAX_LENGTH, NO_SPEECH }

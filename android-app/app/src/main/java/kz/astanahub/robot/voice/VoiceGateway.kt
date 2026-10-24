@@ -1,5 +1,6 @@
 package kz.astanahub.robot.voice
 
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -8,6 +9,9 @@ import kz.astanahub.robot.core.Lang
 /** Результат распознавания речи. Промежуточные результаты — для субтитров, финальные — вопрос. */
 /** [lang] — язык, определённый распознавателем (серверный STT), если известен. */
 data class Transcript(val text: String, val isFinal: Boolean, val lang: Lang? = null)
+
+/** События озвучки для таймингов хода (`/v1/metrics/turn`): первый байт синтеза и старт звука. */
+enum class SpeechEvent { TTS_FIRST_BYTE, AUDIO_START }
 
 /** Что сейчас делает голосовой канал (для индикатора на экране). */
 enum class VoiceActivity { IDLE, LISTENING, SPEAKING }
@@ -28,6 +32,27 @@ interface VoiceGateway {
      */
     suspend fun speak(phrases: List<String>, lang: Lang): Boolean
 
+    /**
+     * Озвучивает фразы по мере прихода (ход агента: SSE `phrase` по одной). Возвращается, когда [phrases]
+     * закрыт и всё доиграно, либо озвучка прервана (false). [listener] — какой кусок звучит (субтитры).
+     * По умолчанию — по одной фразе; [RoutingVoiceGateway] склеивает их в куски ≤ 300 символов и
+     * предзагружает следующий кусок, чтобы не было пауз.
+     */
+    suspend fun speakStream(
+        phrases: ReceiveChannel<String>,
+        lang: Lang,
+        listener: SpeechListener = SpeechListener.NONE,
+    ): Boolean {
+        for (p in phrases) {
+            val chunk = SpeechChunk(listOf(p))
+            listener.onChunkStart(chunk)
+            val ok = speak(chunk.phrases, lang)
+            listener.onChunkDone(chunk, ok)
+            if (!ok) return false
+        }
+        return true
+    }
+
     fun stopSpeaking()
 
     /** Язык ASR/TTS. На роботе API для этого в доке AgentOS SDK v0.4.12 нет — см. реализацию. */
@@ -41,4 +66,16 @@ interface VoiceGateway {
      * true — связь восстановилась (проверка /v1/health). По умолчанию событий нет.
      */
     val connection: Flow<Boolean> get() = emptyFlow()
+
+    /** VAD приложения решил, что посетитель закончил фразу (финальный текст ещё распознаётся). */
+    val utteranceEnded: Flow<Unit> get() = emptyFlow()
+
+    /** Первый байт синтеза / старт звука озвучки (не «хм…» из [speakCached]). */
+    val speechEvents: Flow<SpeechEvent> get() = emptyFlow()
+
+    /**
+     * Короткая фраза только из кеша голоса (без сети, без субтитров): «хм…», «секунду…».
+     * false — фразы нет в кеше (ничего не звучит) или озвучку прервали.
+     */
+    suspend fun speakCached(text: String, lang: Lang): Boolean = false
 }

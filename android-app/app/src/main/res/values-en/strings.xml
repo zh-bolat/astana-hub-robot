@@ -22,6 +22,11 @@
     <string name="phrase_not_heard">Sorry, I didn\'t catch that. Please say it again.</string>
     <string name="phrase_one_moment">One moment…</string>
     <string name="phrase_camera_unavailable">Sorry, the camera is not available right now.</string>
+    <string name="phrase_cant_speak">Sorry, I can\'t speak right now. The answer is on the screen.</string>
+    <string name="phrase_looking">Let me take a look.</string>
+    <string name="phrase_filler_hm">Hmm…</string>
+    <string name="phrase_filler_so">So…</string>
+    <string name="phrase_filler_now">One sec…</string>
     <string name="mic_off_badge">Microphone off: no permission</string>
     <string name="greet_title">Hello! How can I help?</string>
     <string name="greet_sub">Ask by voice or pick a topic</string>
