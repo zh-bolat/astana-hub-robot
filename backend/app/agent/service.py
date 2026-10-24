@@ -56,6 +56,7 @@ from app.knowledge.source import KnowledgeStore
 from app.lang import Lang, resolve_lang, script_of
 from app.log_writer import BackgroundLogWriter
 from app.logging_setup import logger
+from app.metrics import NULL_RECORDER, LatencyRecorder, elapsed_ms
 from app.prompts import REFUSALS, wrap_visitor
 from app.safety import BLOCKED_ANSWERS, blocked_reason, kb_corpus, limit_phrases
 from app.schemas import AnswerResponse, ChatAction, ChatRequest, ChatResponse
@@ -87,6 +88,12 @@ class _ChatState:
     emotion: str | None = None  # тег эмоции из ответа модели (v1.1); нет тега → neutral
     emotion_sent: bool = False
     logged: bool = False  # лог и память уже записаны (или ответ отдал /v1/ask)
+    # тайминги (latency_events), мс от начала запроса
+    started: float = 0.0
+    first_token_ms: int | None = None
+    first_phrase_ms: int | None = None
+    fallback: bool = False  # агент не ответил — ответ дал /v1/ask или готовое приветствие
+    error: str | None = None
 
 
 # Модель без размышлений иногда «думает» текстом: «The visitor asks…», «Посетитель просит…»
@@ -118,6 +125,8 @@ def _take_emotion(st: _ChatState, text: str) -> str:
 def _phrase_events(st: _ChatState, phrase: str) -> list[tuple[str, dict]]:
     """phrase, а перед первой фразой реплики — emotion."""
     out: list[tuple[str, dict]] = []
+    if st.first_phrase_ms is None:
+        st.first_phrase_ms = elapsed_ms(st.started)
     if not st.emotion_sent:
         st.emotion_sent = True
         out.append(("emotion", {"name": st.emotion or "neutral"}))
@@ -227,8 +236,10 @@ class ChatService:
         client: AsyncOpenAI | None,
         messages: MessageRepo | None = None,
         sessions: SessionRepo | None = None,
+        metrics: LatencyRecorder | None = None,
     ) -> None:
         self.settings = settings
+        self.metrics = metrics or NULL_RECORDER
         self.store = store
         self.answers = answers
         self.log_writer = log_writer
@@ -372,21 +383,53 @@ class ChatService:
         st = _ChatState(
             lang=resolve_lang(req.lang, None, req.question),
             greeting=req.event == "visitor_arrived",
+            started=started,
         )
         finished = False
         try:
             async with aclosing(self._chat_stream(req, request_id, st, started)) as events:
                 async for event, data in events:
+                    if event == "error":
+                        st.error = data["error"]["code"]
+                    elif event == "done":
+                        st.lang = data["lang"]
                     if event in ("done", "error"):
                         finished = True
                     yield event, data
         except Exception:
             logger.exception("chat_stream_failed")
             if not finished:
+                st.error = "internal_error"
                 yield "error", error_body("internal_error", "Internal server error")
         finally:
             if not finished and not st.logged and st.emitted:
                 await self._finish(req, request_id, st, started, interrupted=True)
+            self._record(req, request_id, st, interrupted=not finished)
+
+    def _record(self, req: ChatRequest, request_id: str, st: _ChatState, interrupted: bool) -> None:
+        """Тайминги хода → latency_events (фоном; без текстов)."""
+        self.metrics.record(
+            "chat",
+            {
+                "llm_first_token_ms": st.first_token_ms,
+                "first_phrase_ms": st.first_phrase_ms,
+                "llm_total_ms": elapsed_ms(st.started),
+            },
+            lang=st.lang,
+            provider=st.provider or "off",
+            request_id=request_id,
+            session_id=req.session_id,
+            ok=st.error is None,
+            extra={
+                "action": bool(st.actions),
+                "fallback": st.fallback,
+                "category": st.category,
+                "greeting": st.greeting,
+                "interrupted": interrupted,
+                "tools": [name for name, _, _ in st.calls],
+                "error": st.error,
+            },
+        )
 
     async def _finish(
         self,
@@ -511,7 +554,6 @@ class ChatService:
         events = result.stream_events().__aiter__()
         turn_text: list[str] = []
         sent_actions = 0
-        first_phrase_ms: int | None = None
         dropped = 0
         error: ApiError | None = None
         failure: Exception | None = None
@@ -526,6 +568,8 @@ class ChatService:
                     break
                 if ev.type == "raw_response_event":
                     data = ev.data
+                    if st.first_token_ms is None and data.type.endswith(".delta"):
+                        st.first_token_ms = elapsed_ms(started)  # текст или аргументы тула
                     if data.type == "response.output_text.delta":
                         turn_text.append(data.delta)
                     elif data.type == "response.completed":
@@ -539,8 +583,6 @@ class ChatService:
                             continue
                         text = _take_emotion(st, text)
                         for phrase in self._admit(st, text, req.question, corpus):
-                            if first_phrase_ms is None:
-                                first_phrase_ms = int((time.perf_counter() - started) * 1000)
                             st.emitted.append(phrase)
                             for event in _phrase_events(st, phrase):
                                 yield event
@@ -571,13 +613,15 @@ class ChatService:
                 "output_tokens": usage.output_tokens,
                 "tools": [name for name, _, _ in ctx.calls],
                 "preamble_dropped_chars": dropped,
-                "first_phrase_ms": first_phrase_ms,
+                "first_token_ms": st.first_token_ms,
+                "first_phrase_ms": st.first_phrase_ms,
                 "error": type(failure or error).__name__ if (failure or error) else None,
             },
         )
         st.calls = ctx.calls
         if st.greeting:
             if not st.emitted:  # ошибка, долгий ответ или пустой текст — готовое приветствие
+                st.fallback = True
                 async for event in self._ready_greeting(req, request_id, st, started):
                     yield event
                 return
@@ -594,6 +638,7 @@ class ChatService:
                 "agent_failed_fallback",
                 extra={"error": type(failure).__name__, "detail": str(failure)[:200]},
             )
+            st.fallback = True
             async for event in self._fallback(req, request_id, st, started):
                 yield event
             return

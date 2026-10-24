@@ -303,5 +303,32 @@ class FeedbackRow(Base):
     created_at: Mapped[datetime] = _now()
 
 
+# ---------------------------------------------------------------- 4. Мониторинг задержек
+
+
+class LatencyEvent(Base):
+    """Тайминги этапов (docs/api-contract.md, «Мониторинг задержек»). Только числа и метки —
+    без текстов посетителей. kind: stt | chat | ask | look | tts | robot; stage — имя этапа
+    (stt_ms, llm_first_token_ms, first_phrase_ms, llm_total_ms, tts_first_byte_ms, …).
+    ms = NULL — служебная строка хода (stage=turn у робота: флаги fallback/interrupted)."""
+
+    __tablename__ = "latency_events"
+    __table_args__ = (Index("ix_latency_events_kind_ts", "kind", "ts"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    ms: Mapped[int | None] = mapped_column(Integer)
+    lang: Mapped[str | None] = mapped_column(String(8))
+    provider: Mapped[str | None] = mapped_column(String(128))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    session_id: Mapped[str | None] = mapped_column(String(64))
+    ok: Mapped[bool] = _active()
+    extra: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
 # Таблицы, которые очищаются в тестах (порядок не важен — TRUNCATE ... CASCADE)
 ALL_TABLES = [t.name for t in Base.metadata.sorted_tables]

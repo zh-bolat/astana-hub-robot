@@ -19,6 +19,8 @@ from app.config import Settings
 from app.errors import error_response
 
 PUBLIC_PATHS = frozenset({"/v1/health"})
+# Админка (статистика задержек): свой токен ADMIN_TOKEN, его проверяет сам эндпоинт (app/metrics_api.py)
+ADMIN_PREFIX = "/v1/admin/"
 DEFAULT_BODY_LIMIT = 16 * 1024
 
 
@@ -29,6 +31,7 @@ def body_limits(settings: Settings) -> dict[str, int]:
         "/v1/look": settings.max_image_bytes + 64 * 1024,
         "/v1/stt": settings.max_audio_bytes + 64 * 1024,
         "/v1/tts": 4 * 1024,
+        "/v1/metrics/turn": 4 * 1024,
     }
 
 
@@ -71,7 +74,7 @@ class GuardMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "") if scope["type"] == "http" else ""
-        if not path.startswith("/v1/") or path in PUBLIC_PATHS:
+        if not path.startswith("/v1/") or path in PUBLIC_PATHS or path.startswith(ADMIN_PREFIX):
             await self.app(scope, receive, send)
             return
 
