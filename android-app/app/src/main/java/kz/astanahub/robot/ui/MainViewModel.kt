@@ -55,6 +55,7 @@ import kz.astanahub.robot.places.WayPhrases
 import kz.astanahub.robot.presence.PresenceEvent
 import kz.astanahub.robot.robot.HeadController
 import kz.astanahub.robot.robot.NavEvent
+import kz.astanahub.robot.robot.NavJournal
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.voice.SpeechChunk
@@ -158,6 +159,10 @@ class MainViewModel(
     private var requestJob: Job? = null
     private var quickJob: Job? = null
     private var navJob: Job? = null
+    /** Робот едет (от startNavigation до итога): по нему фаза NAVIGATING; фраза прибытия — уже не поездка. */
+    private var tripActive = false
+    /** Точка текущей поездки (id): повторный `guide_to` к ней во время поездки игнорируем. */
+    private var guidingPlaceId: String? = null
     private var idleJob: Job? = null
     private var emotionJob: Job? = null
     private var menuJob: Job? = null
@@ -237,8 +242,14 @@ class MainViewModel(
     private var liveGreetPending = false
     /** Тайминги текущего хода live (`/v1/metrics/turn`, mode=live). */
     private var liveTurn: TurnClock? = null
-    /** `guide_to` ждёт `playback_done` своего хода. */
+    /** `guide_to` ждёт `playback_done` своего хода (только если этот ход ещё звучит). */
     private val liveGuides = mutableMapOf<String?, ChatAction>()
+    /** Ход live, который сейчас звучит или ещё придёт: от `turn_start` до `playback_done` / `interrupted`. */
+    private var liveActiveTurn: String? = null
+    /** Live: когда робот показал предложение проводить (where_is → кнопка «Проводить»). */
+    private var guideOfferedAt = Long.MIN_VALUE / 2
+    /** Live: посетитель сказал «да» на предложение — поехали сами; ответный `guide_to` сервера к этой точке — дубликат. */
+    private var localGuideConfirm: Pair<String, Long>? = null
     /** Фразы текущего хода live (текст ответа на экране). */
     private val liveSpoken = mutableListOf<String>()
     /** Последний доигранный ход ([liveGuides] для действия, пришедшего уже после `playback_done`). */
@@ -687,32 +698,41 @@ class MainViewModel(
             return
         }
         postLocal(LocalMessage.KIND_GUIDE_TO, question, WayPhrases.guideStart(WayFinder.displayName(place, _state.value.lang), _state.value.lang), place.id)
-        startGuide(place)
+        startGuide(place, source = "«проводи» (локально)")
     }
 
     /** Кнопка «Проводить» под ответом. */
     fun guideToOffered() {
         val place = _state.value.guideTarget ?: return
         wake()
-        startGuide(place)
+        startGuide(place, source = "кнопка «Проводить» / «да»")
     }
 
     /**
      * Ведём к [place]. Если уже едем — сначала гасим прежнюю поездку и ждём от робота подтверждения остановки
      * (или [RobotGateway.STOP_CONFIRM_TIMEOUT_MS]), только потом startNavigation.
      * Все фразы поездки (старт, препятствие, прибытие) — внутри navJob и отменяются вместе с ним.
+     * [announce] — текст старта на экране, [speakStart] — и голосом (live: говорит сервер, робот молчит).
+     * Фаза NAVIGATING держится ровно пока робот едет ([tripActive]) и сбрасывается при любом исходе.
      */
-    private fun startGuide(place: Place, announce: Boolean = true) {
-        val nav = robot ?: return
+    private fun startGuide(place: Place, announce: Boolean = true, speakStart: Boolean = announce, source: String = "ui") {
+        val nav = robot ?: run {
+            NavJournal.log("поездка к ${place.id}: нет RobotGateway — не едем")
+            return
+        }
         val lang = _state.value.lang
         val name = WayFinder.displayName(place, lang)
         voice.stopSpeaking()
         val previous = navJob
-        navJob = viewModelScope.launch {
+        guidingPlaceId = place.id
+        NavJournal.log("поездка: запрос к ${place.id} («${place.mapName}»), источник=$source")
+        lateinit var job: Job
+        job = viewModelScope.launch {
             if (previous?.isActive == true) {
                 previous.cancelAndJoin()
                 val confirmed = nav.stopNavigationAndWait(RobotGateway.STOP_CONFIRM_TIMEOUT_MS)
                 Timber.i("previous navigation stopped (confirmed=%s)", confirmed)
+                NavJournal.log("прежняя поездка остановлена (подтверждено=$confirmed)")
             }
             _state.update {
                 it.copy(
@@ -720,31 +740,44 @@ class MainViewModel(
                     answer = if (announce) WayPhrases.guideStart(name, lang) else it.answer,
                 )
             }
+            tripActive = true
             setBusy(Phase.NAVIGATING)
             // Слежение головой занимает шасси — на время поездки выключаем (одно устройство — одно API).
             head?.setNavigating(true)
             live?.sendState(placeHint, navigating = true)
             val trip = this
             // Фраза старта звучит параллельно с началом движения; агент («Провожаю вас…») её уже сказал.
-            val startSpeech = launch { if (announce) voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
+            val startSpeech = launch { if (speakStart) voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
             var obstacleSpeech: Job? = null
             val result = try {
-                nav.navigateTo(place.mapName) { event ->
-                    if (event == NavEvent.OBSTACLE) {
-                        // Колбэк SDK может прийти из чужого потока: переходим в поездку, не копим фразы.
-                        trip.launch {
-                            if (obstacleSpeech?.isActive != true) {
-                                obstacleSpeech = launch { voice.speak(listOf(WayPhrases.guideObstacle(lang)), lang) }
+                // Страховка поверх таймаута шлюза: поездка не может «висеть» вечно (колбэк RobotApi потерялся).
+                withTimeoutOrNull(MAX_TRIP_MILLIS) {
+                    nav.navigateTo(place.mapName) { event ->
+                        if (event == NavEvent.OBSTACLE) {
+                            // Колбэк SDK может прийти из чужого потока: переходим в поездку, не копим фразы.
+                            trip.launch {
+                                if (obstacleSpeech?.isActive != true) {
+                                    obstacleSpeech = launch { voice.speak(listOf(WayPhrases.guideObstacle(lang)), lang) }
+                                }
                             }
                         }
                     }
+                } ?: run {
+                    NavJournal.log("поездка: нет итога за ${MAX_TRIP_MILLIS / 1000} с — stopNavigation")
+                    nav.stopNavigation()
+                    NavigationResult.Failed(TRIP_TIMEOUT_CODE, "trip timeout (view model)")
                 }
+            } catch (e: CancellationException) {
+                NavJournal.log("поездка к ${place.id}: отменена приложением")
+                throw e
             } finally {
+                tripActive = false
                 head?.setNavigating(false)
                 live?.sendState(placeHint, navigating = false)
                 _state.update { it.copy(guidingTo = null) }
                 setBusy(null)
             }
+            NavJournal.log("поездка к ${place.id}: итог ${describe(result)}")
             startSpeech.join()
             obstacleSpeech?.join()
             val text = when (result) {
@@ -760,6 +793,15 @@ class MainViewModel(
             }
             say(text, offline = _state.value.offline)
             restartIdleTimer()
+        }
+        navJob = job
+        job.invokeOnCompletion {
+            // Поездка закончилась любым путём (итог, «Стоп», новая поездка, сбой) — фаза не остаётся NAVIGATING.
+            if (navJob === job) {
+                guidingPlaceId = null
+                tripActive = false
+            }
+            refreshPhase()
         }
     }
 
@@ -1178,10 +1220,15 @@ class MainViewModel(
         val place = wf.placeFor(action.placeId, null)
         if (place == null) {
             Timber.w("agent guide_to: unknown place %s", action.placeId)
+            NavJournal.log("agent guide_to place=${action.placeId}: точки нет в кеше мест робота — не едем")
             say(WayPhrases.unknownPlace(lang), lang)
             return
         }
-        startGuide(place, announce = announce)
+        if (navJob?.isActive == true && guidingPlaceId == place.id) {
+            NavJournal.log("agent guide_to place=${place.id} → игнор: уже едем к этой точке")
+            return
+        }
+        startGuide(place, announce = announce, source = "agent guide_to")
     }
 
     /** Ответ `/v1/look` для `action: look`: описание кадра или готовая фраза ошибки. */
@@ -1269,6 +1316,8 @@ class MainViewModel(
         liveGuides.clear()
         liveSpoken.clear()
         liveTurn = null
+        liveActiveTurn = null
+        localGuideConfirm = null
     }
 
     /**
@@ -1304,6 +1353,7 @@ class MainViewModel(
             }
             is LiveSignal.TurnStart -> {
                 liveTurnStarts++
+                liveActiveTurn = signal.turnId
                 livePendingQuestion = null
                 liveGreetPending = false
                 liveSpoken.clear()
@@ -1335,20 +1385,27 @@ class MainViewModel(
             }
             is LiveSignal.Interrupted -> {
                 Timber.i("live: interrupted (%s, local=%s)", signal.turnId, signal.local)
-                liveGuides.remove(signal.turnId)
+                if (signal.turnId == null || signal.turnId == liveActiveTurn) liveActiveTurn = null
+                liveGuides.remove(signal.turnId)?.let {
+                    NavJournal.log("live guide_to place=${it.placeId} turn=${signal.turnId}: ход оборван — не едем")
+                }
                 _state.update { it.copy(subtitle = null) }
                 setBusy(null)
                 finishLiveTurn(interrupted = true)
             }
             is LiveSignal.PlaybackDone -> {
                 liveLastDone = signal.turnId
+                if (signal.turnId == liveActiveTurn) liveActiveTurn = null
                 touchLiveSession()
                 setBusy(null)
                 _state.update { it.copy(subtitle = null) }
                 relaxEmotion()
                 finishLiveTurn(interrupted = false)
                 // Согласие агент уже получил; едем после того, как ответ доиграл (своей фразы старта нет).
-                liveGuides.remove(signal.turnId)?.let { action -> startLiveGuide(action) }
+                liveGuides.remove(signal.turnId)?.let { action ->
+                    NavJournal.log("live guide_to place=${action.placeId} turn=${signal.turnId}: ход доигран → еду")
+                    startLiveGuide(action)
+                }
                 restartIdleTimer()
             }
             is LiveSignal.Failed -> onLiveFailed(session, signal)
@@ -1370,6 +1427,20 @@ class MainViewModel(
         }
         touchLiveSession()
         if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        // На экране предложение «Проводить?» (where_is), посетитель сказал «да / давай / проводи / иә / yes» —
+        // едем сразу, не дожидаясь сервера. Проверка — ДО сброса guideTarget ниже.
+        val offered = _state.value.guideTarget
+        if (offered != null && navJob?.isActive != true && clock() - guideOfferedAt <= GUIDE_OFFER_WINDOW_MILLIS &&
+            UtteranceFilter.isGuideConfirmation(question)
+        ) {
+            Timber.i("live: guide confirmed by voice locally")
+            NavJournal.log("live: посетитель согласился («да») → еду к ${offered.id} сразу, сервер не ждём")
+            localGuideConfirm = offered.id to clock()
+            _state.update { it.copy(question = question, partialQuestion = null, wayHint = null) }
+            // Голосом старт не говорим: на это «да» ответит сервер (live); текст старта — на экране.
+            startGuide(offered, announce = true, speakStart = false, source = "live: «да» посетителя")
+            return
+        }
         remember()
         _state.update {
             it.copy(
@@ -1439,11 +1510,7 @@ class MainViewModel(
         Timber.i("live action %s place=%s turn=%s", action.type, action.placeId, signal.turnId)
         when (action.type) {
             ChatAction.WHERE_IS -> viewModelScope.launch { liveWhereIs(action) }
-            ChatAction.GUIDE_TO -> {
-                // Действие пришло уже после того, как ход доиграл, — едем сразу.
-                if (signal.turnId != null && signal.turnId == liveLastDone) startLiveGuide(action)
-                else liveGuides[signal.turnId] = action
-            }
+            ChatAction.GUIDE_TO -> onLiveGuideAction(action, signal.turnId)
             ChatAction.LOOK -> liveLook()
             else -> Timber.w("unknown live action: %s", action.type)
         }
@@ -1459,18 +1526,88 @@ class MainViewModel(
             return
         }
         val answer = wf.describe(place, lang)
+        if (answer.guideTarget != null) guideOfferedAt = clock()
         _state.update { it.copy(wayHint = answer.text, guideTarget = answer.guideTarget) }
+    }
+
+    /**
+     * `guide_to` в live (контракт: сервер шлёт его ПОСЛЕ `playback_done` своего хода, с `turn_id`):
+     * - ход уже доигран (`turn_id` == последний доигранный) — едем сразу;
+     * - это текущий, ещё звучащий ход (старый порядок событий) — ждём его `playback_done`;
+     * - без `turn_id` / неизвестный ход: звук не играет — едем сразу, играет — ждём конца текущего хода;
+     * - повторный `guide_to` к точке, куда уже едем (или куда посетитель только что согласился ехать «да»), — игнор.
+     * Каждое решение — в [NavJournal] (экран диагностики).
+     */
+    private fun onLiveGuideAction(action: ChatAction, turnId: String?) {
+        val label = "live guide_to place=${action.placeId} turn=${turnId ?: "—"}"
+        duplicateGuideReason(action.placeId)?.let { reason ->
+            NavJournal.log("$label → игнор: $reason")
+            return
+        }
+        val playing = live?.playing == true
+        when {
+            turnId != null && turnId == liveLastDone -> {
+                NavJournal.log("$label → еду сразу: ход уже доигран")
+                startLiveGuide(action)
+            }
+            turnId != null && turnId == liveActiveTurn -> {
+                NavJournal.log("$label → жду playback_done этого хода (ещё звучит)")
+                waitLiveGuide(turnId, action)
+            }
+            playing -> {
+                NavJournal.log("$label → жду playback_done текущего хода ${liveActiveTurn ?: "—"} (звук играет)")
+                waitLiveGuide(liveActiveTurn, action)
+            }
+            else -> {
+                NavJournal.log("$label → еду сразу: ${if (turnId == null) "без turn_id" else "ход не текущий"}, звук не играет")
+                startLiveGuide(action)
+            }
+        }
+    }
+
+    /** Ждём `playback_done` хода [turnId]; не пришёл за [LIVE_GUIDE_WAIT_MAX_MILLIS] и звук молчит — едем. */
+    private fun waitLiveGuide(turnId: String?, action: ChatAction) {
+        liveGuides[turnId] = action
+        viewModelScope.launch {
+            delay(LIVE_GUIDE_WAIT_MAX_MILLIS)
+            if (liveGuides[turnId] !== action) return@launch
+            if (live?.playing == true) return@launch // ещё говорит — дождёмся playback_done
+            liveGuides.remove(turnId)
+            NavJournal.log("live guide_to place=${action.placeId} turn=${turnId ?: "—"}: playback_done не пришёл за ${LIVE_GUIDE_WAIT_MAX_MILLIS / 1000} с → еду")
+            startLiveGuide(action)
+        }
+    }
+
+    /** Почему `guide_to` к [placeId] — дубликат (null — не дубликат). */
+    private fun duplicateGuideReason(placeId: String?): String? {
+        if (placeId == null) return null
+        if (navJob?.isActive == true && guidingPlaceId == placeId) return "уже едем к этой точке"
+        val local = localGuideConfirm
+        if (local != null && local.first == placeId && clock() - local.second <= LOCAL_CONFIRM_DUPLICATE_MILLIS) {
+            localGuideConfirm = null // ответ сервера на то же «да» — один
+            return "посетитель уже сказал «да», поездку начали сами"
+        }
+        return null
     }
 
     private fun startLiveGuide(action: ChatAction) {
         viewModelScope.launch {
-            val wf = wayFinder ?: return@launch
+            val wf = wayFinder ?: run {
+                NavJournal.log("live guide_to place=${action.placeId}: нет карты (WayFinder) — не едем")
+                return@launch
+            }
             val place = wf.placeFor(action.placeId, null)
             if (place == null) {
                 Timber.w("live guide_to: unknown place %s", action.placeId)
+                NavJournal.log("live guide_to place=${action.placeId}: точки нет в кеше мест робота — не едем")
                 return@launch
             }
-            startGuide(place, announce = false)
+            // id точки сервера мог отличаться от id места (алиас) — проверяем дубликат ещё раз по месту.
+            if (place.id != action.placeId) duplicateGuideReason(place.id)?.let { reason ->
+                NavJournal.log("live guide_to place=${place.id} → игнор: $reason")
+                return@launch
+            }
+            startGuide(place, announce = false, source = "live guide_to")
         }
     }
 
@@ -1785,7 +1922,7 @@ class MainViewModel(
 
     private fun refreshPhase() {
         if (busy) return
-        if (navJob?.isActive == true) {
+        if (tripActive) {
             _state.update { it.copy(phase = Phase.NAVIGATING) }
             return
         }
@@ -1799,6 +1936,28 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+
+        /** Поездка без итога столько — сбой (страховка поверх таймаута шлюза [RobotGateway.TRIP_TIMEOUT_MS]). */
+        const val MAX_TRIP_MILLIS = RobotGateway.TRIP_TIMEOUT_MS + 15_000L
+        private const val TRIP_TIMEOUT_CODE = RobotGateway.CODE_TRIP_TIMEOUT
+
+        /** Live: «да» на предложение проводить засчитываем, если предложение показано не раньше чем столько назад. */
+        const val GUIDE_OFFER_WINDOW_MILLIS = 60_000L
+
+        /** Live: после локального «да» ответный `guide_to` сервера к той же точке столько считается дубликатом. */
+        const val LOCAL_CONFIRM_DUPLICATE_MILLIS = 30_000L
+
+        /** Live: `guide_to` ждёт `playback_done` своего хода не дольше (потерялся — едем, если звук не играет). */
+        const val LIVE_GUIDE_WAIT_MAX_MILLIS = 30_000L
+
+        internal fun describe(r: NavigationResult): String = when (r) {
+            NavigationResult.Arrived -> "приехали (Arrived)"
+            NavigationResult.AlreadyThere -> "уже на месте (AlreadyThere)"
+            NavigationResult.Cancelled -> "остановлено (Cancelled)"
+            NavigationResult.NotLocalized -> "робот не локализован (NotLocalized)"
+            NavigationResult.UnknownPlace -> "точки нет на карте (UnknownPlace)"
+            is NavigationResult.Failed -> "ошибка код=${r.code} ${r.message.orEmpty()}"
+        }
 
         /** Live упал → через столько снова пробуем live. */
         const val LIVE_RETRY_MILLIS = 30_000L

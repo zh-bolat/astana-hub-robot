@@ -3,9 +3,11 @@ package kz.astanahub.robot.ui
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.verify
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -44,6 +46,7 @@ import kz.astanahub.robot.places.PlaceRepository
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.presence.PresenceEvent
 import kz.astanahub.robot.robot.MapPlace
+import kz.astanahub.robot.robot.NavJournal
 import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.robot.RobotPose
@@ -105,6 +108,7 @@ class MainViewModelLiveTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
+        NavJournal.clear()
         backend = mockk(relaxed = true)
         camera = mockk()
         voice = TestVoice()
@@ -242,6 +246,168 @@ class MainViewModelLiveTest {
         assertFalse(voice.spoken.any { it.contains("Провожаю") || it.contains("Иду") })
         advanceTimeBy(2_000); runCurrent()
         assertTrue(conn.framesOfType("state").last().contains("\"navigating\":false"))
+    }
+
+    /** Ход сервера, как его шлёт настоящий сервер: turn_start → phrase → звук → turn_end. */
+    private fun serverTurn(turnId: String, phrase: String, audioMs: Int = 300) {
+        conn.server(LiveEvent.TurnStart(turnId))
+        conn.server(LiveEvent.Phrase(phrase))
+        conn.server(LiveEvent.Audio(pcm(audioMs)))
+        conn.server(LiveEvent.TurnEnd(turnId, Lang.RU, true))
+    }
+
+    @Test
+    fun `real order - guide_to with turn_id after playback_done starts navigation at once`() = runTest(dispatcher) {
+        vm()
+        conn.server(LiveEvent.UserFinal("Проводи в кафе", Lang.RU))
+        serverTurn("t1", "Провожаю, идите за мной.")
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(1, conn.framesOfType("playback_done").size)
+        coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
+        // Сервер шлёт guide_to ПОСЛЕ playback_done этого хода.
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t1"))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        assertTrue(NavJournal.texts().any { it.contains("turn=t1") && it.contains("еду сразу") })
+        assertFalse("no own start phrase - the server said it", voice.spoken.any { it.contains("Провожу") })
+    }
+
+    @Test
+    fun `real order - guide_to without turn_id after playback_done (old server) starts navigation at once`() = runTest(dispatcher) {
+        vm()
+        conn.server(LiveEvent.UserFinal("Проводи в кафе", Lang.RU))
+        serverTurn("t1", "Провожаю, идите за мной.")
+        advanceTimeBy(1_000); runCurrent()
+        conn.server(LiveEvent.Action("guide_to", "cafe"))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        assertTrue(NavJournal.texts().any { it.contains("без turn_id") })
+    }
+
+    @Test
+    fun `guide_to without turn_id while audio plays waits for playback_done`() = runTest(dispatcher) {
+        vm()
+        conn.server(LiveEvent.UserFinal("Проводи в кафе", Lang.RU))
+        conn.server(LiveEvent.TurnStart(null))
+        conn.server(LiveEvent.Phrase("Провожаю, идите за мной."))
+        conn.server(LiveEvent.Audio(pcm(600)))
+        advanceTimeBy(300); runCurrent()
+        conn.server(LiveEvent.Action("guide_to", "cafe"))
+        conn.server(LiveEvent.TurnEnd(null, Lang.RU, true))
+        runCurrent()
+        coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
+        advanceTimeBy(1_500); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+    }
+
+    @Test
+    fun `guide_to of an unknown turn while nothing plays starts at once`() = runTest(dispatcher) {
+        vm()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t9"))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+    }
+
+    @Test
+    fun `repeated guide_to to the same place during the trip is ignored`() = runTest(dispatcher) {
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(10_000); NavigationResult.Arrived }
+        vm()
+        serverTurn("t1", "Провожаю.")
+        advanceTimeBy(1_000); runCurrent()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t1"))
+        runCurrent()
+        advanceTimeBy(2_000); runCurrent()
+        serverTurn("t2", "Идём, идём.")
+        advanceTimeBy(1_000); runCurrent()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t2"))
+        runCurrent()
+        advanceTimeBy(1_000); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        verify(exactly = 0) { robot.stopNavigation() }
+        assertTrue(NavJournal.texts().any { it.contains("turn=t2") && it.contains("игнор") })
+    }
+
+    @Test
+    fun `local yes to the guide offer - drives at once, server guide_to for the same yes is ignored`() = runTest(dispatcher) {
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(5_000); NavigationResult.Arrived }
+        val vm = vm()
+        conn.server(LiveEvent.UserFinal("Где кафе?", Lang.RU))
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Action("where_is", "cafe", "t1"))
+        conn.server(LiveEvent.Phrase("Кафе впереди. Проводить вас?"))
+        conn.server(LiveEvent.Audio(pcm(300)))
+        conn.server(LiveEvent.TurnEnd("t1", Lang.RU, true))
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals("cafe", vm.state.value.guideTarget?.id)
+        // Посетитель: «да» — едем сразу, сервер ещё ничего не прислал.
+        conn.server(LiveEvent.UserFinal("Да, давай", Lang.RU))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        assertEquals(Phase.NAVIGATING, vm.state.value.phase)
+        assertNull(vm.state.value.guideTarget)
+        assertTrue("no local voice on start in live", voice.spoken.isEmpty())
+        // Сервер ответил на то же «да» своим ходом и guide_to — дубликат.
+        serverTurn("t2", "Провожаю, идите за мной.")
+        advanceTimeBy(1_000); runCurrent()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t2"))
+        runCurrent()
+        advanceTimeBy(10_000); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo(any(), any()) }
+        assertTrue(vm.state.value.phase != Phase.NAVIGATING)
+    }
+
+    @Test
+    fun `local yes after a short trip already ended - server guide_to for it still ignored`() = runTest(dispatcher) {
+        coEvery { robot.navigateTo(any(), any()) } returns NavigationResult.AlreadyThere
+        val vm = vm()
+        conn.server(LiveEvent.UserFinal("Где кафе?", Lang.RU))
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Action("where_is", "cafe", "t1"))
+        conn.server(LiveEvent.TurnEnd("t1", Lang.RU, true))
+        advanceTimeBy(500); runCurrent()
+        assertEquals("cafe", vm.state.value.guideTarget?.id)
+        conn.server(LiveEvent.UserFinal("иә", Lang.KK))
+        advanceTimeBy(1_000); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t2"))
+        advanceTimeBy(1_000); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo(any(), any()) }
+    }
+
+    @Test
+    fun `yes without a guide offer on screen is an ordinary utterance`() = runTest(dispatcher) {
+        val vm = vm()
+        conn.server(LiveEvent.UserFinal("да", Lang.RU))
+        runCurrent()
+        coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
+        assertEquals("да", vm.state.value.question)
+    }
+
+    @Test
+    fun `navigating phase is reset after the trip and the arrival phrase`() = runTest(dispatcher) {
+        val vm = vm()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t9"))
+        runCurrent()
+        assertEquals(Phase.NAVIGATING, vm.state.value.phase)
+        advanceTimeBy(2_000); runCurrent()
+        assertTrue(voice.spoken.any { it.contains("пришли") })
+        assertTrue("phase after trip: ${vm.state.value.phase}", vm.state.value.phase != Phase.NAVIGATING)
+        assertNull(vm.state.value.guidingTo)
+        assertTrue(NavJournal.texts().any { it.contains("итог приехали") })
+    }
+
+    @Test
+    fun `trip without any result from the robot ends by timeout, phase reset, stopNavigation sent`() = runTest(dispatcher) {
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { awaitCancellation() }
+        val vm = vm()
+        conn.server(LiveEvent.Action("guide_to", "cafe", "t9"))
+        runCurrent()
+        assertEquals(Phase.NAVIGATING, vm.state.value.phase)
+        advanceTimeBy(MainViewModel.MAX_TRIP_MILLIS + 1_000); runCurrent()
+        verify { robot.stopNavigation() }
+        assertTrue(vm.state.value.phase != Phase.NAVIGATING)
+        assertNull(vm.state.value.guidingTo)
+        assertTrue(NavJournal.texts().any { it.contains("итог ошибка") })
     }
 
     @Test
