@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.db import LatencyRepo
-from app.db.migrate import alembic_config, current_revision, upgrade_head
+from app.db.migrate import alembic_config, current_revision, head_revision, upgrade_head
 from app.db.models import LatencyEvent
 from app.lang import Lang
 from app.speech.base import SpeechError
@@ -73,7 +73,7 @@ def test_migration_0003_up_down():
             assert "latency_events" not in inspect(engine).get_table_names()
 
             upgrade_head(url)
-            assert current_revision(url) == "0003_latency_events"
+            assert current_revision(url) == head_revision()
             LatencyRepo(engine).add_many([{"kind": "tts", "stage": "tts_total_ms", "ms": 5}])
             with engine.connect() as conn:
                 row = conn.execute(text("SELECT ok, extra FROM latency_events")).one()

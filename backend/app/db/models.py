@@ -24,6 +24,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     false,
     func,
     text,
@@ -153,9 +154,18 @@ class EventRow(Base):
 
 
 class DocumentRow(Base):
+    """Длинный материал (программа, правила): файл KNOWLEDGE_DIR/documents/<slug>.md.
+    Режется на фрагменты в kb_chunks (source_type='document', source_id=slug)."""
+
     __tablename__ = "documents"
+    __table_args__ = (
+        CheckConstraint("source IN ('sheet', 'yaml', 'drive', 'admin')", name="source"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    # стабильный ключ: имя файла без .md ([a-z0-9_]+)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'yaml'"))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)
     lang: Mapped[str | None] = mapped_column(CHAR(2))
@@ -187,11 +197,15 @@ class KbSyncRow(Base):
 
 
 class KbChunkRow(Base):
+    """Фрагмент для поиска (app/knowledge/index.py). Ключ — (source_type, source_id, lang, chunk_no):
+    факт и место — по фрагменту на язык (chunk_no=0), документ — фрагменты 1..N на языке документа."""
+
     __tablename__ = "kb_chunks"
     __table_args__ = (
         CheckConstraint(
             "source_type IN ('fact', 'place', 'event', 'document')", name="source_type"
         ),
+        UniqueConstraint("source_type", "source_id", "lang", "chunk_no"),
         Index(
             "ix_kb_chunks_embedding_hnsw",
             "embedding",
@@ -205,14 +219,25 @@ class KbChunkRow(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     source_id: Mapped[str] = mapped_column(Text, nullable=False)
-    lang: Mapped[str | None] = mapped_column(CHAR(2), index=True)
+    lang: Mapped[str] = mapped_column(CHAR(2), nullable=False, index=True)
+    chunk_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # «Заголовок документа — заголовок раздела»; у факта — вопрос, у места — название
+    title: Mapped[str | None] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # sha256 заголовка и текста: эмбеддинг пересчитывается, только если они или модель изменились
     content_hash: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(Text)
     tsv: Mapped[Any] = mapped_column(
-        TSVECTOR, Computed("to_tsvector('simple'::regconfig, content)", persisted=True)
+        TSVECTOR,
+        Computed(
+            # так PG показывает выражение при чтении схемы (иначе alembic предупреждает о различии)
+            "to_tsvector('simple'::regconfig, ((COALESCE(title, ''::text) || ' '::text) || content))",
+            persisted=True,
+        ),
     )
+    # исчезнувший из базы фрагмент выключается (поиск фильтрует is_active), вернулся тем же — без эмбеддинга
+    is_active: Mapped[bool] = _active()
     updated_at: Mapped[datetime] = _now()
 
 

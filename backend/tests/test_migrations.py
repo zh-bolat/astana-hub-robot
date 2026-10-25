@@ -91,7 +91,7 @@ def test_upgrade_from_empty_db_is_idempotent_and_matches_models():
     with temp_database() as url:
         upgrade_head(url)
         upgrade_head(url)  # повторно — без ошибок и изменений
-        assert current_revision(url) == head_revision() == "0003_latency_events"
+        assert current_revision(url) == head_revision() == "0004_rag_chunks"
         tables = set(inspect(create_engine(url)).get_table_names())
         assert tables >= EXPECTED_TABLES
         assert _diff(url) == []  # модели и миграции совпадают
