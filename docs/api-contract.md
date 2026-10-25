@@ -190,7 +190,7 @@ data: {"request_id": "req_01J…", "lang": "ru", "found": true, "sources": ["pla
 | `{"type": "emotion", "name": "happy"}` | выражение лица |
 | `{"type": "phrase", "text": "…"}` | субтитр (текст того, что сейчас звучит) |
 | бинарный | **звук ответа** в формате из `ready`; играть сразу по мере прихода |
-| `{"type": "action", "type_": "guide_to", "place_id": "cafe"}` | действие (как в `/v1/chat`: `where_is` / `guide_to` / `look`; `guide_to` — после `playback_done`) |
+| `{"type": "action", "type_": "guide_to", "place_id": "cafe", "turn_id": "trn_…"}` | действие (как в `/v1/chat`: `where_is` / `guide_to` / `look`). `turn_id` — ход, к которому относится действие. `guide_to` сервер шлёт **после** `playback_done` этого хода, поэтому робот выполняет его сразу по приходу (не ждёт ещё один `playback_done`); `guide_to` без `turn_id` (старый сервер) — тоже сразу, если звук не играет. Повторный `guide_to` к той же точке во время поездки робот игнорирует |
 | `{"type": "turn_end", "turn_id": "…", "lang": "ru", "found": true}` | сервер закончил отправлять звук хода |
 | `{"type": "interrupted", "turn_id": "…"}` | посетитель перебил: **немедленно** остановить звук и выбросить буфер |
 | `{"type": "error", "error": {…}}` | ошибка; робот переходит на запасной режим |
