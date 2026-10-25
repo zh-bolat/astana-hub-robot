@@ -227,6 +227,41 @@ class MainViewModelAgentTest {
     }
 
     @Test
+    fun `yes after the robot offered to guide - drives at once, even while the robot is still speaking`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Action(ChatAction("where_is", "cafe")))
+            emit(ChatEvent.Phrase("Кафе справа. Проводить вас туда?"))
+            delay(3_000) // ответ ещё идёт — робот «занят», короткие реплики обычно отбрасываются
+            emit(done.copy(actions = listOf(ChatAction("where_is", "cafe"))))
+        }
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(1_000); NavigationResult.Arrived }
+        val vm = vm()
+        vm.submit("Где поесть?")
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals("cafe", vm.state.value.guideTarget?.id)
+        voice.asr.emit(Transcript("Да, проводи", isFinal = true))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo(any(), any()) }
+        advanceUntilIdle()
+        coVerify(exactly = 1) { backend.chat(any()) } // «да» не ушло на сервер — поездка началась локально
+    }
+
+    @Test
+    fun `short command while the robot speaks is not dropped`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Добро пожаловать в Astana Hub, рад вас видеть!"))
+            delay(3_000)
+            emit(done)
+        }
+        val vm = vm()
+        vm.submit("Привет")
+        advanceTimeBy(500); runCurrent()
+        voice.asr.emit(Transcript("Где кафе", isFinal = true)) // 2 слова, но это команда роботу
+        advanceUntilIdle()
+        coVerify(exactly = 2) { backend.chat(any()) }
+    }
+
+    @Test
     fun `where_is for a place the robot does not know - silent, only the agent phrase`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Action(ChatAction("where_is", "mars")))

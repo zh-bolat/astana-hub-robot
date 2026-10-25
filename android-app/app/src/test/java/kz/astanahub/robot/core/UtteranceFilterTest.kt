@@ -104,4 +104,21 @@ class UtteranceFilterTest {
         assertEquals(NoiseReason.EMPTY, UtteranceFilter.noiseReason("123"))
         assertEquals(null, UtteranceFilter.noiseReason("Где кафе?"))
     }
+
+    @Test
+    fun `guide confirmations after the robot offered to guide`() {
+        listOf(
+            "Да", "да, давай", "Давайте", "проводи", "Проводи меня туда", "Да, проводите, пожалуйста", "веди",
+            "Отведи меня", "ок, пошли", "Иә", "Иә, жүр", "Апарыңызшы", "Yes", "yes please", "Sure, lead the way",
+            "take me there", "ok go",
+        ).forEach { assertTrue(it, UtteranceFilter.isGuideConfirmation(it)) }
+    }
+
+    @Test
+    fun `replies that name a place or refuse are not guide confirmations`() {
+        listOf(
+            "нет", "не надо", "проводи в кафе", "отведи к лифту", "где туалет", "а что там", "спасибо", "",
+            "No thanks", "take me to the cafe", "Жоқ", "да нет наверное",
+        ).forEach { assertFalse(it, UtteranceFilter.isGuideConfirmation(it)) }
+    }
 }

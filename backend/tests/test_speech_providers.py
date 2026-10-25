@@ -458,6 +458,43 @@ def test_tts_fallback_used_on_primary_error():
     assert (tts.name, tts.voice_id("kk")) == ("broken", "broken-kk")
 
 
+class _QuotaTts(_BrokenTts):
+    calls = 0
+
+    async def tts(self, text, lang):
+        self.calls += 1
+        raise SpeechError("elevenlabs tts http 401: quota_exceeded")
+
+
+def test_tts_primary_paused_after_quota_error():
+    """Кончилась квота: следующие фразы идут сразу в запасной, основной не дёргаем PAUSE_S."""
+    now = [1000.0]
+    primary, fallback = _QuotaTts(), FakeSpeechProvider()
+    tts = FallbackTtsProvider(primary, fallback, clock=lambda: now[0])
+    assert asyncio.run(tts.tts("Раз", "ru")) == SILENT_MP3
+    assert asyncio.run(tts.tts("Два", "ru")) == SILENT_MP3
+    assert (primary.calls, fallback.tts_calls, tts.primary_paused()) == (1, 2, True)
+    assert b"".join(asyncio.run(_collect(tts.tts_stream("Три", "ru")))) == SILENT_MP3
+    assert primary.calls == 1
+    now[0] += FallbackTtsProvider.PAUSE_S + 1
+    asyncio.run(tts.tts("Четыре", "ru"))
+    assert primary.calls == 2  # пауза прошла — снова пробуем основной
+
+
+async def _collect(stream):
+    return [chunk async for chunk in stream]
+
+
+def test_tts_network_error_does_not_pause_primary():
+    primary, fallback = (
+        _BrokenTts(),
+        FakeSpeechProvider(),
+    )  # "quota exceeded" без кода — обычная ошибка
+    tts = FallbackTtsProvider(primary, fallback)
+    asyncio.run(tts.tts("Раз", "ru"))
+    assert tts.primary_paused() is False
+
+
 def test_tts_fallback_built_from_settings():
     s = Settings(
         _env_file=None,

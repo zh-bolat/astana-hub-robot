@@ -393,7 +393,17 @@ class MainViewModel(
             stop()
             return
         }
-        if (busyNow && !UtteranceFilter.isSubstantial(text)) {
+        // Робот предложил проводить («Проводить вас туда?»): «да / давай / проводи» — едем сразу и без сервера,
+        // даже если робот ещё договаривает (ответ посетителя почти всегда накладывается на конец фразы).
+        if (_state.value.guideTarget != null && navJob?.isActive != true && UtteranceFilter.isGuideConfirmation(text)) {
+            Timber.i("guide confirmed by voice (phase=%s)", _state.value.phase)
+            _state.update { it.copy(partialQuestion = null) }
+            guideToOffered()
+            return
+        }
+        // Команда роботу («проводи к лифту», «где кафе») стоит прерывания, даже если она короткая.
+        val command = IntentRouter.route(text).intent != IntentRouter.Intent.ASK
+        if (busyNow && !UtteranceFilter.isSubstantial(text) && !command) {
             Timber.i("utterance ignored in %s (len=%d)", _state.value.phase, text.length)
             NoiseStats.utteranceFiltered("busy_" + _state.value.phase.name.lowercase())
             return
