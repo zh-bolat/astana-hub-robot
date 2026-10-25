@@ -10,30 +10,22 @@ import re
 
 from app.lang import Lang
 
-ABOUT: dict[str, str] = {
-    "ru": "Я робот-помощник Astana Hub. Могу рассказать о хабе, подсказать, где что находится, "
-    "проводить до нужного места или сказать, что передо мной.",
-    "kk": "Мен Astana Hub роботы-көмекшісімін. Хаб туралы айтып, қай жерде не бар екенін көрсетіп, "
-    "керек жерге дейін шығарып салып, алдымда не тұрғанын айта аламын.",
-    "en": "I'm the Astana Hub robot assistant. I can tell you about the hub, show where things are, "
-    "walk you there, or tell you what I see in front of me.",
-}
-
+# Коротко и тепло, без перечня умений («что ты умеешь?» отвечает LLM)
 _REPLIES: dict[str, dict[str, str]] = {
     "greeting": {
-        "ru": "Здравствуйте! " + ABOUT["ru"] + " Чем помочь?",
-        "kk": "Сәлеметсіз бе! " + ABOUT["kk"] + " Қалай көмектесейін?",
-        "en": "Hello! " + ABOUT["en"] + " How can I help?",
+        "ru": "Здравствуйте! Я робот Astana Hub, что подсказать?",
+        "kk": "Сәлеметсіз бе! Мен Astana Hub роботымын, қалай көмектесейін?",
+        "en": "Hello! I'm the Astana Hub robot, what can I help with?",
     },
     "thanks": {
-        "ru": "Пожалуйста! Обращайтесь, если будут ещё вопросы.",
-        "kk": "Оқасы жоқ! Тағы сұрақ болса, хабарласыңыз.",
-        "en": "You're welcome! Ask me anytime.",
+        "ru": "Пожалуйста, обращайтесь!",
+        "kk": "Оқасы жоқ, келіп тұрыңыз!",
+        "en": "You're welcome, anytime!",
     },
     "bye": {
-        "ru": "До свидания! Хорошего дня в Astana Hub.",
-        "kk": "Сау болыңыз! Astana Hub-та күніңіз сәтті өтсін.",
-        "en": "Goodbye! Have a great day at Astana Hub.",
+        "ru": "До свидания! Хорошего дня!",
+        "kk": "Сау болыңыз! Күніңіз сәтті өтсін!",
+        "en": "Goodbye! Have a great day!",
     },
 }
 

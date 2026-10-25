@@ -209,6 +209,11 @@ Eval использует провайдер из `.env`: без ключа — 
   - `event: "visitor_arrived"` (`question` может быть пустым) — короткое приветствие на языке `lang`, действия
     игнорируются; пишется в память (`messages`, вместо реплики — «(посетитель подошёл к роботу)»), в журнал вопросов —
     нет. Нет агента, ошибка или дольше `AGENT_GREETING_TIMEOUT_S` → готовое приветствие.
+- **Шум вместо реплики (v1.2, `app/noise.py`):** реплика только из междометий («ну», «м-м-м», «um»), пометок
+  («(смеётся)», «[музыка]», «Смеётся.»), смеха и слов-паразитов → `done` с `ignored: true` без фраз (JSON: `answer: ""`),
+  без модели, журнала вопросов и памяти; в `latency_events` — строка `chat/ignored` (`provider=local:noise`).
+  «Да/нет» (иә/жоқ, yes/no, ага/угу) — ответ, если последняя реплика робота кончалась «?», иначе шум. Цифры,
+  аббревиатуры («WC», «IT») и любое слово вне списков — не шум. Работает и при `CHAT_PROVIDER=off`.
 - Устаревшие `AGENT_ENABLED` (только `false` при `CHAT_PROVIDER=auto` → `off`) и `AGENT_FALLBACK_MODELS` (не читается)
   остались от агента на LiteLLM; `litellm` больше не нужен.
 - Injection: `uv run python -m eval.run_injection --chat` — набор через `/v1/chat` (провал — в т.ч. любое `action`);
@@ -245,7 +250,10 @@ STT и TTS выбираются раздельно (`app/speech/`):
 - **ElevenLabs**: TTS `POST /v1/text-to-speech/{voice_id}` (`xi-api-key`, mp3): kk → `eleven_v3` (единственная
   модель с казахским), ru/en → `eleven_flash_v2_5`, `language_code` передаётся. STT — Scribe `scribe_v2`, сырой PCM
   (`file_format=pcm_s16le_16`), `language_code` при известном языке, иначе автоопределение; `confidence` =
-  `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs).
+  `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs; по умолчанию
+  женские: RU Matilda, KZ Bella, EN Alice). `voice_settings`: `ELEVENLABS_STABILITY` 0.4, `ELEVENLABS_SIMILARITY` 0.8,
+  `ELEVENLABS_STYLE` 0.35, `ELEVENLABS_SPEAKER_BOOST` true, `ELEVENLABS_SPEED` 1.05 (0.7–1.2); `eleven_v3` (kk)
+  получает только `stability`, округлённую до 0.0 / 0.5 / 1.0. Настройки входят в ключ кеша TTS.
 - **Запасной TTS** (`TTS_FALLBACK_PROVIDER`): при ошибке основного (кончились кредиты ElevenLabs, 5xx, сеть) фраза
   синтезируется запасным — для мероприятия `TTS_PROVIDER=elevenlabs` + `TTS_FALLBACK_PROVIDER=openrouter` (те же
   voice_id). Таймаут не переключает: время запроса уже вышло. В логе — событие `tts_fallback`.

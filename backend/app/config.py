@@ -140,10 +140,17 @@ class Settings(BaseSettings):
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
     elevenlabs_tts_model_kk: str = "eleven_v3"  # казахский умеет только v3
     elevenlabs_tts_model_default: str = "eleven_flash_v2_5"  # ru/en, минимальная задержка
-    # Голос по умолчанию — премиальный «George» из стандартной библиотеки (мультиязычные модели)
-    elevenlabs_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
-    elevenlabs_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
-    elevenlabs_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
+    # Женские голоса из стандартной библиотеки: RU Matilda, KZ Bella, EN Alice
+    elevenlabs_voice_ru: str = "XrExE9yKIg1WjnnlVkGX"
+    elevenlabs_voice_kk: str = "hpp4J3VqNfWAUOO0d1Us"
+    elevenlabs_voice_en: str = "Xb7hH8MSUJpSbSDYk0k2"
+    # voice_settings: ниже stability — живее интонация; style — выразительность (чуть дольше синтез);
+    # speed 0.7–1.2. Eleven v3 (kk) берёт только stability (округляется до 0.0 / 0.5 / 1.0).
+    elevenlabs_stability: float = Field(0.4, ge=0.0, le=1.0)
+    elevenlabs_similarity: float = Field(0.8, ge=0.0, le=1.0)
+    elevenlabs_style: float = Field(0.35, ge=0.0, le=1.0)
+    elevenlabs_speaker_boost: bool = True
+    elevenlabs_speed: float = Field(1.05, ge=0.7, le=1.2)
     elevenlabs_output_format: str = "mp3_44100_128"
     elevenlabs_stt_model: str = "scribe_v2"
     # Live STT (WebSocket /v1/stt/stream): auto — ElevenLabs Scribe Realtime при ELEVENLABS_API_KEY,

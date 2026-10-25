@@ -19,6 +19,7 @@ from app.db.models import LatencyEvent
 from app.lang import Lang
 from app.speech.base import SpeechError
 from app.speech.cache import cache_key
+from app.speech.elevenlabs import VoiceSettings
 from app.speech.wav import make_wav
 from tests.conftest import AUTH, SESSION, TOKEN, ask_body, temp_database
 from tests.test_chat import FakeModel, call, say
@@ -658,7 +659,9 @@ def test_elevenlabs_tts_stream_request(lang, model):
     assert asyncio.run(collect()) == b"mp3-part-1mp3-part-2"
     assert seen["url"] == f"https://api.elevenlabs.test/v1/text-to-speech/voice-{lang}/stream"
     assert seen["params"] == {"output_format": "mp3_44100_128"}
-    assert seen["body"] == {"text": "Сәлем.", "model_id": model, "language_code": lang}
+    body = seen["body"]
+    assert body.pop("voice_settings") == VoiceSettings().for_model(model)
+    assert body == {"text": "Сәлем.", "model_id": model, "language_code": lang}
 
 
 def test_elevenlabs_tts_stream_http_error_is_speech_error():

@@ -9,7 +9,7 @@ import pytest
 
 from app.config import Settings
 from app.speech.base import SpeechError, has_letters
-from app.speech.elevenlabs import ElevenLabsProvider
+from app.speech.elevenlabs import ElevenLabsProvider, VoiceSettings
 from app.speech.factory import FallbackTtsProvider, build_stt_provider, build_tts_provider
 from app.speech.fake import SILENT_MP3, FakeSpeechProvider
 from tests.conftest import AUTH
@@ -140,8 +140,35 @@ def test_elevenlabs_tts_request(lang, model, voice):
     assert req.url.path == f"/v1/text-to-speech/{voice}"
     assert req.url.params["output_format"] == "mp3_44100_128"
     assert req.headers["xi-api-key"] == "test"
-    assert json.loads(req.content) == {"text": "Сәлем.", "model_id": model, "language_code": lang}
+    body = json.loads(req.content)
+    assert body.pop("voice_settings") == VoiceSettings().for_model(model)
+    assert body == {"text": "Сәлем.", "model_id": model, "language_code": lang}
     assert model in p.voice_id(lang)  # модель входит в ключ кеша
+
+
+def test_elevenlabs_voice_settings_per_model():
+    vs = VoiceSettings(
+        stability=0.3, similarity_boost=0.7, style=0.2, use_speaker_boost=False, speed=1.5
+    )
+    # Eleven v3: только stability, округлённая до 0.0 / 0.5 / 1.0
+    assert vs.for_model("eleven_v3") == {"stability": 0.5}
+    assert VoiceSettings(stability=0.2).for_model("eleven_v3") == {"stability": 0.0}
+    flash = vs.for_model("eleven_flash_v2_5")
+    assert flash == {
+        "stability": 0.3,
+        "similarity_boost": 0.7,
+        "style": 0.2,
+        "use_speaker_boost": False,
+        "speed": 1.2,  # обрезано до допустимого максимума
+    }
+
+
+def test_elevenlabs_voice_settings_change_cache_key():
+    a = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    b = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    b.voice_settings = VoiceSettings(stability=0.9)
+    assert a.voice_id("ru") != b.voice_id("ru")
+    assert a.voice_id("kk") != b.voice_id("kk")  # 0.4 -> 0.5, 0.9 -> 1.0
 
 
 def test_elevenlabs_tts_no_language_code_for_multilingual_v2():

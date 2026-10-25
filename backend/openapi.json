@@ -1337,6 +1337,11 @@
             ],
             "title": "Emotion",
             "default": "neutral"
+          },
+          "ignored": {
+            "type": "boolean",
+            "title": "Ignored",
+            "default": false
           }
         },
         "type": "object",
