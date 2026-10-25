@@ -41,4 +41,9 @@
     <string name="diag_mic_normal" translatable="false">Обычная</string>
     <string name="diag_mic_high" translatable="false">Высокая (тихо)</string>
     <string name="diag_voice_cache_refresh" translatable="false">Обновить кеш голоса</string>
+    <string name="diag_map_points" translatable="false">Точки карты робота: «Поехать» — startNavigation напрямую</string>
+    <string name="diag_map_points_load" translatable="false">Точки карты</string>
+    <string name="diag_nav_stop" translatable="false">Стоп</string>
+    <string name="diag_nav_go" translatable="false">Поехать</string>
+    <string name="diag_nav_journal" translatable="false">Журнал навигации</string>
 </resources>

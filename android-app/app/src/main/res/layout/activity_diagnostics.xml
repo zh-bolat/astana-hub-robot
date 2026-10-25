@@ -235,6 +235,28 @@
                 <Button android:id="@+id/refreshPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_refresh_places" />
             </LinearLayout>
 
+            <!-- Точки карты робота с кнопкой «Поехать» у каждой (заполняется по getPlaceList). -->
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_map_points" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/loadMapPoints" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_map_points_load" />
+                <Button android:id="@+id/navStop" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_nav_stop" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/navTripStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="18sp" />
+
+            <LinearLayout
+                android:id="@+id/mapPointsList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical" />
+
             <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_chat" />
 
             <com.google.android.material.button.MaterialButtonToggleGroup
@@ -381,6 +403,41 @@
         android:layout_marginStart="24dp"
         android:layout_weight="1"
         android:orientation="vertical">
+
+        <!-- Журнал навигации: живёт в памяти приложения, переживает закрытие экрана диагностики. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/diag_nav_journal"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <Button android:id="@+id/navJournalClear" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_clear" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/navJournalScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginBottom="16dp"
+            android:layout_weight="1"
+            android:background="@drawable/card_bg"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/navJournalText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+        </ScrollView>
 
         <LinearLayout
             android:layout_width="match_parent"

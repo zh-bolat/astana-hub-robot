@@ -4,8 +4,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
@@ -17,6 +20,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.backend.ApiResult
@@ -29,9 +33,12 @@ import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.NoiseStats
 import kz.astanahub.robot.audio.MicSensitivity
 import kz.astanahub.robot.databinding.ActivityDiagnosticsBinding
+import kz.astanahub.robot.robot.MapPlace
+import kz.astanahub.robot.robot.NavJournal
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.voice.ServerSpeakResult
 import kz.astanahub.robot.voice.VoiceSource
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import timber.log.Timber
 
@@ -50,6 +57,8 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private var ttsJob: Job? = null
     private var monitorJob: Job? = null
+    /** Поездка, запущенная кнопкой «Поехать» (отменяется «Стоп» и закрытием экрана — робот останавливается). */
+    private var tripJob: Job? = null
 
     private val gate by lazy { container.diagnostics }
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -252,6 +261,13 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         }
 
+        section("Точки карты и журнал навигации") {
+        binding.loadMapPoints.setOnClickListener { loadMapPoints() }
+        binding.navStop.setOnClickListener { stopTrip() }
+        binding.navJournalClear.setOnClickListener { NavJournal.clear() }
+        loadMapPoints()
+        }
+
         section("Режим разговора") {
         // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
         val chat = container.chatSettings
@@ -339,6 +355,14 @@ class DiagnosticsActivity : AppCompatActivity() {
                     }
                 }
                 launch { server.micLevel.collect { binding.levelBar.setProgressCompat((it * 300).toInt().coerceAtMost(100), false) } }
+                launch {
+                    NavJournal.entries.collect { entries ->
+                        binding.navJournalText.text =
+                            if (entries.isEmpty()) "— пока пусто: здесь шаги навигации и решения по guide_to —"
+                            else entries.joinToString("\n") { it.format() }
+                        binding.navJournalScroll.post { binding.navJournalScroll.fullScroll(View.FOCUS_DOWN) }
+                    }
+                }
             }
         }
         (application as AstanaHubApp).crashGuard.lastCrash()?.let {
@@ -385,6 +409,78 @@ class DiagnosticsActivity : AppCompatActivity() {
         container.serverVoice.stopListening()
         container.voice.setDiagnosticsOpen(false) // режим заново применит нужное состояние микрофона
         super.onStop()
+    }
+
+    /** Точки карты робота (getPlaceList) — строкой на каждую, с кнопкой «Поехать». */
+    private fun loadMapPoints() {
+        lifecycleScope.launch(sectionHandler("Точки карты")) {
+            val points = container.robot.getPlaces()
+            NavJournal.log("диагностика: getPlaceList — ${points.size} точек" + if (points.isEmpty()) " (RobotApi не подключён или карта пуста)" else "")
+            val list = binding.mapPointsList
+            list.removeAllViews()
+            if (points.isEmpty()) {
+                list.addView(TextView(this@DiagnosticsActivity).apply {
+                    text = "Точек нет: RobotApi не подключён или на роботе нет карты"
+                    textSize = 18f
+                })
+                return@launch
+            }
+            val pad = (6 * resources.displayMetrics.density).toInt()
+            points.forEach { point -> list.addView(mapPointRow(point, pad)) }
+        }
+    }
+
+    private fun mapPointRow(point: MapPlace, pad: Int): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, pad, 0, pad)
+        addView(
+            TextView(this@DiagnosticsActivity).apply {
+                val status = when (point.status) { 0 -> "доступна"; 1 -> "запретная зона"; 2 -> "вне карты"; else -> "status=${point.status}" }
+                text = "«${point.name}»  x=${"%.2f".format(point.x)} y=${"%.2f".format(point.y)}  $status"
+                textSize = 18f
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        addView(
+            MaterialButton(this@DiagnosticsActivity).apply {
+                text = getString(R.string.diag_nav_go)
+                textSize = 20f
+                minHeight = (64 * resources.displayMetrics.density).toInt()
+                setOnClickListener { goTo(point) }
+            },
+        )
+    }
+
+    /** «Поехать»: startNavigation к точке напрямую через RobotGateway (все шаги — в журнале навигации). */
+    private fun goTo(point: MapPlace) {
+        val previous = tripJob
+        tripJob = lifecycleScope.launch(sectionHandler("Поехать")) {
+            if (previous?.isActive == true) {
+                previous.cancelAndJoin()
+                container.robot.stopNavigationAndWait()
+            }
+            NavJournal.log("диагностика: «Поехать» → «${point.name}»")
+            binding.navTripStatus.text = "Еду к «${point.name}»…"
+            log("Навигация → «${point.name}»")
+            // Слежение головой занимает шасси — на время поездки выключаем, как в обычной поездке.
+            container.head?.setNavigating(true)
+            val result = try {
+                container.robot.navigateTo(point.name) { event -> NavJournal.log("диагностика: событие $event") }
+            } finally {
+                container.head?.setNavigating(false)
+            }
+            binding.navTripStatus.text = "«${point.name}»: $result"
+            log("Навигация «${point.name}»: $result")
+        }
+    }
+
+    private fun stopTrip() {
+        NavJournal.log("диагностика: «Стоп»")
+        tripJob?.cancel()
+        container.robot.stopNavigation()
+        binding.navTripStatus.text = "Стоп отправлен"
+        log("Навигация: стоп")
     }
 
     /** GET /v1/health (без токена) по адресу из поля — только если адрес разрешён политикой. */
