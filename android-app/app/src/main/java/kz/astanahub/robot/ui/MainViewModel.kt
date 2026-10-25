@@ -151,6 +151,8 @@ class MainViewModel(
     private val liveFactory: LiveSessionFactory? = null,
     /** Сбой live → запасной режим (agent), повторная попытка live через столько. */
     private val liveRetryMillis: Long = LIVE_RETRY_MILLIS,
+    /** Приложение на экране; false — микрофон не слушает, live закрыт. null — всегда на экране (тесты). */
+    private val foreground: StateFlow<Boolean>? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -297,8 +299,30 @@ class MainViewModel(
         viewModelScope.launch {
             _state.map { it.mode == ScreenMode.SLEEP }.distinctUntilChanged().collect { updateListeningPaused() }
         }
+        foreground?.let { flow ->
+            viewModelScope.launch { flow.collect(::onForegroundChanged) }
+        }
         restartIdleTimer()
         ensureLive(greet = false)
+    }
+
+    private fun inForeground(): Boolean = foreground?.value ?: true
+
+    /**
+     * Приложение ушло с экрана (другое приложение, настройки, системный экран): постоянное прослушивание на паузе,
+     * живая сессия закрыта — робот не слушает и не отвечает из фона. Вернулось — включаем обратно.
+     * Поездку не трогаем (её останавливает только «Стоп»).
+     */
+    private fun onForegroundChanged(visible: Boolean) {
+        Timber.i("app foreground=%s", visible)
+        if (!visible) {
+            clearThinkingEarly(resetPhase = true)
+            closeLive()
+            updateListeningPaused()
+        } else {
+            updateListeningPaused()
+            ensureLive(greet = false)
+        }
     }
 
     private fun refreshPlaces() {
@@ -922,7 +946,8 @@ class MainViewModel(
                 }
                 wake()
                 showEmotion(MoodRules.visitorArrived)
-                if (event.greet && !busyNow()) {
+                // Приложение не на экране — не здороваемся (микрофон и голос выключены, говорить «из фона» нельзя).
+                if (event.greet && !busyNow() && inForeground()) {
                     // Живой режим: здоровается агент на сервере (`visitor_arrived`); live не открылся — как раньше.
                     if (!ensureLive(greet = true)) greet()
                 }
@@ -1253,7 +1278,7 @@ class MainViewModel(
      */
     private fun ensureLive(greet: Boolean): Boolean {
         val factory = liveFactory ?: return false
-        if (chatMode() != ChatMode.LIVE || _state.value.mode == ScreenMode.SLEEP) return false
+        if (chatMode() != ChatMode.LIVE || _state.value.mode == ScreenMode.SLEEP || !inForeground()) return false
         live?.takeIf { it.active }?.let { session ->
             if (greet) {
                 liveGreetPending = true
@@ -1307,7 +1332,7 @@ class MainViewModel(
      */
     private fun updateListeningPaused() {
         val asleep = _state.value.mode == ScreenMode.SLEEP
-        voice.setListeningPaused((asleep && presence != null && !visitorPresent) || live != null)
+        voice.setListeningPaused(!inForeground() || (asleep && presence != null && !visitorPresent) || live != null)
     }
 
     private fun onLive(session: LiveSession, signal: LiveSignal) {
@@ -1654,7 +1679,7 @@ class MainViewModel(
         liveRetryJob?.cancel()
         liveRetryJob = viewModelScope.launch {
             delay(after)
-            while (live == null && chatMode() == ChatMode.LIVE && _state.value.mode != ScreenMode.SLEEP) {
+            while (live == null && chatMode() == ChatMode.LIVE && _state.value.mode != ScreenMode.SLEEP && inForeground()) {
                 // Не посреди ответа agent и не во время поездки: дождаться паузы в разговоре.
                 if (!busyNow()) {
                     Timber.i("live: retry")

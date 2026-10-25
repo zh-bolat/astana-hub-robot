@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity() {
                     head = container.head,
                     vadSilenceMillis = { container.voiceSettings.config.value.vadEndSilenceMillis },
                     liveFactory = container.liveFactory,
+                    foreground = container.appForeground,
                 )
             }
         }

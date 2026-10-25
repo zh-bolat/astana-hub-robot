@@ -89,6 +89,12 @@ class AppContainer(app: Application) {
 
     /** Встроенный ассистент молчит, пока приложение видно; микрофон ему — только при ASR=builtin. */
     val assistantGuard = AssistantGuard(gateways.assistant)
+
+    /**
+     * Виден ли хоть один экран приложения (ForegroundTracker в [kz.astanahub.robot.AstanaHubApp]). Не видно —
+     * постоянное прослушивание и живая сессия выключены: робот не слушает и не отвечает «из фона».
+     */
+    val appForeground = kotlinx.coroutines.flow.MutableStateFlow(false)
     val builtinMic: AssistantGuard get() = assistantGuard
     val presenceSimulator: PresenceSimulator? get() = gateways.presenceSimulator
 

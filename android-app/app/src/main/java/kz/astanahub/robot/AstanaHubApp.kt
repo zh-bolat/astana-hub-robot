@@ -36,6 +36,8 @@ class AstanaHubApp : Application() {
         container = AppContainer(this)
         registerActivityLifecycleCallbacks(ForegroundTracker { visible, force ->
             container.assistantGuard.setForeground(visible, force)
+            // Ушли с экрана — микрофон глушится (MainViewModel: пауза прослушивания, live закрыт); вернулись — снова.
+            container.appForeground.value = visible
         })
     }
 

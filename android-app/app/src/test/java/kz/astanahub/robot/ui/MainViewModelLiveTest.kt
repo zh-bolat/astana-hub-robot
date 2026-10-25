@@ -97,6 +97,7 @@ class MainViewModelLiveTest {
     private lateinit var voice: TestVoice
     private var mode = ChatMode.LIVE
     private val presence = MutableSharedFlow<PresenceEvent>(extraBufferCapacity = 8)
+    private val foreground = MutableStateFlow(true)
     private val connections = mutableListOf<FakeLiveConnection>()
     private val sinks = mutableListOf<FakeAudioSink>()
     private val metrics = mutableListOf<TurnMetrics>()
@@ -158,7 +159,7 @@ class MainViewModelLiveTest {
         return MainViewModel(
             backend, voice, camera, phrases, clock = { testScheduler.currentTime },
             wayFinder = wf, robot = robot, screensaverMillis = screensaverMillis,
-            chatMode = { mode }, presence = presence, liveFactory = factory(),
+            chatMode = { mode }, presence = presence, liveFactory = factory(), foreground = foreground,
         ).also { runCurrent(); advanceTimeBy(100); runCurrent() }
     }
 
@@ -408,6 +409,42 @@ class MainViewModelLiveTest {
         assertTrue(vm.state.value.phase != Phase.NAVIGATING)
         assertNull(vm.state.value.guidingTo)
         assertTrue(NavJournal.texts().any { it.contains("итог ошибка") })
+    }
+
+    @Test
+    fun `app leaves the screen - live closed and listening paused, back on screen - live again`() = runTest(dispatcher) {
+        mode = ChatMode.AGENT
+        val vm = vm()
+        assertFalse(voice.paused)
+        foreground.value = false
+        runCurrent()
+        assertTrue("ordinary listening paused in background", voice.paused)
+        foreground.value = true
+        runCurrent()
+        assertFalse(voice.paused)
+
+        mode = ChatMode.LIVE
+        vm.onSettingsChanged()
+        runCurrent()
+        assertTrue(vm.liveOpen)
+        val first = conn
+        foreground.value = false
+        runCurrent()
+        assertFalse(vm.liveOpen)
+        assertTrue(first.closed)
+        assertTrue(voice.paused)
+        // В фоне подошедший посетитель не будит live и не получает приветствие.
+        presence.emit(PresenceEvent.Arrived(1, greet = true))
+        advanceTimeBy(500); runCurrent()
+        assertFalse(vm.liveOpen)
+        assertTrue(chatRequests.isEmpty())
+        foreground.value = true
+        runCurrent()
+        assertTrue(vm.liveOpen)
+        assertEquals(2, connections.size)
+        assertTrue("live owns the microphone", voice.paused)
+        presence.emit(PresenceEvent.Left)
+        runCurrent()
     }
 
     @Test
