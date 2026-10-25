@@ -208,6 +208,22 @@ def test_guide_to_sends_action_and_drops_preamble(make_client):
     assert roles[2] == ("assistant", "Провожаю вас в кафе, идите за мной.", None)
 
 
+def test_place_by_alias_resolves_to_map_point(make_client):
+    """Модель передала «elevator» вместо "place:lift" — действие уходит с id точки карты."""
+    model = FakeModel(call("guide_to", {"place_id": "elevator"}), say("Провожаю к лифту."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Take me to the elevator", lang="en")
+
+    assert evs[0] == ("action", {"type": "guide_to", "place_id": "lift"})
+    assert evs[-1][1]["actions"] == [{"type": "guide_to", "place_id": "lift"}]
+    assert evs[-1][1]["sources"] == ["place:lift"]
+    result = json.loads(model.requests[1]["messages"][-1]["content"])
+    assert (
+        result["ok"] is True and result["place_id"] == "place:lift" and result["name"] == "Elevator"
+    )
+
+
 def test_unknown_place_is_reported_to_model(make_client):
     model = FakeModel(call("where_is", {"place_id": "place:mars"}), say("Такого места я не знаю."))
     client = chat_client(make_client, model)
@@ -217,7 +233,7 @@ def test_unknown_place_is_reported_to_model(make_client):
     assert [e for e, _ in evs] == ["phrase", "done"]
     assert evs[-1][1]["actions"] == []
     result = json.loads(model.requests[1]["messages"][-1]["content"])
-    assert result["ok"] is False and "place:cafe" in result["places"]
+    assert result["ok"] is False and "place:cafe" in [p["id"] for p in result["places"]]
 
 
 def test_no_answer_stops_with_refusal(make_client):

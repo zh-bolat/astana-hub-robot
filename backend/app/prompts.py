@@ -147,6 +147,8 @@ def _kb_places_json(kb: KnowledgeBase, with_visual: bool = False) -> str:
         item = {
             "id": p.source_id,
             "names": {k: v for k, v in p.names.model_dump().items() if v},
+            # map_name + синонимы: как посетители называют место на любом языке («elevator» → lift)
+            "aliases": list(dict.fromkeys([p.map_name, *p.synonyms])),
             "description": {k: v for k, v in p.description.model_dump().items() if v},
         }
         if with_visual and p.visual_hints:

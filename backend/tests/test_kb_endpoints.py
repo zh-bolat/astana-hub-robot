@@ -18,7 +18,7 @@ def test_places_and_etag(client):
     etag = r.headers["etag"]
     places = r.json()["places"]
     cafe = next(p for p in places if p["id"] == "cafe")
-    assert cafe["map_name"] == "Кафе"
+    assert cafe["map_name"] == "cafe"  # ровно как точка на карте робота
     assert set(cafe["names"]) == {"ru", "kk", "en"}
     assert "кафешка" in cafe["synonyms"]
     assert set(places[0]) == {"id", "map_name", "names", "synonyms", "description"}

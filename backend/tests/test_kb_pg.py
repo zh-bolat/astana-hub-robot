@@ -94,7 +94,7 @@ def test_renamed_place_frees_map_name(db):
     repo.apply(kb, "sheet")
     with db.connect() as conn:
         rows = dict(
-            conn.execute(text("SELECT id, is_active FROM places WHERE map_name = 'Кафе'")).all()
+            conn.execute(text("SELECT id, is_active FROM places WHERE map_name = 'cafe'")).all()
         )
     assert rows == {"cafe": False, "cafe_new": True}
 

@@ -41,11 +41,13 @@ def _result(ctx: ChatContext, name: str, args: dict, result: dict) -> str:
 
 
 def _place_action(ctx: ChatContext, kind: str, place_id: str) -> str:
-    pid = place_id.strip().removeprefix("place:")
-    place = ctx.kb.place(pid)
+    # Модель может передать "lift", «лифт» или "elevator" вместо "place:lift" — ищем по именам и синонимам
+    place = ctx.kb.find_place(place_id)
     args = {"place_id": place_id}
     if place is None:
-        known = [p.source_id for p in ctx.kb.places]
+        known = [
+            {"id": p.source_id, "aliases": [p.map_name, *p.synonyms[:4]]} for p in ctx.kb.places
+        ]
         return _result(ctx, kind, args, {"ok": False, "error": "unknown place", "places": known})
     ctx.actions.append({"type": kind, "place_id": place.id})
     if place.source_id not in ctx.sources:

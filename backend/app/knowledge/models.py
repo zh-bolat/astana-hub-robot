@@ -79,5 +79,29 @@ class KnowledgeBase(BaseModel):
             return None
         return next((p for p in self.places if p.id == place_id), None)
 
+    def find_place(self, query: str | None) -> Place | None:
+        """Место по id, `place:<id>`, map_name, названию или синониму (без учёта регистра).
+
+        Для инструментов агента: модель иногда передаёт "lift", «Лифт» или "elevator" вместо "place:lift".
+        Сначала точное совпадение, затем — одно место, у которого совпадает начало/вхождение.
+        """
+        if not query:
+            return None
+        q = query.strip().removeprefix("place:").strip().casefold()
+        if not q:
+            return None
+        if (exact := self.place(q)) is not None:
+            return exact
+
+        def terms(p: Place) -> list[str]:
+            vals = [p.id, p.map_name, *p.names.model_dump().values(), *p.synonyms]
+            return [v.casefold() for v in vals if v]
+
+        for p in self.places:
+            if q in terms(p):
+                return p
+        partial = [p for p in self.places if any(q in t or t in q for t in terms(p) if len(t) >= 3)]
+        return partial[0] if len(partial) == 1 else None
+
     def source_ids(self) -> set[str]:
         return {f.source_id for f in self.facts} | {p.source_id for p in self.places}

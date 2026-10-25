@@ -1,78 +1,95 @@
 # ==========================================================================
-# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ. Реальный список точек — после построения карты
-# робота (шаги 5.1–5.2). `map_name` должен совпадать с getPlaceList робота.
+# Точки карты робота (сняты с getPlaceList 2026-10-25, 9 точек; две служебные
+# точки зарядки — «Точка пополнения» и «Зарядная куча» — сюда не входят:
+# посетителей туда не водим).
 #
-#   id           — идентификатор точки (place_id в API)
-#   map_name     — имя точки ровно как на карте робота
+#   id           — идентификатор точки (place_id в API, агент передаёт "place:<id>")
+#   map_name     — имя точки РОВНО как на карте робота (регистр не важен)
 #   names        — название ru/kk/en
-#   synonyms     — как посетители называют это место
-#   description  — описание ru/kk/en (используется в ответах /ask и /look)
+#   synonyms     — как посетители называют это место (любой язык); агент видит их как aliases
+#   description  — описание ru/kk/en (ответы /ask, /look, агент)
 #   visual_hints — как помещение выглядит (подсказка vision-модели для /look)
-#   photos       — эталонные фото (пока не используются, шаг 6.3)
+#   photos       — эталонные фото (пока не используются)
 # ==========================================================================
 places:
   - id: reception
-    map_name: Ресепшен
-    names: {ru: Ресепшен, kk: Ресепшен, en: Reception}
-    synonyms: [ресепшн, стойка, администратор, reception, front desk, қабылдау]
+    map_name: Пункт приема
+    names: {ru: Ресепшен, kk: Қабылдау, en: Reception}
+    synonyms: [ресепшн, ресепшен, пункт приёма, пункт приема, стойка, администратор, регистрация, пропуск,
+               reception, front desk, check-in, қабылдау, тіркеу]
     description:
-      ru: Ресепшен у главного входа на первом этаже. Здесь регистрируют гостей и выдают пропуска.
-      kk: Ресепшен бірінші қабатта, басты кіреберіс жанында. Мұнда қонақтарды тіркеп, рұқсат қағаздарын береді.
-      en: The reception is by the main entrance on the first floor. Guests register and get passes here.
-    visual_hints: Длинная белая стойка с логотипом Astana Hub, за ней администраторы, рядом турникеты.
+      ru: Ресепшен — пункт приёма посетителей. Здесь регистрируют гостей, выдают пропуска и отвечают на вопросы.
+      kk: Қабылдау — келушілерді қабылдау орны. Мұнда қонақтарды тіркеп, рұқсат қағаздарын береді және сұрақтарға жауап береді.
+      en: "The reception desk: guests check in, get passes and ask questions here."
+    visual_hints: Стойка администратора с сотрудниками, рядом зона ожидания.
+    photos: []
+
+  - id: lift
+    map_name: lift
+    names: {ru: Лифт, kk: Лифт, en: Elevator}
+    synonyms: [лифт, лифты, подъёмник, подъемник, elevator, elevators, lift, lifts, көтергіш]
+    description:
+      ru: Лифт — подняться или спуститься на другие этажи.
+      kk: Лифт — басқа қабаттарға көтерілу немесе түсу үшін.
+      en: The elevator to get to the other floors.
+    visual_hints: Двери лифта с кнопкой вызова.
+    photos: []
+
+  - id: restroom
+    map_name: restroom
+    names: {ru: Туалет, kk: Дәретхана, en: Restroom}
+    synonyms: [туалет, уборная, санузел, wc, вц, restroom, toilet, bathroom, washroom, lavatory, дәретхана, әжетхана]
+    description:
+      ru: Туалет — ближайший санузел для посетителей.
+      kk: Дәретхана — келушілерге арналған ең жақын санузел.
+      en: The nearest restroom for visitors.
+    visual_hints: Дверь с пиктограммой туалета.
     photos: []
 
   - id: cafe
-    map_name: Кафе
+    map_name: cafe
     names: {ru: Кафе, kk: Кафе, en: Cafe}
-    synonyms: [кафешка, асхана, столовая, кофейня, coffee, буфет]
+    synonyms: [кафешка, кофейня, кофе, буфет, столовая, поесть, пообедать, еда, обед,
+               cafe, coffee, canteen, food, lunch, eat, асхана, кофе ішу, тамақ, тамақтану]
     description:
-      ru: Кафе на первом этаже справа от входа. Кофе, выпечка и бизнес-ланчи.
-      kk: Кафе бірінші қабатта, кіреберістің оң жағында. Кофе, тоқаштар және бизнес-ланчтар.
-      en: The cafe is on the first floor to the right of the entrance. Coffee, pastries and business lunches.
-    visual_hints: Барная стойка с кофемашиной, витрина с выпечкой, деревянные столики и высокие стулья.
+      ru: Кафе — кофе, выпечка и обеды.
+      kk: Кафе — кофе, тоқаштар және түскі ас.
+      en: "The cafe: coffee, pastries and lunch."
+    visual_hints: Барная стойка с кофемашиной, столики и стулья.
     photos: []
 
-  - id: coworking_2f
-    map_name: Коворкинг 2 этаж
-    names: {ru: Коворкинг, kk: Коворкинг, en: Coworking}
-    synonyms: [коворкинг, опенспейс, open space, рабочая зона, workspace]
+  - id: lecture_hall
+    map_name: lecture hall
+    names: {ru: Лекторий, kk: Дәріс залы, en: Lecture hall}
+    synonyms: [лекторий, лекционный зал, лекция, зал, аудитория, конференц-зал, сцена, мероприятие,
+               lecture hall, lecture room, auditorium, hall, conference hall, дәріс залы, дәріс, зал]
     description:
-      ru: Открытый коворкинг на втором этаже с длинными столами, розетками и тихими зонами.
-      kk: "Екінші қабаттағы ашық коворкинг: ұзын үстелдер, розеткалар және тыныш аймақтар."
-      en: Open coworking on the second floor with long desks, power outlets and quiet zones.
-    visual_hints: Большое светлое пространство с длинными общими столами, люди с ноутбуками, зелёные растения.
+      ru: Лекторий — зал для лекций, митапов и мероприятий.
+      kk: Дәріс залы — дәрістер, митаптар мен іс-шараларға арналған зал.
+      en: The lecture hall for talks, meetups and events.
+    visual_hints: Ряды стульев перед экраном или сценой.
     photos: []
 
-  - id: main_hall
-    map_name: Главный зал
-    names: {ru: Главный зал, kk: Басты зал, en: Main hall}
-    synonyms: [конференц-зал, сцена, зал, аудитория, event hall, conference hall]
+  - id: tiktok_space
+    map_name: tiktok space
+    names: {ru: TikTok-пространство, kk: TikTok кеңістігі, en: TikTok space}
+    synonyms: [тикток, тик ток, тикток спейс, тикток-пространство, студия, съёмка, снимать видео, контент,
+               tiktok, tik tok, tiktok space, creator space, studio, content studio, тикток кеңістігі, студия]
     description:
-      ru: Главный зал для конференций и митапов на первом этаже, вмещает до 300 человек.
-      kk: Бірінші қабаттағы конференциялар мен митаптарға арналған басты зал, 300 адамға дейін сыяды.
-      en: The main hall for conferences and meetups on the first floor, seats up to 300 people.
-    visual_hints: Сцена с большим LED-экраном, ряды стульев, прожекторы на потолке.
+      ru: TikTok-пространство — студия для съёмки видео и создания контента.
+      kk: TikTok кеңістігі — бейне түсіруге және контент жасауға арналған студия.
+      en: "The TikTok space: a studio for shooting videos and creating content."
+    visual_hints: Съёмочная зона с кольцевым светом и фоном для видео.
     photos: []
 
-  - id: meeting_room_a
-    map_name: Переговорная A
-    names: {ru: Переговорная A, kk: А келіссөз бөлмесі, en: Meeting room A}
-    synonyms: [переговорка, переговорная, meeting room, келіссөз бөлмесі]
+  - id: snacks
+    map_name: snacks
+    names: {ru: Снеки, kk: Тіскебасарлар, en: Snacks}
+    synonyms: [снеки, снек, перекус, автомат, вендинг, вендинговый автомат, вода, напитки, чипсы, шоколадка,
+               snacks, snack, vending, vending machine, drinks, water, тіскебасар, сусын, су]
     description:
-      ru: Переговорная A на втором этаже на 8 человек, с экраном для презентаций.
-      kk: Екінші қабаттағы 8 адамға арналған А келіссөз бөлмесі, презентация экраны бар.
-      en: Meeting room A on the second floor seats 8 people and has a presentation screen.
-    visual_hints: Небольшая комната со стеклянной стеной, овальный стол, телевизор на стене.
-    photos: []
-
-  - id: elevators
-    map_name: Лифты
-    names: {ru: Лифты, kk: Лифтілер, en: Elevators}
-    synonyms: [лифт, elevator, lift, туалет, toilet, дәретхана]
-    description:
-      ru: Лифтовый холл в центре здания. Рядом туалеты.
-      kk: Ғимарат ортасындағы лифт холлы. Жанында дәретханалар бар.
-      en: The elevator hall is in the center of the building. Restrooms are nearby.
-    visual_hints: Холл с тремя металлическими дверями лифтов и указателями этажей.
+      ru: Снеки — зона с перекусом и напитками.
+      kk: Тіскебасарлар — тіскебасар мен сусындар аймағы.
+      en: The snacks area with snacks and drinks.
+    visual_hints: Вендинговый автомат или стойка со снеками и напитками.
     photos: []
