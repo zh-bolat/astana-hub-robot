@@ -7,10 +7,12 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import kz.astanahub.robot.core.CrashReport
 import kz.astanahub.robot.ui.setOnHoldListener
 
 /**
@@ -40,14 +42,29 @@ class TechPauseActivity : AppCompatActivity() {
             setPadding(0, 48, 0, 0)
             setTextColor(ContextCompat.getColor(this@TechPauseActivity, R.color.hub_muted))
         }
+        // Стек последнего падения — для оператора (на роботе нет ADB, экран — единственный лог).
+        val crash = TextView(this).apply {
+            text = guard.lastCrash()?.let { CrashReport.head(it) } ?: ""
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, 48, 0, 0)
+            setTextColor(ContextCompat.getColor(this@TechPauseActivity, R.color.hub_muted))
+            setTextIsSelectable(true)
+        }
         setContentView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(64, 64, 64, 64)
+            ScrollView(this).apply {
                 setBackgroundColor(ContextCompat.getColor(this@TechPauseActivity, R.color.hub_background))
-                addView(title)
-                addView(hint)
+                isFillViewport = true
+                addView(
+                    LinearLayout(this@TechPauseActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        setPadding(64, 64, 64, 64)
+                        addView(title)
+                        addView(hint)
+                        addView(crash)
+                    },
+                )
             },
         )
         title.setOnHoldListener(HOLD_MILLIS) { guard.leavePause() }

@@ -15,6 +15,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.audio.MicRecorder
@@ -22,6 +23,7 @@ import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.RetrofitBackendApi
 import kz.astanahub.robot.backend.BackendUrlPolicy
 import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.core.CrashReport
 import kz.astanahub.robot.core.LogSafe
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.NoiseStats
@@ -76,6 +78,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         val router = container.voice
         val server = container.serverVoice
 
+        section("Адрес сервера") {
         // Адрес сервера
         binding.serverUrl.setText(container.backend.url.value)
         binding.serverStatus.text = "Сейчас: ${container.backend.url.value.ifEmpty { "не задан" }}"
@@ -104,7 +107,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             log("Адрес сервера сброшен: ${container.backend.url.value.ifEmpty { "не задан" }}")
             checkServer()
         }
+        }
 
+        section("Голос") {
         // Голос: ASR и TTS по языкам
         val settings = container.voiceSettings
         bindSource(binding.asrGroup, R.id.asrGroupBuiltin, R.id.asrGroupServer, settings.config.value.asr) {
@@ -162,7 +167,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             container.phraseCacheWarmer.warmUp(force = true)
             log("Кеш голоса: синтез заново")
         }
+        }
 
+        section("Подсказка языка STT") {
         // Подсказка языка для серверного STT
         val hintIds = mapOf<Lang?, Int>(null to R.id.hintAuto, Lang.RU to R.id.hintRu, Lang.KK to R.id.hintKk, Lang.EN to R.id.hintEn)
         binding.hintGroup.check(hintIds.getValue(server.sttLangHint))
@@ -171,7 +178,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             server.sttLangHint = hintIds.entries.first { it.value == id }.key
             log("STT язык: ${server.sttLangHint?.code ?: "авто"}")
         }
+        }
 
+        section("TTS") {
         // TTS
         binding.builtinRu.setOnClickListener { speakBuiltin(Lang.RU, R.string.diag_test_ru) }
         binding.builtinKk.setOnClickListener { speakBuiltin(Lang.KK, R.string.diag_test_kk) }
@@ -184,7 +193,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             router.stopSpeaking()
             log("TTS остановлен")
         }
+        }
 
+        section("Микрофон") {
         // Микрофон
         binding.recordButton.setOnClickListener {
             if (!server.hasMicPermission()) { log("Нет разрешения RECORD_AUDIO — дайте его на главном экране"); return@setOnClickListener }
@@ -197,13 +208,17 @@ class DiagnosticsActivity : AppCompatActivity() {
             container.builtinMic.setBuiltinListening(on)
             log("Встроенный ASR: ${if (on) "включён" else "выключен (mute)"}")
         }
+        }
 
+        section("Android TTS") {
         // Android TTS (запасной голос)
         binding.androidRu.setOnClickListener { speakAndroid(Lang.RU, R.string.diag_test_ru) }
         binding.androidKk.setOnClickListener { speakAndroid(Lang.KK, R.string.diag_test_kk) }
         binding.androidEn.setOnClickListener { speakAndroid(Lang.EN, R.string.diag_test_en) }
         binding.androidInfo.setOnClickListener { logAndroidTtsInfo() }
+        }
 
+        section("Масштаб") {
         // Масштаб интерфейса
         val percent = UiScale.percent(this)
         binding.scaleSlider.value = percent.toFloat()
@@ -217,7 +232,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             }
         }
         binding.screenInfo.text = screenInfo()
+        }
 
+        section("Робот") {
         // Робот: RobotApi и карта
         binding.dumpPlaces.setOnClickListener {
             lifecycleScope.launch {
@@ -233,6 +250,9 @@ class DiagnosticsActivity : AppCompatActivity() {
                     else "getPosition: x=${"%.2f".format(pose.x)} y=${"%.2f".format(pose.y)} theta=${"%.2f".format(pose.theta)} рад")
             }
         }
+        }
+
+        section("Режим разговора") {
         // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
         val chat = container.chatSettings
         binding.chatModeGroup.check(
@@ -253,7 +273,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             log("Разговор: ${mode.code}" + if (mode == ChatMode.LIVE) " (WS /v1/live; сбой → agent, повтор через 30 с)" else "")
             if (mode == ChatMode.LIVE) log("Live-микрофон: ${container.liveMicrophone.lastConfig}")
         }
+        }
 
+        section("Посетитель (эмулятор)") {
         // Эмулятор: подошёл / ушёл человек (на роботе — PersonApi, кнопок нет).
         val simulator = container.presenceSimulator
         binding.presenceLabel.visibility = if (simulator == null) View.GONE else View.VISIBLE
@@ -266,7 +288,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             simulator?.leave()
             log("Посетитель: ушёл (заснёт через ~15 с)")
         }
+        }
 
+        section("Места и кнопки") {
         binding.refreshPlaces.setOnClickListener {
             lifecycleScope.launch {
                 container.places.invalidateMap() // перечитать и точки карты, не ждать TTL
@@ -280,8 +304,9 @@ class DiagnosticsActivity : AppCompatActivity() {
         binding.closeButton.setOnClickListener { finish() }
         // «Назад» — на главный экран.
         onBackPressedDispatcher.addCallback(this) { finish() }
+        }
 
-        lifecycleScope.launch {
+        lifecycleScope.launch(sectionHandler("Статусы")) {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     router.builtinAsr.transcripts.collect { t ->
@@ -315,6 +340,9 @@ class DiagnosticsActivity : AppCompatActivity() {
                 }
                 launch { server.micLevel.collect { binding.levelBar.setProgressCompat((it * 300).toInt().coerceAtMost(100), false) } }
             }
+        }
+        (application as AstanaHubApp).crashGuard.lastCrash()?.let {
+            log("Последнее падение приложения (${CrashReport.DIR}/${CrashReport.LAST}):\n" + CrashReport.head(it, 25))
         }
         log("Голос: ${container.voiceSettings.config.value.describe()}, flavor: ${getString(R.string.flavor_name)}, backend: ${container.backend.url.value.ifEmpty { "не задан" }}")
     }
@@ -485,6 +513,24 @@ class DiagnosticsActivity : AppCompatActivity() {
     }
 
     /** [pii] — текст посетителя в строке: на экран целиком, в logcat — только длина и хеш. */
+    /**
+     * Блок настройки экрана: ошибка одного виджета не роняет приложение (на роботе падение = выброс из киоска),
+     * а попадает в лог диагностики, чтобы её было видно.
+     */
+    private inline fun section(name: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            Timber.e(e, "diagnostics: section %s failed", name)
+            log("ОШИБКА в блоке «$name»: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun sectionHandler(name: String) = CoroutineExceptionHandler { _, e ->
+        Timber.e(e, "diagnostics: coroutine %s failed", name)
+        log("ОШИБКА в блоке «$name»: ${e.javaClass.simpleName}: ${e.message}")
+    }
+
     private fun log(line: String, pii: String? = null) {
         val text = "${timeFormat.format(Date())}  $line\n"
         if (pii == null) Timber.i("DIAG %s", line) else Timber.i("DIAG (скрыто) %s", LogSafe.redact(pii))

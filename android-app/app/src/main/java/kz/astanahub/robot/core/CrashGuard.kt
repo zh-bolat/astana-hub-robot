@@ -22,10 +22,14 @@ class CrashGuard(
     context: Context,
     private val mainActivity: Class<out Activity>,
     private val pauseActivity: Class<out Activity>,
+    private val buildLabel: String = "",
 ) : Thread.UncaughtExceptionHandler {
 
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Стек последнего падения (см. [CrashReport]) — для экрана паузы и лога диагностики. */
+    fun lastCrash(): String? = runCatching { CrashReport.load(app.filesDir) }.getOrNull()
 
     fun install() {
         Thread.setDefaultUncaughtExceptionHandler(this)
@@ -52,6 +56,8 @@ class CrashGuard(
     override fun uncaughtException(thread: Thread, error: Throwable) {
         try {
             Timber.e(error, "uncaught exception in %s", thread.name)
+            // На роботе нет logcat — стек на диск, покажем на экране паузы и в диагностике.
+            runCatching { CrashReport.save(app.filesDir, thread, error, buildLabel) }
             val now = SystemClock.elapsedRealtime()
             if (inPause(now)) return // уже на паузе — не крутим перезапуски
             val history = prefs.getString(KEY_HISTORY, "").orEmpty()

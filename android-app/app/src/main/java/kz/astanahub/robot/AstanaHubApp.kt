@@ -23,7 +23,10 @@ class AstanaHubApp : Application() {
         // (только длина и хеш, см. core/LogSafe). В release дерево Timber не сажаем — logcat пуст.
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
         // Первым делом — обработчик падений: перезапуск киоска вместо системного диалога.
-        crashGuard = CrashGuard(this, MainActivity::class.java, TechPauseActivity::class.java).also { it.install() }
+        crashGuard = CrashGuard(
+            this, MainActivity::class.java, TechPauseActivity::class.java,
+            buildLabel = "${BuildConfig.FLAVOR} ${BuildConfig.BUILD_TYPE} ${BuildConfig.VERSION_NAME}",
+        ).also { it.install() }
         techPause = crashGuard.inPause()
         if (techPause) {
             Timber.w("technical pause: SDK and network are not started")
