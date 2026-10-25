@@ -470,7 +470,7 @@ class LiveConversation(FrameProcessor):
                         if data["type"] == "guide_to":
                             turn.guide.append(data)
                         else:
-                            await self._send_queued(_action_event(data))
+                            await self._send_queued(_action_event(data, turn.turn_id))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -656,7 +656,7 @@ class LiveConversation(FrameProcessor):
             await self._finish(turn, interrupted=False)
         guide, turn.guide = turn.guide, []
         for action in guide:  # провожать — только после того, как робот договорил
-            await self.send_now(_action_event(action))
+            await self.send_now(_action_event(action, turn.turn_id))
 
     # ---------- метрики ----------
     def _record_turn(
@@ -708,8 +708,9 @@ class LiveConversation(FrameProcessor):
             await self._cancel(task)
 
 
-def _action_event(action: dict) -> dict:
-    return event("action", type_=action["type"], place_id=action.get("place_id"))
+def _action_event(action: dict, turn_id: str) -> dict:
+    """action хода: turn_id — по нему робот связывает guide_to с playback_done этого хода."""
+    return event("action", type_=action["type"], place_id=action.get("place_id"), turn_id=turn_id)
 
 
 def _perf_at(monotonic_t: float) -> float:

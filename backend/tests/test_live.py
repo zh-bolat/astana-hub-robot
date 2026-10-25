@@ -601,11 +601,21 @@ def test_guide_to_after_playback_done(live_server):
         async with session(url) as c:
             c.speak(0.5)
             end = await c.wait("turn_end")
+            start = c.events("turn_start")[0]
             await asyncio.sleep(0.3)
             assert not c.events("action")  # провожать — только когда робот договорил
             await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
             action = await c.wait("action")
-            assert action == {"type": "action", "type_": "guide_to", "place_id": "cafe"}
+            # turn_id хода: робот едет сразу (этот ход уже доигран), а не ждёт ещё один playback_done
+            assert action == {
+                "type": "action",
+                "type_": "guide_to",
+                "place_id": "cafe",
+                "turn_id": start["turn_id"],
+            }
+            assert end["turn_id"] == start["turn_id"]
+            kinds = c.kinds()
+            assert kinds.index("turn_start") < kinds.index("turn_end") < kinds.index("action")
 
     run(scenario())
 
@@ -620,7 +630,9 @@ def test_where_is_action_is_sent_with_answer(live_server):
             await c.wait("turn_end")
             kinds = c.kinds()
             assert kinds.index("action") < kinds.index("turn_end")
-            assert c.events("action")[0]["type_"] == "where_is"
+            action = c.events("action")[0]
+            assert action["type_"] == "where_is"
+            assert action["turn_id"] == c.events("turn_start")[0]["turn_id"]
 
     run(scenario())
 
