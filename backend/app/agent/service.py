@@ -41,6 +41,7 @@ from openai import AsyncOpenAI, OpenAIError
 
 from app.agent.fastpath import (
     PlaceIntent,
+    direction_phrase,
     is_consent,
     match_place_intent,
     place_reply,
@@ -115,9 +116,12 @@ class LiveTurn:
       модели (в /v1/chat текст ответа придерживается до конца: вдруг в нём же вызов инструмента). Если
       в ответе начался вызов инструмента, дальнейший текст этого ответа не озвучивается.
     - Журнал вопросов и память агента пишутся не по done, а когда живой режим знает, что робот успел
-      сказать на самом деле: `commit(said, interrupted)` — только произнесённые фразы."""
+      сказать на самом деле: `commit(said, interrupted)` — только произнесённые фразы.
+    - `directions` — свежие фразы «где X» от позиции робота (state.directions): place_id → {ru|kk|en: фраза}.
+      Их говорят быстрый путь where_is и инструмент where_is агента; в /v1/chat их нет."""
 
     endpoint: str = "live"
+    directions: dict[str, dict[str, str]] = field(default_factory=dict)
     first_token_at: float | None = None  # time.perf_counter() первого токена модели
     _commit: Callable[[list[str], bool], Awaitable[None]] | None = None
 
@@ -659,7 +663,9 @@ class ChatService:
         kb = self.store.get()
         corpus = kb_corpus(kb)
         history = await self._history(req.session_id)
-        ctx = ChatContext(kb=kb, lang=st.lang)
+        ctx = ChatContext(
+            kb=kb, lang=st.lang, directions=st.live.directions if st.live is not None else {}
+        )
         agent = Agent[ChatContext](
             name="astana_hub",
             instructions=agent_instructions(kb, self.settings.answer_mode),
@@ -867,13 +873,18 @@ class ChatService:
         """Шаблонный ответ + действие, как у агента: журнал (category=kb), память с вызовом инструмента."""
         place, lang = intent.place, intent.lang
         consent = offer is not None and offer.place_id == place.id and intent.kind == "guide_to"
-        emotion, phrases = place_reply(intent)
+        direction = None
+        if intent.kind == "where_is" and st.live is not None:
+            direction = direction_phrase(st.live.directions, place, lang)
+        emotion, phrases = place_reply(intent, direction=direction)
         st.lang, st.category, st.provider = lang, "kb", "local:places"
         st.emotion = emotion
         action = {"type": intent.kind, "place_id": place.id}
         st.actions.append(action)
         st.sources = [place.source_id]
         result = {"ok": True, "place_id": place.source_id, "name": place.names.get(lang)}
+        if direction:
+            result["direction"] = direction
         st.calls = [
             (
                 intent.kind,
@@ -890,14 +901,17 @@ class ChatService:
                 "place_id": place.id,
                 "lang": lang,
                 "consent": consent,
+                "direction": direction is not None,
             },
         )
         done = await self._finish(req, request_id, st, started)
         yield "action", action
         for phrase in phrases:
+            # шаблонная фраза: звук можно взять из кеша (live), текст не зависит от модели;
+            # фраза робота о направлении меняется с его позицией — в кеш не кладём
+            cache = phrase != direction
             for kind, data in _phrase_events(st, phrase):
-                # шаблонная фраза: звук можно взять из кеша (live), текст не зависит от модели
-                yield kind, (data | {"cache": True} if kind == "phrase" else data)
+                yield kind, (data | {"cache": cache} if kind == "phrase" else data)
         yield "done", done
 
     def _remember_offer(self, req: ChatRequest, st: _ChatState) -> None:

@@ -16,7 +16,9 @@ LIVE_TURN_MAX_SILENCE_S (без smart-turn — LIVE_TURN_SILENCE_S). Затем 
 Ответ. Тот же агент, что у /v1/chat (ChatService: промпт, тулы, память, эмоции, фильтры, шум → ignored без
 вызова модели), но фразы приходят по мере генерации (LiveTurn). Явный запрос места («где кафе?», «проводите
 до лифта», «да» на «Проводить вас?») ChatService отвечает шаблоном без модели (app/agent/fastpath.py).
-Каждая фраза — событие phrase и TTSSpeakFrame; события хода идут обычными кадрами и встают в очередь за звуком
+Направление «где X» знает только робот: он шлёт готовые фразы state.directions (сторона и метры от своей
+позиции), последний набор сессии (не старше DIRECTIONS_TTL_S) уходит в ход агента (LiveTurn.directions) —
+и быстрый путь, и where_is агента говорят эту фразу. Каждая фраза — событие phrase и TTSSpeakFrame; события хода идут обычными кадрами и встают в очередь за звуком
 (TTS придерживает не-системные кадры за своими аудио-контекстами), поэтому порядок у клиента: turn_start →
 emotion → phrase → звук → … → turn_end. guide_to придерживается до playback_done этого хода; where_is и look
 уходят сразу. Все action несут turn_id своего хода.
@@ -84,6 +86,40 @@ from app.tts_text import is_filler_only, normalize_for_tts
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 MAX_QUESTION_CHARS = 500
+# state.directions: готовые фразы «где X» от позиции робота (docs/api-contract.md, WS /v1/live)
+DIRECTIONS_TTL_S = 600.0  # набору старше 10 мин не верим: робот мог уехать, а новый набор не дошёл
+MAX_DIRECTIONS = 64
+MAX_DIRECTION_KEY = 64
+MAX_DIRECTION_CHARS = 300
+_DIRECTION_LANGS = ("ru", "kk", "en")
+_SPACES = re.compile(r"\s+")
+
+
+def parse_directions(raw: object) -> dict[str, dict[str, str]] | None:
+    """state.directions → {place_id: {ru|kk|en: фраза}}. Не объект (нет поля, null, мусор) — None: набор не
+    меняется. Объект — новый полный набор (пустой — у робота нет позиции); неверные места и фразы
+    отбрасываются молча: ключ — строка 1–64 символа, язык — ru/kk/en, фраза — строка 1–300 символов, мест ≤ 64."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, dict[str, str]] = {}
+    for key, value in raw.items():
+        if len(out) >= MAX_DIRECTIONS:
+            break
+        if not isinstance(key, str) or not 0 < len(key) <= MAX_DIRECTION_KEY:
+            continue
+        if not isinstance(value, dict):
+            continue
+        phrases: dict[str, str] = {}
+        for lang in _DIRECTION_LANGS:
+            text = value.get(lang)
+            if not isinstance(text, str):
+                continue
+            text = _SPACES.sub(" ", text).strip()
+            if 0 < len(text) <= MAX_DIRECTION_CHARS:
+                phrases[lang] = text
+        if phrases:
+            out[key] = phrases
+    return out
 
 
 def _words(text: str) -> list[str]:
@@ -187,6 +223,9 @@ class LiveConversation(FrameProcessor):
         self.lang: Lang = lang
         self.place_id: str | None = None
         self.navigating = False
+        # последний набор state.directions и когда пришёл (time.monotonic())
+        self._directions: dict[str, dict[str, str]] = {}
+        self._directions_at: float | None = None
         self.playout = playout
         self.echo_gate = echo_gate
         self.metrics = metrics
@@ -473,7 +512,7 @@ class LiveConversation(FrameProcessor):
         req = ChatRequest(
             question=text, lang=lang, session_id=self.session_id, place_id=self.place_id
         )
-        turn = self._new_turn(lang, live=LiveTurn())
+        turn = self._new_turn(lang, live=LiveTurn(directions=self.directions()))
         turn.eot_at = time.perf_counter()
         turn.speech_end_at = _perf_at(speech_end)
         turn.task = self._spawn(self._run_agent(turn, req, stt_final_ms), "live_agent")
@@ -727,14 +766,24 @@ class LiveConversation(FrameProcessor):
             await self.send_now(event("listening"))
         elif kind == "playback_done":
             await self._on_playback_done(str(msg.get("turn_id") or ""))
-        elif kind == "state":
+        elif kind == "state":  # поля независимы: каждое — только если пришло
             self._set_place(msg.get("place_id"))
             if isinstance(msg.get("navigating"), bool):
                 self.navigating = msg["navigating"]
+            directions = parse_directions(msg.get("directions"))
+            if directions is not None:
+                self._directions, self._directions_at = directions, time.monotonic()
 
     def _set_place(self, place_id: object) -> None:
         if isinstance(place_id, str) and 0 < len(place_id) <= 64:
             self.place_id = place_id
+
+    def directions(self) -> dict[str, dict[str, str]]:
+        """Фразы «где X» от робота, если набор свежий (≤ DIRECTIONS_TTL_S), иначе пусто."""
+        at = self._directions_at
+        if at is None or time.monotonic() - at > DIRECTIONS_TTL_S:
+            return {}
+        return self._directions
 
     async def _on_playback_done(self, turn_id: str) -> None:
         turn = self._last_turn

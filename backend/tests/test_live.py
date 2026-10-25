@@ -15,6 +15,7 @@ import struct
 import threading
 import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 import pytest
 import uvicorn
@@ -44,12 +45,19 @@ from websockets.frames import Close
 
 from app.agent.service import LiveTurn
 from app.config import Settings
-from app.live.conversation import cut_words, is_echo
+from app.live.conversation import (
+    DIRECTIONS_TTL_S,
+    LiveConversation,
+    cut_words,
+    is_echo,
+    parse_directions,
+)
 from app.live.playout import EchoGate, Playout, rms
 from app.live.protocol import AUDIO_FORMAT, LiveSerializer
 from app.live.services import LiveServices, SegmentedProviderSTT, build_live_services
 from app.llm.fake import FakeProvider
 from app.main import create_app
+from app.metrics import NULL_RECORDER
 from app.schemas import ChatRequest
 from app.speech.base import SttResult
 from tests.conftest import AUTH, JPEG, SESSION, TOKEN
@@ -790,6 +798,151 @@ def test_template_phrase_audio_comes_from_cache_second_time(live_server, monkeyp
     assert ("Пойдёмте, провожу до лифта!", "ru") in fakes.synth
 
 
+# ---------- направление от робота: state.directions ----------
+DIRECTIONS = {
+    "cafe": {
+        "ru": "Кафе — справа от вас, примерно в 15 метрах. Могу проводить.",
+        "kk": "Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.",
+        "en": "Cafe is on your right, about 15 meters away.",
+    },
+    "lift": {"ru": "Лифт — слева от вас, примерно в 3 метрах."},
+}
+
+
+def test_parse_directions_validates_and_drops_garbage():
+    assert parse_directions(None) is None  # поля нет — набор не трогаем
+    assert parse_directions(["cafe"]) is None
+    assert parse_directions("cafe") is None
+    assert parse_directions({}) == {}  # у робота нет позиции — фраз нет
+    raw = {
+        "cafe": {"ru": "  Кафе —\n справа.  ", "kk": 15, "en": "", "de": "Rechts.", "fr": None},
+        "lift": "слева",  # не объект
+        "x" * 65: {"ru": "длинный ключ"},
+        "": {"ru": "пустой ключ"},
+        "hall": {"ru": "я" * 301},  # фраза длиннее 300
+        "restroom": {"en": "e" * 300},
+        "nothing": {"de": "nur Deutsch"},
+    }
+    assert parse_directions(raw) == {
+        "cafe": {"ru": "Кафе — справа."},
+        "restroom": {"en": "e" * 300},
+    }
+    many = {f"p{i}": {"ru": f"Место {i}."} for i in range(100)}
+    parsed = parse_directions(many)
+    assert parsed is not None and len(parsed) == 64 and "p0" in parsed and "p64" not in parsed
+
+
+def test_state_directions_are_independent_and_expire(settings):
+    async def check() -> None:
+        playout = Playout(sample_rate=24_000)
+        conv = LiveConversation(
+            chat=None,  # type: ignore[arg-type]
+            settings=settings,
+            session_id=SESSION,
+            lang="ru",
+            playout=playout,
+            echo_gate=EchoGate(playout, threshold=1800, tail_s=0.3),
+            metrics=NULL_RECORDER,
+        )
+        assert conv.directions() == {}
+        await conv._on_client({"type": "state", "place_id": "reception", "navigating": True})
+        await conv._on_client({"type": "state", "directions": DIRECTIONS})
+        # directions отдельно от place_id / navigating: те не меняются
+        assert (conv.place_id, conv.navigating) == ("reception", True)
+        assert conv.directions()["cafe"]["kk"] == DIRECTIONS["cafe"]["kk"]
+        await conv._on_client({"type": "state", "place_id": "lift", "navigating": False})
+        assert (
+            conv.directions()["lift"] == DIRECTIONS["lift"]
+        )  # state без directions — набор тот же
+        await conv._on_client({"type": "state", "directions": "мусор"})
+        assert "cafe" in conv.directions()  # мусор не стирает набор, ошибки нет
+        await conv._on_client({"type": "state", "directions": {"lift": DIRECTIONS["lift"]}})
+        assert list(conv.directions()) == ["lift"]  # новый набор — полный, заменяет старый
+        conv._directions_at = time.monotonic() - DIRECTIONS_TTL_S - 1
+        assert conv.directions() == {}  # старше 10 минут — не верим
+        await conv._on_client({"type": "state", "directions": {}})
+        assert conv.directions() == {}
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    ("lang", "question", "spoken", "tts"),
+    [
+        (
+            "ru",
+            "Где здесь кафе?",
+            ["Кафе — справа от вас, примерно в 15 метрах.", "Проводить вас?"],
+            "примерно в пятнадцати метрах",
+        ),
+        (
+            "kk",
+            "Кафе қайда?",
+            ["Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.", "Апарып салайын ба?"],
+            "шамамен он бес метр жерде",
+        ),
+    ],
+)
+def test_fast_place_says_robot_direction(live_server, lang, question, spoken, tts):
+    model = FakeModel(say("не должна вызываться"))
+    url, app, fakes = live_server(model, script=[question])
+
+    async def scenario() -> None:
+        async with session(url, lang=lang) as c:
+            await c.send({"type": "state", "directions": DIRECTIONS})
+            c.speak(0.5)
+            end = await c.wait("turn_end")
+            assert [p["text"] for p in c.events("phrase")] == spoken
+            action = c.events("action")[0]
+            assert (action["type_"], action["place_id"]) == ("where_is", "cafe")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+
+    run(scenario())
+    assert model.requests == []
+    spoken_tts = " ".join(fakes.tts[0].texts)
+    assert tts in spoken_tts and "15" not in spoken_tts  # числа словами, с падежом
+    assert not any(
+        "метр" in text for text, _ in fakes.synth
+    )  # фраза о направлении — не в кеш звука
+    assert messages_of(app)[-1] == ("assistant", " ".join(spoken), None)
+
+
+def test_fast_place_without_direction_for_this_place_answers_as_before(live_server):
+    url, _, _ = live_server(FakeModel(), script=["Где здесь кафе?"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await c.send({"type": "state", "directions": {"lift": DIRECTIONS["lift"]}})
+            c.speak(0.5)
+            await c.wait("turn_end")
+            phrases = [p["text"] for p in c.events("phrase")]
+            assert phrases[-1] == "Проводить вас?" and "метр" not in " ".join(phrases)
+            assert "экран" in phrases[0]  # стрелка на экране, как без направлений
+
+    run(scenario())
+
+
+def test_agent_where_is_gets_robot_direction(live_server):
+    model = FakeModel(
+        call("where_is", {"place_id": "place:cafe"}),
+        say("[happy] Кафе — справа от вас, примерно в 15 метрах. Проводить вас?"),
+    )
+    url, _, _ = live_server(model, script=["Где кафе?"], live_fast_places=False)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await c.send({"type": "state", "directions": DIRECTIONS})
+            c.speak(0.5)
+            await c.wait("turn_end")
+
+    run(scenario())
+    result = json.loads(model.requests[1]["messages"][-1]["content"])
+    assert result["ok"] is True and result["place_id"] == "place:cafe"
+    # своё «Могу проводить.» робота убрано: предложить проводить — дело ответа
+    assert result["direction"] == "Кафе — справа от вас, примерно в 15 метрах."
+
+
 def test_voice_follows_each_phrase_and_v3_tag_only_in_tts(live_server):
     """Ход начался как русский, ответ — по-казахски: голос kk, тег подачи только в запросе синтеза."""
     model = FakeModel(say("[happy] Кафе бірінші қабатта. Кофе мен тоқаш бар."))
@@ -1114,6 +1267,27 @@ def test_agent_live_turn_defers_memory_until_commit(make_client):
         ("visitor", "Расскажи про кафе", None),
         ("assistant", "Кафе на первом этаже.", None),
     ]
+
+
+def test_agent_where_is_direction_only_in_live_and_in_answer_language(make_client):
+    async def tool_result(live: LiveTurn | None, lang: str) -> dict:
+        model = FakeModel(call("where_is", {"place_id": "cafe"}), say("[happy] Ок."))
+        client = make_client(chat_client=model.client(), live_fast_places=False)
+        req = ChatRequest(question="Кафе қайда?", lang=lang, session_id=SESSION)
+        async with aclosing(client.app.state.chat.chat_stream(req, "req_dir", live=live)) as evs:
+            async for _ in evs:
+                pass
+        return json.loads(model.requests[1]["messages"][-1]["content"])
+
+    async def check() -> None:
+        plain = await tool_result(None, "kk")  # /v1/chat: направлений нет — как раньше
+        assert plain["ok"] is True and "direction" not in plain
+        live = await tool_result(LiveTurn(directions=DIRECTIONS), "kk")
+        assert live["direction"] == DIRECTIONS["cafe"]["kk"]
+        no_lang = await tool_result(LiveTurn(directions={"cafe": {"en": "Right."}}), "kk")
+        assert "direction" not in no_lang  # фразы на языке ответа нет — без direction
+
+    asyncio.run(check())
 
 
 def test_real_services_build_without_network(settings):

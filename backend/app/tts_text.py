@@ -4,7 +4,8 @@
 - скобки: [..] — вырезаются (у v3 это теги звуков), (..) — содержимое остаётся, через запятую;
 - междометия в начале фразы («Хм,», «Ммм…», «Э-э,», «Ну,», «Um,») — убираются;
 - числа и время словами для ru и kk: «с 9:00 до 18:00» → «с девяти до восемнадцати», «9:00-ден 18:00-ге
-  дейін» → «тоғыздан он сегізге дейін», «на 2 этаже» → «на втором этаже», «2-қабат» → «екінші қабат»;
+  дейін» → «тоғыздан он сегізге дейін», «на 2 этаже» → «на втором этаже», «2-қабат» → «екінші қабат»,
+  «в 15 метрах» → «в пятнадцати метрах» (падеж — по существительному после числа);
 - словарь произношений: Astana Hub → Астана Хаб, TikTok → Тик-Ток, Wi-Fi → вай-фай / уай-фай, IT → ай-ти…
   Дополняется без программиста файлом `pronunciations.yaml` в папке базы знаний (KNOWLEDGE_DIR):
 
@@ -193,6 +194,8 @@ _RU_FEM = (
     "тысяч",
 )
 _RU_NEUT = ("мест", "окн", "кресл")
+# Предложный падеж по существительному после числа: «в 15 метрах» → «в пятнадцати метрах», «в 21 метре»
+_RU_LOC_SINGULAR = frozenset(["метре", "километре", "сантиметре", "шаге"])
 # Порядковые: «2 этаж», «на 3 этаже», «в 2026 году»; окончание существительного → падеж
 _RU_ORD_NOUNS = re.compile(
     r"(?P<n>\d{1,4})\s+(?P<noun>(?:этаж|корпус|подъезд|год)(?:ом|е|у|а|)?)\b", re.I
@@ -226,6 +229,17 @@ def _ru_case_before(text: str, start: int) -> str:
     if prev in _RU_LOC_PREP:
         return "p"
     return "n"
+
+
+def _ru_case_after(text: str, end: int) -> str | None:
+    """Падеж, который требует существительное после числа: «метрах», «минутах», «метре» → предложный."""
+    m = re.match(r"\s+([^\W\d_]+)", text[end:])
+    if not m:
+        return None
+    word = m.group(1).lower()
+    if (len(word) >= 5 and word.endswith(("ах", "ях"))) or word in _RU_LOC_SINGULAR:
+        return "p"
+    return None
 
 
 def _ru_gender_after(text: str, end: int) -> str:
@@ -323,7 +337,9 @@ def _ru_numbers(text: str) -> str:
     text = _PERCENT.sub(percent, text)
     return _INT.sub(
         lambda m: _ru_card(
-            int(m["n"]), _ru_case_before(m.string, m.start()), _ru_gender_after(m.string, m.end())
+            int(m["n"]),
+            _ru_case_after(m.string, m.end()) or _ru_case_before(m.string, m.start()),
+            _ru_gender_after(m.string, m.end()),
         ),
         text,
     )

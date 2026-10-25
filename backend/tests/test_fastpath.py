@@ -10,6 +10,7 @@ import pytest
 from app.agent.fastpath import (
     _kk_dative,
     _ru_genitive,
+    direction_phrase,
     is_consent,
     match_place_intent,
     place_reply,
@@ -181,3 +182,67 @@ def test_kk_dative(name, dat):
 )
 def test_consent(text, yes):
     assert is_consent(text) is yes
+
+
+# ---------- направление от робота (state.directions WS /v1/live) ----------
+DIRECTIONS = {
+    "cafe": {
+        "ru": "Кафе — справа от вас, примерно в 15 метрах.",
+        "kk": "Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.",
+        "en": "Cafe is on your right, about 15 meters away.",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("text", "spoken"),
+    [
+        ("Где кафе?", ["Кафе — справа от вас, примерно в 15 метрах.", "Проводить вас?"]),
+        (
+            "Кафе қайда?",
+            ["Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.", "Апарып салайын ба?"],
+        ),
+        (
+            "Where is the cafe?",
+            ["Cafe is on your right, about 15 meters away.", "Want me to take you there?"],
+        ),
+    ],
+)
+def test_where_is_says_robot_direction(kb, text, spoken):
+    intent = match_place_intent(text, kb)
+    assert intent is not None
+    direction = direction_phrase(DIRECTIONS, intent.place, intent.lang)
+    assert place_reply(intent, direction=direction) == ("happy", spoken)
+
+
+def test_direction_wins_over_description_and_is_not_used_for_guide_to():
+    place = Place(
+        id="cafe",
+        map_name="cafe",
+        names=LocalizedText(ru="Кафе"),
+        description=LocalizedText(ru="Кафе на первом этаже, справа от входа."),
+    )
+    kb = KnowledgeBase(places=[place])
+    intent = match_place_intent("Где кафе?", kb)
+    assert intent is not None
+    direction = direction_phrase(DIRECTIONS, place, "ru")
+    assert place_reply(intent, direction=direction)[1][0] == DIRECTIONS["cafe"]["ru"]
+    # нет фразы робота — как раньше, словами описания
+    assert place_reply(intent)[1][0] == "Кафе на первом этаже, справа от входа."
+    guide = match_place_intent("Проводите меня до кафе", kb)
+    assert guide is not None
+    assert "до кафе" in place_reply(guide, direction=direction)[1][0]
+
+
+def test_direction_phrase_lookup(kb):
+    cafe = kb.place("cafe")
+    assert cafe is not None
+    assert direction_phrase({}, cafe, "ru") is None
+    assert direction_phrase({"lift": DIRECTIONS["cafe"]}, cafe, "ru") is None  # другое место
+    assert direction_phrase({"cafe": {"en": "On your left."}}, cafe, "ru") is None  # нет языка
+    # ключ — place_id из action; «place:cafe» тоже понимаем
+    assert direction_phrase({"place:cafe": {"ru": "Кафе слева"}}, cafe, "ru") == "Кафе слева."
+    # своё «Могу проводить.» робота убираем: «Проводить вас?» добавит ответ
+    with_offer = {"cafe": {"ru": "Кафе — слева от вас, примерно в 3 метрах. Могу проводить."}}
+    assert direction_phrase(with_offer, cafe, "ru") == "Кафе — слева от вас, примерно в 3 метрах."
+    assert direction_phrase({"cafe": {"kk": "Апарып салайын ба?"}}, cafe, "kk") is None
