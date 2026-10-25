@@ -3,9 +3,10 @@
 uv run python -m app.cli db upgrade            # миграции Alembic до head
 uv run python -m app.cli db current            # текущая ревизия схемы
 uv run python -m app.cli db import-sqlite PATH # перенести лог вопросов из старой SQLite-БД
-uv run python -m app.cli kb seed-yaml          # YAML (backend/knowledge) → Postgres (разработка)
+uv run python -m app.cli kb seed-yaml          # YAML и documents/*.md (backend/knowledge) → Postgres
 uv run python -m app.cli kb sync               # Google-таблица → Postgres
-uv run python -m app.cli kb status             # что в базе и последние синхронизации
+uv run python -m app.cli kb index [--force]    # фрагменты для поиска (kb_chunks) + эмбеддинги
+uv run python -m app.cli kb status             # что в базе, фрагменты поиска, последние синхронизации
 uv run python -m app.cli export-csv --out questions.csv [--unanswered]
 uv run python -m app.cli openapi --out openapi.json
 uv run python -m app.cli check-kb              # YAML читается без ошибок
@@ -86,7 +87,12 @@ def _print_sync(result) -> None:
             f"  {table}: +{c['inserted']} ~{c['updated']} -{c['deactivated']} "
             "(новые / изменённые / выключенные)"
         )
-    print("Работающий сервер подхватит изменения за KNOWLEDGE_RELOAD_INTERVAL_S (≈5 с).")
+    for reason in getattr(result, "skipped", []):
+        print(f"  пропущен документ {reason}", file=sys.stderr)
+    print(
+        "Работающий сервер подхватит изменения за KNOWLEDGE_RELOAD_INTERVAL_S (≈5 с), "
+        "фрагменты для поиска пересчитает сам."
+    )
 
 
 def _db_upgrade(_: argparse.Namespace) -> int:
@@ -149,15 +155,63 @@ def _kb_sync(_: argparse.Namespace) -> int:
     return 0
 
 
+def _kb_index(args: argparse.Namespace) -> int:
+    from app.knowledge.index import KbIndexer
+    from app.llm.embeddings import build_embedder
+
+    settings = Settings()
+    embedder = build_embedder(settings)
+    if embedder is None or settings.retrieval_mode == "off":
+        print(
+            "поиск выключен: нужен OPENROUTER_API_KEY (или EMBEDDING_PROVIDER) и RETRIEVAL_MODE=hybrid",
+            file=sys.stderr,
+        )
+        return 2
+    report = KbIndexer(_engine(), embedder, settings.embedding_batch_size).index(force=args.force)
+    if report.skipped:
+        print("индексация уже идёт в другом процессе, повторите позже", file=sys.stderr)
+        return 1
+    print(
+        f"{'ok' if report.ok else 'error'}: model={embedder.model} embedded={report.embedded} "
+        f"unchanged={report.unchanged} removed={report.removed} restored={report.restored} "
+        f"failed={report.failed}"
+    )
+    print("  фрагменты: " + _chunks_line(report.by_type))
+    if report.error:
+        print(f"  {report.error}", file=sys.stderr)
+    return 0 if report.ok else 1
+
+
+def _chunks_line(by_type: dict[str, int]) -> str:
+    return " ".join(f"{t}={by_type.get(t, 0)}" for t in ("fact", "place", "document"))
+
+
 def _kb_status(_: argparse.Namespace) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import DocumentRow, KbChunkRow
+    from app.knowledge.index import chunk_counts
     from app.knowledge.pg import KnowledgeRepo
 
-    repo = KnowledgeRepo(_engine())
+    engine = _engine()
+    repo = KnowledgeRepo(engine)
     kb = repo.load_active()
+    with engine.connect() as conn:
+        docs = conn.execute(
+            select(func.count()).select_from(DocumentRow).where(DocumentRow.is_active)
+        ).scalar_one()
+        chunks = chunk_counts(conn)
+        models = conn.execute(
+            select(KbChunkRow.embedding_model, func.count())
+            .where(KbChunkRow.is_active)
+            .group_by(KbChunkRow.embedding_model)
+        ).all()
     print(
         f"active: version={kb.version} facts={len(kb.facts)} places={len(kb.places)} "
-        f"quick_questions={len(kb.quick_questions)} events={len(kb.events)}"
+        f"quick_questions={len(kb.quick_questions)} events={len(kb.events)} documents={docs}"
     )
+    model_list = ", ".join(f"{m or 'без эмбеддинга'}: {n}" for m, n in models) or "нет"
+    print(f"chunks (поиск): {_chunks_line(chunks)}; модель — {model_list}")
     for row in repo.sync_log(10):
         print(
             f"  #{row.id} {row.started_at:%Y-%m-%d %H:%M:%S} {row.source:5} {row.status:7} "
@@ -196,10 +250,13 @@ def main(argv: list[str] | None = None) -> int:
     kb = sub.add_parser("kb", help="база знаний в Postgres").add_subparsers(
         dest="kb_cmd", required=True
     )
-    kb.add_parser("seed-yaml", help="YAML (KNOWLEDGE_DIR) → Postgres").set_defaults(
-        func=_kb_seed_yaml
-    )
+    kb.add_parser(
+        "seed-yaml", help="YAML и documents/*.md (KNOWLEDGE_DIR) → Postgres"
+    ).set_defaults(func=_kb_seed_yaml)
     kb.add_parser("sync", help="Google-таблица → Postgres").set_defaults(func=_kb_sync)
+    p = kb.add_parser("index", help="фрагменты для поиска и эмбеддинги (только изменённые)")
+    p.add_argument("--force", action="store_true", help="пересчитать эмбеддинги всех фрагментов")
+    p.set_defaults(func=_kb_index)
     kb.add_parser("status", help="активная база и журнал синхронизаций").set_defaults(
         func=_kb_status
     )
