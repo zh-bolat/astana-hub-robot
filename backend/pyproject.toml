@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.143.1",
     "google-genai>=2.31.0",
     "httpx>=0.28.1",
+    "num2words>=0.5.14",
     "openai>=3.31.0",
     "openai-agents>=0.24.0",
     "pgvector>=0.5.1",

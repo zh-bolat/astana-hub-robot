@@ -19,7 +19,7 @@ from starlette.types import Receive, Scope, Send
 
 from app.api import _InMemoryMultiPartParser, _read_body_limited, check_token
 from app.errors import ApiError, bad_request, error_response, payload_too_large, rate_limited
-from app.lang import Lang, detect_lang, normalize_lang
+from app.lang import KAZAKH_LETTERS, Lang, detect_lang, normalize_lang
 from app.logging_setup import (
     get_request_id,
     logger,
@@ -33,6 +33,7 @@ from app.speech.base import SpeechError, SttProvider, SttResult, TtsProvider
 from app.speech.cache import TtsCache, cache_key
 from app.speech.streaming import SAMPLE_RATE, StreamingStt, SttStreamSession
 from app.speech.wav import WavError, parse_wav, peak_amplitude
+from app.tts_text import normalize_for_tts
 
 router = APIRouter(prefix="/v1")
 
@@ -560,7 +561,11 @@ async def tts(
     cache: TtsCache = request.app.state.tts_cache
     metrics: LatencyRecorder = request.app.state.metrics
     lang: Lang = body.lang or detect_lang(body.text)
-    key = cache_key(provider.name, provider.voice_id(lang), lang, body.text)
+    if lang != "kk" and any(ch in KAZAKH_LETTERS for ch in body.text):
+        lang = "kk"  # казахский текст — только голос kk и eleven_v3 (flash отвечает unsupported_language)
+    # для синтеза: без многоточий и междометий, числа словами, произношение (app/tts_text.py)
+    text = normalize_for_tts(body.text, lang, settings.knowledge_dir / "pronunciations.yaml")
+    key = cache_key(provider.name, provider.voice_id(lang), lang, text)
     common = {"X-Speech-Provider": provider.name, "Cache-Control": "no-store"}
 
     def record(first_ms: int | None, total_ms: int, hit: bool, ok: bool, extra: dict) -> None:
@@ -614,7 +619,7 @@ async def tts(
 
         state: dict = {"first_ms": None}
         return TtsStreamResponse(
-            stream_fn(body.text, lang),
+            stream_fn(text, lang),
             first_timeout_s=settings.tts_timeout_s,
             total_timeout_s=settings.tts_stream_total_s,
             headers={"X-Cache": "miss", **common},
@@ -624,7 +629,7 @@ async def tts(
 
     try:
         audio = await _with_timeout(
-            provider.tts(body.text, lang),
+            provider.tts(text, lang),
             settings.tts_timeout_s,
             headers={"X-Speech-Provider": provider.name},
         )

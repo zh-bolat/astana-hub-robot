@@ -146,9 +146,33 @@ def test_tts_returns_mp3_and_caches(make_client, tmp_path):
     assert r2.content == r1.content
     assert speech.tts_calls == 1
     # другой язык — другой ключ
-    c.post("/v1/tts", json={"text": body["text"], "lang": "ru"}, headers=AUTH)
-    assert speech.tts_calls == 2
+    c.post("/v1/tts", json={"text": "Кафе рядом.", "lang": "kk"}, headers=AUTH)
+    c.post("/v1/tts", json={"text": "Кафе рядом.", "lang": "ru"}, headers=AUTH)
+    assert speech.tts_calls == 3
     assert list((tmp_path / "tts_cache").glob("*.mp3"))
+
+
+class RecordingSpeech(FakeSpeechProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, str]] = []
+
+    async def tts(self, text: str, lang: str) -> bytes:
+        self.calls.append((text, lang))
+        return await super().tts(text, lang)
+
+
+def test_tts_kazakh_text_never_goes_to_another_voice_and_is_normalized(make_client):
+    speech = RecordingSpeech()
+    c = make_client(speech=speech)
+    r = c.post("/v1/tts", json={"text": "Хм... Кафе 9:00-ден ашық.", "lang": "ru"}, headers=AUTH)
+    assert r.status_code == 200
+    r = c.post("/v1/tts", json={"text": "Ммм, кафе с 9:00 до 18:00.", "lang": "ru"}, headers=AUTH)
+    assert r.status_code == 200
+    assert speech.calls == [
+        ("Кафе тоғыздан ашық.", "kk"),
+        ("Кафе с девяти до восемнадцати.", "ru"),
+    ]
 
 
 def test_tts_lang_detected_when_missing(make_client):
