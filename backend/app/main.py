@@ -26,6 +26,9 @@ from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo
 from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
+from app.live.services import LiveServicesFactory, build_live_services
+from app.live.session import LiveRegistry, route_pipecat_logs
+from app.live.session import router as live_router
 from app.llm.base import LLMProvider
 from app.llm.factory import build_text_provider, build_vision_provider
 from app.log_writer import BackgroundLogWriter, purge_job
@@ -176,12 +179,15 @@ def create_app(
     log_repo: QuestionLogRepo | None = None,
     stt_stream: StreamingStt | None = None,
     chat_client: AsyncOpenAI | None = None,
+    live_services: LiveServicesFactory | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
     knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi).
-    chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт)."""
+    chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт).
+    live_services — фабрика сервисов Pipecat для WS /v1/live (тесты: фейковые VAD/STT/TTS)."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    route_pipecat_logs()
     # ADR 0001: трассировка Agents SDK выключена всегда (тексты посетителей не уходят в OpenAI)
     ensure_tracing_disabled()
     if not settings.robot_token.get_secret_value():
@@ -281,6 +287,10 @@ def create_app(
     app.state.tts = tts_provider
     app.state.stt_stream = stt_stream or build_stt_stream_provider(settings, stt)
     app.state.speech_rate_limiter = RateLimiter(settings.speech_rate_limit_per_min)
+    app.state.live_registry = LiveRegistry()
+    app.state.live_services = live_services or (
+        build_live_services if settings.resolved_live_enabled() else None
+    )
     app.state.tts_cache = TtsCache(
         memory_bytes=settings.tts_cache_memory_mb * 1024 * 1024,
         disk_dir=settings.tts_cache_dir,
@@ -290,6 +300,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(router)
     app.include_router(speech_router)
+    app.include_router(live_router)
     app.include_router(metrics_router)
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
@@ -307,6 +318,7 @@ def create_app(
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,
+            "live": app.state.live_services is not None and settings.resolved_live_enabled(),
         },
     )
     return app

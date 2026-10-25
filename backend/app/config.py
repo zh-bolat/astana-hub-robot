@@ -164,6 +164,35 @@ class Settings(BaseSettings):
     stt_stream_no_speech_s: float = 8.0
     # Тишина: пиковая амплитуда ниже порога → пустой текст без вызова провайдера
     stt_silence_peak: int = 500
+    # Живой голосовой режим WS /v1/live (Pipecat, app/live). Пусто — включён, если есть ELEVENLABS_API_KEY
+    # и агент (OPENROUTER_API_KEY); выключен — /v1/live сразу закрывается с error, робот в запасном режиме.
+    live_enabled: bool | None = None
+    live_max_sessions: int = Field(2, ge=1)  # одновременных live-сессий на токен
+    live_idle_timeout_s: float = 120.0  # ни речи, ни ответа, ни команд робота — сессия закрывается
+    # VAD (Silero): подтверждение начала/конца речи, порог уверенности и громкости
+    live_vad_start_s: float = 0.2
+    live_vad_stop_s: float = 0.2
+    live_vad_confidence: float = 0.7
+    live_vad_min_volume: float = 0.6
+    # Конец реплики: smart-turn v3 (локальная ONNX-модель) по паузе VAD; модель сказала «не договорил» —
+    # ждём тишину до live_turn_max_silence_s. Без smart-turn — конец реплики после live_turn_silence_s тишины.
+    live_smart_turn: bool = True
+    live_turn_silence_s: float = 0.5
+    live_turn_max_silence_s: float = 1.2
+    # После конца реплики ждём финальный текст STT не дольше (потом — последний промежуточный)
+    live_stt_final_timeout_s: float = 1.5
+    # Передавать STT язык экрана (точнее, особенно для kk); false — автоопределение языка
+    live_stt_language_hint: bool = True
+    # Перебивание: речь посетителя во время ответа не короче, мс, и текст не шум (app/noise.py)
+    live_barge_in_min_ms: int = 300
+    live_barge_in_require_text: bool = True
+    # Без эхоподавления на роботе (hello.aec=false), пока звучит ответ: тихий звук (RMS PCM16 ниже порога)
+    # считается эхом и глушится, перебивание — от live_echo_min_ms речи; хвост — реверберация зала после звука
+    live_echo_rms: int = 1800
+    live_echo_min_ms: int = 600
+    live_echo_tail_s: float = 0.3
+    # TTS live: ru/en — потоковый WebSocket ElevenLabs (модели v3 он не поддерживает), kk — HTTP-поток eleven_v3
+    live_tts_model: str = "eleven_flash_v2_5"
     yandex_api_key: SecretStr | None = None
     yandex_folder_id: str | None = (
         None  # нужен только для ключа пользователя, не сервисного аккаунта
@@ -209,6 +238,7 @@ class Settings(BaseSettings):
         "admin_token",
         "openrouter_api_key",
         "tts_fallback_provider",
+        "live_enabled",
         mode="before",
     )
     @classmethod
@@ -272,6 +302,11 @@ class Settings(BaseSettings):
         if self.stt_stream_provider != "auto":
             return self.stt_stream_provider
         return "elevenlabs" if self.elevenlabs_api_key else "buffered"
+
+    def resolved_live_enabled(self) -> bool:
+        if self.live_enabled is not None:
+            return self.live_enabled
+        return bool(self.elevenlabs_api_key) and self.resolved_chat_provider() == "openrouter"
 
     def resolved_vision_provider(self) -> str:
         if self.vision_provider != "auto":
