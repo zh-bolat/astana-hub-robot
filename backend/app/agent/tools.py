@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
+from app.agent.fastpath import direction_phrase
 from app.knowledge.models import KnowledgeBase
 from app.lang import Lang
 
@@ -26,6 +27,8 @@ class ChatContext:
     # (имя, аргументы, результат) — в память разговора (таблица messages)
     calls: list[tuple[str, dict, str]] = field(default_factory=list)
     stopped_by: str | None = None
+    # WS /v1/live: фразы «где X» от позиции робота (state.directions), place_id → {ru|kk|en: фраза}
+    directions: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 _NEXT = {
@@ -52,18 +55,19 @@ def _place_action(ctx: ChatContext, kind: str, place_id: str) -> str:
     ctx.actions.append({"type": kind, "place_id": place.id})
     if place.source_id not in ctx.sources:
         ctx.sources.append(place.source_id)
-    return _result(
-        ctx,
-        kind,
-        args,
-        {
-            "ok": True,
-            "place_id": place.source_id,
-            "name": place.names.get(ctx.lang),
-            "description": place.description.get(ctx.lang),
-            "next": _NEXT[kind],
-        },
-    )
+    result = {
+        "ok": True,
+        "place_id": place.source_id,
+        "name": place.names.get(ctx.lang),
+        "description": place.description.get(ctx.lang),
+        "next": _NEXT[kind],
+    }
+    if kind == "where_is":
+        # направление и метры от посетителя — измерил робот по карте (live), на языке ответа
+        direction = direction_phrase(ctx.directions, place, ctx.lang)
+        if direction:
+            result["direction"] = direction
+    return _result(ctx, kind, args, result)
 
 
 @function_tool

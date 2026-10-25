@@ -9,6 +9,9 @@
 Согласие на предложение проводить («Проводить вас?» → «да», «давайте», «иә», «yes please») — тоже без
 модели: сервер помнит, какое место предложил (ChatService), и сразу отдаёт guide_to.
 
+Направление «где X» — фразой робота (state.directions: сторона и метры от его позиции), если она свежая;
+иначе — словами описания места или «смотрите стрелку на экране».
+
 Шаблоны короткие и без «ммм»: первая фраза — то, что TTS начнёт озвучивать сразу. Фразы детерминированы
 по месту и языку (плюс небольшой выбор вариантов), поэтому их звук кешируется (app/live/tts_cache.py).
 """
@@ -669,19 +672,51 @@ def _direction(place: Place, lang: Lang) -> list[str] | None:
 
 
 _OFFER = {"ru": "Проводить вас?", "kk": "Апарып салайын ба?", "en": "Want me to take you there?"}
+# Предложение проводить внутри фразы робота (WayPhrases.offerGuide) — сервер ставит своё «Проводить вас?»
+_ROBOT_OFFERS = frozenset(
+    _norm(s)
+    for s in ("Могу проводить.", "Апарып салайын ба?", "I can take you there.", *_OFFER.values())
+)
 
 
-def place_reply(intent: PlaceIntent, rng: random.Random | None = None) -> tuple[str, list[str]]:
-    """(эмоция, фразы) ответа быстрого пути на языке реплики."""
+def direction_phrase(directions: dict[str, dict[str, str]], place: Place, lang: Lang) -> str | None:
+    """Фраза робота «где X» для места на языке lang (state.directions WS /v1/live): «Кафе — справа от вас,
+    примерно в 15 метрах.» Ключ — place_id, как в action (Place.id); на всякий случай и `place:<id>`, map_name.
+    Предложение проводить из фразы убирается: его добавляет ответ. Нет фразы — None."""
+    phrases = next(
+        (directions[k] for k in (place.id, place.source_id, place.map_name) if k in directions),
+        None,
+    )
+    text = (phrases or {}).get(lang)
+    if not text:
+        return None
+    sentences = [
+        s
+        for s in re.split(r"(?<=[.!?])\s+", text.strip())
+        if _norm(s) and _norm(s) not in _ROBOT_OFFERS
+    ]
+    if not sentences:
+        return None
+    text = " ".join(sentences)
+    return text if text[-1] in ".!?" else text + "."
+
+
+def place_reply(
+    intent: PlaceIntent, rng: random.Random | None = None, direction: str | None = None
+) -> tuple[str, list[str]]:
+    """(эмоция, фразы) ответа быстрого пути на языке реплики. direction — фраза робота о направлении от его
+    позиции (direction_phrase): для where_is она важнее описания места и стрелки на экране."""
     rng = rng or _RNG
     lang, place = intent.lang, intent.place
     name = place.names.get(lang)
     shown = _display(name, lang)
     if intent.kind == "guide_to":
         return "excited", [guide_phrase(place, lang, rng)]
-    direction = _direction(place, lang)
     if direction:
-        return "happy", [*direction, _OFFER[lang]]
+        return "happy", [direction, _OFFER[lang]]
+    described = _direction(place, lang)
+    if described:
+        return "happy", [*described, _OFFER[lang]]
     if lang == "ru":
         first = rng.choice(
             [f"{_cap(shown)} — смотрите стрелку на экране.", f"Показала на экране, где {shown}."]
