@@ -1,5 +1,5 @@
-# Произношения для TTS: названия из базы знаний (facts.yaml), которые синтез читает плохо.
-# Дополняет встроенный словарь app/tts_text.py (Astana Hub, Wi-Fi, IT, EXPO…).
+# Произношения для TTS: названия из базы знаний (facts.yaml и documents/*.md), которые синтез читает плохо.
+# Дополняет встроенный словарь app/tts_text.py (Astana Hub, Wi-Fi, IT, AI, EXPO…).
 # Ключ — без учёта регистра, целым словом; ключ из одних заглавных латинских букв — с учётом регистра.
 # Длинные ключи применяются раньше коротких («cv@astanahub.com» раньше «astanahub.com»).
 ru:
@@ -14,6 +14,13 @@ ru:
   astana.tumo.kz: астана точка тумо точка кей-зет
   tomorrow-school.ai: тумороу скул точка эй-ай
   alem.ai: алем эй-ай
+  Telegram: Телеграм
+  Instagram: Инстаграм
+  YouTube: Ютуб
+  LinkedIn: Линкедин
+  Facebook: Фейсбук
+  Community: Комьюнити
+  Hub Talks: Хаб Токс
   # программы и сервисы хаба
   Astana Hub Ventures: Астана Хаб Венчурс
   Hub Space: Хаб Спейс
@@ -29,29 +36,98 @@ ru:
   Tech Incubator: Тек Инкубатор
   AI'preneurs: эй-ай-прэнёрс
   GamePreneurs: гейм-прэнёрс
+  Globalpreneurs: глобал-прэнёрс
+  Central Eurasia Market Entry: Сентрал Юрэйжа Маркет Энтри
+  Invest Day: Инвест Дэй
+  Demo Day: Демо Дэй
+  Pitch Day: Питч Дэй
+  Pizza Pitch: Пицца Питч
+  Startup Alley: Стартап Элли
+  AI & Digital Bridge: эй-ай энд Диджитал Бридж
   Digital Bridge: Диджитал Бридж
+  AI Month: эй-ай Манс
+  AI Movement: эй-ай Мувмент
   HackAlem: Хак Алем
   Social Coins: Сошал Коинс
   Digital Nomad: Диджитал Номад
+  Digital Nomad Visa: Диджитал Номад Виза
+  Digital Nomad Residency: Диджитал Номад Резиденси
   Expat Centre: Экспат Центр
   One Stop Shop: Уан Стоп Шоп
   Event Office: Ивент Офис
+  Documentolog: Документолог
+  RnD: ар-энд-ди
   QazCoders: Казкодерс
   Skillbox: Скиллбокс
+  ChatGPT: чат джи-пи-ти
+  Python: Пайтон
   No Code: ноу-код
+  No Code School: Ноу-Код Скул
+  Low Code School: Лоу-Код Скул
   Low Code: лоу-код
   Freelance School: Фриланс Скул
+  Beta Career: Бета Кэрир
+  ML School Kazakhstan: Эм-Эл Скул Казахстан
+  ML School: Эм-Эл Скул
+  01 Edu: ноль один эду
   peer-to-peer: пир-ту-пир
-  # залы и места
+  Unreal Engine: Анриал Энджин
+  GitHub Enterprise: Гитхаб Энтерпрайз
+  GitHub: Гитхаб
+  JetBrains: Джетбрейнс
+  Yandex Cloud: Яндекс Клауд
+  Alibaba Cloud: Алибаба Клауд
+  GOhost: Гоу Хост
+  Higgsfield: Хиггсфилд
+  NVIDIA: Энвидиа
+  # стадии стартапов и сокращения
+  pre-series A: прэ-сириз эй
+  pre-seed: прэ-сид
+  seed: сид
+  PMF: пи-эм-эф
+  Scale: Скейл
+  MVP: эм-ви-пи
+  B2B: би-ту-би
+  AR: эй-ар
+  VR: ви-ар
+  HR: эйч-ар
+  LED: лед
+  hardware: хардвер
+  3D: три-дэ
+  # вход в здание
+  Face ID: фейс ай-ди
+  Face Pay: Фейс Пэй
+  ALAQAN: Алакан
+  El Pass: Эл Пасс
+  # залы, переговорные и места
   Event Hall: Ивент Холл
   Lecture Hall: Лекчер Холл
   Media Hall: Медиа Холл
+  Event Zone: Ивент Зоун
+  Classroom: Классрум
+  TikTok Space: Тик-Ток Спейс
   GameDev Center: Геймдев Центр
   GameDev: геймдев
-  Face ID: фейс ай-ди
   Global coffee: Глобал кофи
   Mega Silk Way: Мега Силк Уэй
-  # транспорт и соседи
+  Tesla: Тесла
+  Dylan: Дилан
+  Lennon: Леннон
+  Einstein: Эйнштейн
+  Mozart: Моцарт
+  Galilei: Галилей
+  Newton: Ньютон
+  Hawking: Хокинг
+  Batyrkhan Shukenov: Батырхан Шукенов
+  Ridley Scott: Ридли Скотт
+  Herbert Wells: Герберт Уэллс
+  Mark Twain: Марк Твен
+  Pierre Boulle: Пьер Буль
+  Robert Zemeckis: Роберт Земекис
+  Isaac Asimov: Айзек Азимов
+  Howard Lovecraft: Говард Лавкрафт
+  Franklin Herbert: Франклин Герберт
+  # транспорт, соседи, хабы
   LRT: эл-ар-ти
   Tarlan: Тарлан
   Quantum Tech School: Квантум Тек Скул
@@ -60,6 +136,17 @@ ru:
   Qazaq AI Research University: Казак Эй-Ай Ресёрч Юниверсити
   Astana IT University: Астана Ай-Ти Юниверсити
   Terricon Valley: Террикон Вэлли
+  Hilton: Хилтон
+  Almaty Hub: Алматы Хаб
+  Shymkent Hub: Шымкент Хаб
+  Batys Hub: Батыс Хаб
+  Mangystau Hub: Мангистау Хаб
+  Kyzylorda Hub: Кызылорда Хаб
+  Qostanai Hub: Костанай Хаб
+  SilkRoad Innovation Hub: Силк Роуд Инновейшн Хаб
+  Eurasian Hub: Юрэйжн Хаб
+  Tumar Innovation Hub: Тумар Инновейшн Хаб
+  Khan-Tengri Innovation Hub: Хан-Тенгри Инновейшн Хаб
   Zoom: Зум
 kk:
   info@astanahub.com: инфо айқұлақ астанахаб нүкте ком
@@ -72,6 +159,13 @@ kk:
   astana.tumo.kz: астана нүкте тумо нүкте кей-зет
   tomorrow-school.ai: тумороу скул нүкте эй-ай
   alem.ai: алем эй-ай
+  Telegram: Телеграм
+  Instagram: Инстаграм
+  YouTube: Ютуб
+  LinkedIn: Линкедин
+  Facebook: Фейсбук
+  Community: Комьюнити
+  Hub Talks: Хаб Токс
   Astana Hub Ventures: Астана Хаб Венчурс
   Hub Space: Хаб Спейс
   Hub Market: Хаб Маркет
@@ -86,27 +180,94 @@ kk:
   Tech Incubator: Тек Инкубатор
   AI'preneurs: эй-ай-прэнёрс
   GamePreneurs: гейм-прэнёрс
+  Globalpreneurs: глобал-прэнёрс
+  Central Eurasia Market Entry: Сентрал Юрэйжа Маркет Энтри
+  Invest Day: Инвест Дэй
+  Demo Day: Демо Дэй
+  Pitch Day: Питч Дэй
+  Pizza Pitch: Пицца Питч
+  Startup Alley: Стартап Элли
+  AI & Digital Bridge: эй-ай энд Диджитал Бридж
   Digital Bridge: Диджитал Бридж
+  AI Month: эй-ай Манс
+  AI Movement: эй-ай Мувмент
   HackAlem: Хак Алем
   Social Coins: Сошал Коинс
   Digital Nomad: Диджитал Номад
+  Digital Nomad Visa: Диджитал Номад Виза
+  Digital Nomad Residency: Диджитал Номад Резиденси
   Expat Centre: Экспат Центр
   One Stop Shop: Уан Стоп Шоп
   Event Office: Ивент Офис
+  Documentolog: Документолог
+  RnD: ар-энд-ди
   QazCoders: Казкодерс
   Skillbox: Скиллбокс
+  ChatGPT: чат джи-пи-ти
+  Python: Пайтон
   No Code: ноу-код
+  No Code School: Ноу-Код Скул
+  Low Code School: Лоу-Код Скул
   Low Code: лоу-код
   Freelance School: Фриланс Скул
+  Beta Career: Бета Кэрир
+  ML School Kazakhstan: Эм-Эл Скул Қазақстан
+  ML School: Эм-Эл Скул
+  01 Edu: нөл бір эду
   peer-to-peer: пир-ту-пир
+  Unreal Engine: Анриал Энджин
+  GitHub Enterprise: Гитхаб Энтерпрайз
+  GitHub: Гитхаб
+  JetBrains: Джетбрейнс
+  Yandex Cloud: Яндекс Клауд
+  Alibaba Cloud: Алибаба Клауд
+  GOhost: Гоу Хост
+  Higgsfield: Хиггсфилд
+  NVIDIA: Энвидиа
+  pre-series A: прэ-сириз эй
+  pre-seed: прэ-сид
+  seed: сид
+  PMF: пи-эм-эф
+  Scale: Скейл
+  MVP: эм-ви-пи
+  B2B: би-ту-би
+  AR: эй-ар
+  VR: ви-ар
+  HR: эйч-ар
+  LED: лед
+  hardware: хардвер
+  3D: три-ди
+  Face ID: фейс ай-ди
+  Face Pay: Фейс Пэй
+  ALAQAN: Алақан
+  El Pass: Эл Пасс
   Event Hall: Ивент Холл
   Lecture Hall: Лекчер Холл
   Media Hall: Медиа Холл
+  Event Zone: Ивент Зоун
+  Classroom: Классрум
+  TikTok Space: Тик-Ток Спейс
   GameDev Center: Геймдев Центр
   GameDev: геймдев
-  Face ID: фейс ай-ди
   Global coffee: Глобал кофи
   Mega Silk Way: Мега Силк Уэй
+  Tesla: Тесла
+  Dylan: Дилан
+  Lennon: Леннон
+  Einstein: Эйнштейн
+  Mozart: Моцарт
+  Galilei: Галилей
+  Newton: Ньютон
+  Hawking: Хокинг
+  Batyrkhan Shukenov: Батырхан Шүкенов
+  Ridley Scott: Ридли Скотт
+  Herbert Wells: Герберт Уэллс
+  Mark Twain: Марк Твен
+  Pierre Boulle: Пьер Буль
+  Robert Zemeckis: Роберт Земекис
+  Isaac Asimov: Айзек Азимов
+  Howard Lovecraft: Говард Лавкрафт
+  Franklin Herbert: Франклин Герберт
   LRT: эл-ар-ти
   Tarlan: Тарлан
   Quantum Tech School: Квантум Тек Скул
@@ -115,4 +276,21 @@ kk:
   Qazaq AI Research University: Қазақ Эй-Ай Ресёрч Юниверсити
   Astana IT University: Астана Ай-Ти Юниверсити
   Terricon Valley: Террикон Вэлли
+  Hilton: Хилтон
+  Almaty Hub: Алматы Хаб
+  Shymkent Hub: Шымкент Хаб
+  Batys Hub: Батыс Хаб
+  Mangystau Hub: Маңғыстау Хаб
+  Kyzylorda Hub: Қызылорда Хаб
+  Qostanai Hub: Қостанай Хаб
+  SilkRoad Innovation Hub: Силк Роуд Инновейшн Хаб
+  Eurasian Hub: Юрэйжн Хаб
+  Tumar Innovation Hub: Тұмар Инновейшн Хаб
+  Khan-Tengri Innovation Hub: Хан-Тәңірі Инновейшн Хаб
   Zoom: Зум
+en:
+  # английский синтез читает латиницу сам; здесь — то, что он прочтёт по буквам или с ошибкой
+  ALAQAN: Alakan
+  RnD: R and D
+  GOhost: Go Host
+  01 Edu: zero one edu
