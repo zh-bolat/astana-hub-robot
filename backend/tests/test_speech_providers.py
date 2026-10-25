@@ -142,7 +142,9 @@ def test_elevenlabs_tts_request(lang, model, voice):
     assert req.headers["xi-api-key"] == "test"
     body = json.loads(req.content)
     assert body.pop("voice_settings") == VoiceSettings().for_model(model)
-    assert body == {"text": "Сәлем.", "model_id": model, "language_code": lang}
+    # тег подачи v3 (ELEVENLABS_V3_TAG) — только в теле запроса синтеза
+    text = "[cheerfully] Сәлем." if model == "eleven_v3" else "Сәлем."
+    assert body == {"text": text, "model_id": model, "language_code": lang}
     assert model in p.voice_id(lang)  # модель входит в ключ кеша
 
 
@@ -150,9 +152,11 @@ def test_elevenlabs_voice_settings_per_model():
     vs = VoiceSettings(
         stability=0.3, similarity_boost=0.7, style=0.2, use_speaker_boost=False, speed=1.5
     )
-    # Eleven v3: только stability, округлённая до 0.0 / 0.5 / 1.0
+    # Eleven v3: только своя stability (ELEVENLABS_V3_STABILITY), округлённая до 0.0 / 0.5 / 1.0
     assert vs.for_model("eleven_v3") == {"stability": 0.5}
-    assert VoiceSettings(stability=0.2).for_model("eleven_v3") == {"stability": 0.0}
+    assert VoiceSettings(v3_stability=0.2).for_model("eleven_v3") == {"stability": 0.0}
+    assert VoiceSettings(v3_stability=0.9).for_model("eleven_v3") == {"stability": 1.0}
+    assert VoiceSettings(stability=0.0).for_model("eleven_v3") == {"stability": 0.5}
     flash = vs.for_model("eleven_flash_v2_5")
     assert flash == {
         "stability": 0.3,
@@ -166,9 +170,41 @@ def test_elevenlabs_voice_settings_per_model():
 def test_elevenlabs_voice_settings_change_cache_key():
     a = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
     b = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
-    b.voice_settings = VoiceSettings(stability=0.9)
+    b.voice_settings = VoiceSettings(stability=0.9, v3_stability=1.0)
     assert a.voice_id("ru") != b.voice_id("ru")
-    assert a.voice_id("kk") != b.voice_id("kk")  # 0.4 -> 0.5, 0.9 -> 1.0
+    assert a.voice_id("kk") != b.voice_id("kk")  # v3: 0.5 -> 1.0
+    c = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    c.voice_settings = VoiceSettings(v3_tag="")
+    assert a.voice_id("kk") != c.voice_id("kk")  # тег v3 — другое аудио
+    assert a.voice_id("ru") == c.voice_id("ru")  # flash тег не получает
+
+
+def test_elevenlabs_defaults_are_the_chosen_voices():
+    s = Settings(_env_file=None)
+    assert (s.elevenlabs_voice_ru, s.elevenlabs_voice_en, s.elevenlabs_voice_kk) == (
+        "dVRDrbP5ULGXB94se4KZ",  # Alina
+        "FGY2WhTYpPnrIDTdsKH5",  # Laura
+        "Jbte7ht1CqapnZvc4KpK",  # Kari
+    )
+    vs = VoiceSettings.from_settings(s)
+    assert vs.for_model("eleven_flash_v2_5") == {
+        "stability": 0.35,
+        "similarity_boost": 0.8,
+        "style": 0.45,
+        "use_speaker_boost": True,
+        "speed": 1.1,
+    }
+    assert vs.for_model("eleven_v3") == {"stability": 0.5}
+    assert vs.tag_text("eleven_v3", "Сәлем!") == "[cheerfully] Сәлем!"
+    assert vs.tag_text("eleven_flash_v2_5", "Привет!") == "Привет!"
+
+
+def test_elevenlabs_kk_never_uses_flash():
+    p = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    p.tts_model_kk = "eleven_flash_v2_5"  # ошибка в env
+    assert p.tts_model("kk") == "eleven_v3"
+    p.tts_models = {"ru": "eleven_turbo_v2_5"}
+    assert p.tts_model("ru") == "eleven_turbo_v2_5" and p.tts_model("en") == "eleven_flash_v2_5"
 
 
 def test_elevenlabs_tts_no_language_code_for_multilingual_v2():

@@ -51,14 +51,9 @@ def _elevenlabs(settings: Settings):
         tts_model_default=settings.elevenlabs_tts_model_default,
         output_format=settings.elevenlabs_output_format,
         stt_model=settings.elevenlabs_stt_model,
-        voice_settings=VoiceSettings(
-            stability=settings.elevenlabs_stability,
-            similarity_boost=settings.elevenlabs_similarity,
-            style=settings.elevenlabs_style,
-            use_speaker_boost=settings.elevenlabs_speaker_boost,
-            speed=settings.elevenlabs_speed,
-        ),
+        voice_settings=VoiceSettings.from_settings(settings),
         timeout_s=max(settings.stt_timeout_s, settings.tts_timeout_s) + 1,
+        tts_models={"ru": settings.elevenlabs_tts_model_ru, "en": settings.elevenlabs_tts_model_en},
     )
 
 

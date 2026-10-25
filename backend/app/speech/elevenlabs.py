@@ -26,23 +26,30 @@ from app.speech.base import SpeechError, SttResult, has_letters
 # Scribe может вернуть ISO 639-3
 _ISO3 = {"rus": "ru", "kaz": "kk", "eng": "en"}
 _V3_STABILITY = (0.0, 0.5, 1.0)
+# Модели с казахским (ElevenLabs, 2026-10): v3 и v4; flash / turbo / multilingual — unsupported_language
+KK_MODEL_PREFIXES = ("eleven_v3", "eleven_v4")
 
 
 @dataclass(frozen=True)
 class VoiceSettings:
-    """Настройки голоса ElevenLabs (env ELEVENLABS_STABILITY и т.д.). По умолчанию — живее и выразительнее
-    стандартных (0.5 / 0.75 / 0 / 1.0): ниже стабильность, немного стиля, чуть быстрее."""
+    """Настройки голоса ElevenLabs (env ELEVENLABS_STABILITY и т.д.).
 
-    stability: float = 0.4
+    flash / multilingual: stability 0.35, similarity 0.8, style 0.45, speaker boost, speed 1.1 — энергично.
+    Eleven v3 (kk) — только своя stability (ELEVENLABS_V3_STABILITY): 0.0 Creative, 0.5 Natural (по умолчанию),
+    1.0 Robust; плюс звуковой тег перед текстом (ELEVENLABS_V3_TAG, «[cheerfully]»)."""
+
+    stability: float = 0.35
     similarity_boost: float = 0.8
-    style: float = 0.35
+    style: float = 0.45
     use_speaker_boost: bool = True
-    speed: float = 1.05
+    speed: float = 1.1
+    v3_stability: float = 0.5
+    v3_tag: str = "[cheerfully]"
 
     def for_model(self, model: str) -> dict:
         """Поля voice_settings, которые модель принимает."""
         if model.startswith("eleven_v3"):
-            return {"stability": min(_V3_STABILITY, key=lambda v: abs(v - self.stability))}
+            return {"stability": min(_V3_STABILITY, key=lambda v: abs(v - self.v3_stability))}
         return {
             "stability": self.stability,
             "similarity_boost": self.similarity_boost,
@@ -52,8 +59,34 @@ class VoiceSettings:
         }
 
     def signature(self, model: str) -> str:
-        """Для ключа кеша TTS: другие настройки — другое аудио."""
-        return ",".join(f"{k}={v}" for k, v in sorted(self.for_model(model).items()))
+        """Для ключа кеша TTS: другие настройки (и тег v3) — другое аудио."""
+        sig = ",".join(f"{k}={v}" for k, v in sorted(self.for_model(model).items()))
+        tag = self.v3_tag.strip()
+        return f"{sig},tag={tag}" if tag and model.startswith(KK_MODEL_PREFIXES) else sig
+
+    def tag_text(self, model: str, text: str) -> str:
+        """Текст запроса синтеза: v3 — с тегом подачи («[cheerfully] Сәлеметсіз бе!»), остальные — как есть."""
+        tag = self.v3_tag.strip()
+        if tag and model.startswith(KK_MODEL_PREFIXES) and not text.startswith(tag):
+            return f"{tag} {text}"
+        return text
+
+    @classmethod
+    def from_settings(cls, settings) -> VoiceSettings:
+        return cls(
+            stability=settings.elevenlabs_stability,
+            similarity_boost=settings.elevenlabs_similarity,
+            style=settings.elevenlabs_style,
+            use_speaker_boost=settings.elevenlabs_speaker_boost,
+            speed=settings.elevenlabs_speed,
+            v3_stability=settings.elevenlabs_v3_stability,
+            v3_tag=settings.elevenlabs_v3_tag,
+        )
+
+
+def kk_safe_model(model: str) -> str:
+    """Ошибка в env (ELEVENLABS_TTS_MODEL_KK=eleven_flash_v2_5) не должна отправить казахский текст в flash."""
+    return model if model.startswith(KK_MODEL_PREFIXES) else "eleven_v3"
 
 
 class ElevenLabsProvider:
@@ -71,11 +104,14 @@ class ElevenLabsProvider:
         voice_settings: VoiceSettings | None = None,
         timeout_s: float = 10.0,
         client: httpx.AsyncClient | None = None,
+        tts_models: dict[str, str | None] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.voices = voices or {}
         self.tts_model_kk = tts_model_kk
         self.tts_model_default = tts_model_default
+        # ELEVENLABS_TTS_MODEL_RU / _EN: своя модель для языка (пусто — tts_model_default)
+        self.tts_models = {k: v for k, v in (tts_models or {}).items() if v}
         self.output_format = output_format
         self.stt_model = stt_model
         self.voice_settings = voice_settings or VoiceSettings()
@@ -88,7 +124,9 @@ class ElevenLabsProvider:
 
     # ---------- TTS ----------
     def tts_model(self, lang: Lang) -> str:
-        return self.tts_model_kk if lang == "kk" else self.tts_model_default
+        if lang == "kk":
+            return kk_safe_model(self.tts_model_kk)
+        return self.tts_models.get(lang) or self.tts_model_default
 
     def voice_id(self, lang: Lang) -> str:
         model = self.tts_model(lang)
@@ -98,7 +136,7 @@ class ElevenLabsProvider:
     def _tts_body(self, text: str, lang: Lang) -> dict:
         model = self.tts_model(lang)
         body: dict = {
-            "text": text,
+            "text": self.voice_settings.tag_text(model, text),
             "model_id": model,
             "voice_settings": self.voice_settings.for_model(model),
         }
@@ -180,4 +218,5 @@ class ElevenLabsProvider:
             text=text,
             lang=result_lang,
             confidence=float(prob) if isinstance(prob, int | float) else None,
+            detected=detected or None,
         )
