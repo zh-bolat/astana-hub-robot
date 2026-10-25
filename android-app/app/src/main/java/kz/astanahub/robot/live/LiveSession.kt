@@ -102,7 +102,7 @@ class LiveSession(
     private var connection: LiveConnection? = null
     private var micJob: Job? = null
     private var readyJob: Job? = null
-    private var ready = false
+    @Volatile private var ready = false
     private var greetPending = false
     @Volatile private var finished = false
 
@@ -167,6 +167,17 @@ class LiveSession(
 
     fun sendState(placeId: String?, navigating: Boolean) {
         scope.launch { if (!finished) connection?.sendText(LiveFrames.state(placeId, navigating)) }
+    }
+
+    /**
+     * Фразы «где X» от текущей позиции (`state.directions`, полный набор). Только после `ready`: до него сервер
+     * сессию ещё не завёл. @return false — сессия закрыта или ещё не готова (кадр не ушёл).
+     */
+    fun sendDirections(directions: Map<String, Map<Lang, String>>): Boolean {
+        if (finished || !ready) return false
+        val frame = LiveFrames.directions(directions)
+        scope.launch { if (!finished) connection?.sendText(frame) }
+        return true
     }
 
     fun visitorArrived() {

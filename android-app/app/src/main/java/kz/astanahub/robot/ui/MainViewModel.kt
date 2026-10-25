@@ -65,6 +65,8 @@ import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
 import kz.astanahub.robot.core.LogSafe
+import kz.astanahub.robot.live.DirectionsReason
+import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.live.LiveSession
 import kz.astanahub.robot.live.LiveSessionFactory
 import kz.astanahub.robot.live.LiveSignal
@@ -153,6 +155,11 @@ class MainViewModel(
     private val liveRetryMillis: Long = LIVE_RETRY_MILLIS,
     /** Приложение на экране; false — микрофон не слушает, live закрыт. null — всегда на экране (тесты). */
     private val foreground: StateFlow<Boolean>? = null,
+    /**
+     * Live: как часто проверять, сдвинулся ли робот, чтобы обновить серверу фразы «где X» (`state.directions`).
+     * null — без периодической проверки (тесты); на старте сессии и после поездки фразы уходят всегда.
+     */
+    private val liveDirectionsPeriodMillis: Long? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -256,6 +263,9 @@ class MainViewModel(
     private var liveLastDone: String? = null
     /** Сколько ходов live начато (для решения, озвучил ли сервер результат `look`). */
     private var liveTurnStarts = 0
+    /** Фразы «где X» для сервера (`state.directions`) текущей live-сессии; null — live не готов / нет карты. */
+    private var liveDirections: LiveDirectionsReporter? = null
+    private var liveDirectionsJob: Job? = null
 
     /** Тайминги одного хода: все отметки — мс от [origin] (конец речи по VAD или нажатие кнопки). */
     private class TurnClock(val origin: Long, val sttFinalMs: Long?, var lang: Lang?) {
@@ -330,6 +340,8 @@ class MainViewModel(
         viewModelScope.launch {
             wf.refreshPlaces()
             placeWords = runCatching { wf.placeWords() }.getOrDefault(emptySet())
+            // Live открылся раньше, чем пришли места: стартовый набор «где X» не ушёл — отправить сейчас.
+            liveDirections?.tick()
         }
     }
 
@@ -796,6 +808,8 @@ class MainViewModel(
                 tripActive = false
                 head?.setNavigating(false)
                 live?.sendState(placeHint, navigating = false)
+                // Робот уже в другом месте: свежие фразы «где X» серверу (любой исход поездки).
+                liveDirections?.let { reporter -> viewModelScope.launch { reporter.report(DirectionsReason.AFTER_TRIP) } }
                 _state.update { it.copy(guidingTo = null) }
                 setBusy(null)
             }
@@ -1309,9 +1323,38 @@ class MainViewModel(
         live = null
         liveJob?.cancel()
         liveJob = null
+        stopLiveDirections()
         session.close()
         resetLiveTurn()
         updateListeningPaused()
+    }
+
+    /**
+     * Live готов: фразы «где X» от текущей позиции — серверу сразу, потом раз в [liveDirectionsPeriodMillis], если
+     * робот сдвинулся ≥ 0,5 м / повернулся ≥ 20° (и после каждой поездки — в [startGuide]). Нет карты — не шлём.
+     * ПРОВЕРИТЬ НА РОБОТЕ: позиция (getPosition) и точки карты (getPlaceList) — на эмуляторе заглушки.
+     */
+    private fun startLiveDirections(session: LiveSession) {
+        stopLiveDirections()
+        val wf = wayFinder ?: return
+        val nav = robot ?: return
+        val reporter = LiveDirectionsReporter(
+            pose = { nav.getPosition() },
+            build = { pose -> wf.directionsFrom(pose) },
+            send = { directions -> session.sendDirections(directions) },
+            clock = clock,
+        )
+        liveDirections = reporter
+        liveDirectionsJob = viewModelScope.launch {
+            reporter.report(DirectionsReason.START)
+            liveDirectionsPeriodMillis?.let { reporter.run(it) }
+        }
+    }
+
+    private fun stopLiveDirections() {
+        liveDirectionsJob?.cancel()
+        liveDirectionsJob = null
+        liveDirections = null
     }
 
     private fun resetLiveTurn() {
@@ -1341,6 +1384,7 @@ class MainViewModel(
             is LiveSignal.Ready -> {
                 Timber.i("live: ready (aec=%s)", signal.aec)
                 if (_state.value.offline) _state.update { it.copy(offline = false) }
+                startLiveDirections(session)
             }
             LiveSignal.Listening -> if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
             LiveSignal.UserSpeaking -> {
@@ -1661,6 +1705,7 @@ class MainViewModel(
         live = null
         liveJob?.cancel()
         liveJob = null
+        stopLiveDirections()
         liveDownUntil = clock() + liveRetryMillis
         finishLiveTurn(interrupted = wasSpeaking, fallback = true)
         resetLiveTurn()

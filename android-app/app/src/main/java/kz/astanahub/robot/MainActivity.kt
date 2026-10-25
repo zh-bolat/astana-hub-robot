@@ -41,6 +41,7 @@ import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.databinding.ActivityMainBinding
 import kz.astanahub.robot.databinding.ItemFaqRowBinding
 import kz.astanahub.robot.databinding.ItemTileBinding
+import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.security.DiagAccess
 import kz.astanahub.robot.ui.DiagPinDialog
@@ -84,6 +85,7 @@ class MainActivity : AppCompatActivity() {
                     vadSilenceMillis = { container.voiceSettings.config.value.vadEndSilenceMillis },
                     liveFactory = container.liveFactory,
                     foreground = container.appForeground,
+                    liveDirectionsPeriodMillis = LiveDirectionsReporter.PERIOD_MILLIS,
                 )
             }
         }

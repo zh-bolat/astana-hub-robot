@@ -243,10 +243,101 @@ class MainViewModelLiveTest {
         advanceTimeBy(1_500); runCurrent()
         assertEquals(1, conn.framesOfType("playback_done").size)
         coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
-        assertTrue(conn.framesOfType("state").first().contains("\"navigating\":true"))
+        assertTrue(navStates().first().contains("\"navigating\":true"))
         assertFalse(voice.spoken.any { it.contains("Провожаю") || it.contains("Иду") })
         advanceTimeBy(2_000); runCurrent()
-        assertTrue(conn.framesOfType("state").last().contains("\"navigating\":false"))
+        assertTrue(navStates().last().contains("\"navigating\":false"))
+    }
+
+    /** Кадры `state` про поездку (без `state.directions`). */
+    private fun navStates() = conn.framesOfType("state").filter { it.contains("\"navigating\"") }
+
+    /** Кадры `state.directions` (фразы «где X» для сервера). */
+    private fun directionFrames() = conn.framesOfType("state").filter { it.contains("\"directions\"") }
+
+    @Test
+    fun `live ready - robot sends where-is phrases for every base place on its map, keyed by place_id`() = runTest(dispatcher) {
+        coEvery { robot.getPlaces() } returns listOf(MapPlace("Кафе", 0.0, 15.0), MapPlace("Склад", 2.0, 2.0))
+        vm()
+        val frame = directionFrames().single()
+        assertEquals(
+            """{"type":"state","directions":{"cafe":{"ru":"Кафе — справа от вас, примерно в 15 метрах.",""" +
+                """"kk":"Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.","en":"Cafe is on your right, about 15 meters away."}}}""",
+            frame,
+        )
+        // После hello (сервер уже завёл сессию), без «проводить» — его добавит сервер.
+        assertTrue(conn.texts.indexOf(frame) > conn.texts.indexOfFirst { it.contains("\"type\":\"hello\"") })
+        assertFalse(frame.contains("провод", ignoreCase = true) || frame.contains("take you", ignoreCase = true))
+        assertTrue(NavJournal.texts().toString(), NavJournal.texts().contains("live directions → сервер: мест 1, причина=start"))
+    }
+
+    @Test
+    fun `live directions - fresh set after every trip, whatever the outcome`() = runTest(dispatcher) {
+        vm()
+        assertEquals(1, directionFrames().size)
+        coEvery { robot.getPosition() } returns RobotPose(0.0, 12.0, 0.0) // доехали до кафе
+        conn.server(LiveEvent.Action("guide_to", "cafe"))
+        advanceTimeBy(2_000); runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo("Кафе", any()) }
+        assertEquals(2, directionFrames().size)
+        assertTrue(directionFrames().last(), directionFrames().last().contains("Кафе совсем рядом"))
+        assertTrue(NavJournal.texts().contains("live directions → сервер: мест 1, причина=after_trip"))
+
+        // Поездка не удалась — фразы всё равно обновляются.
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(500); NavigationResult.Failed(-1, "busy") }
+        coEvery { robot.getPosition() } returns RobotPose(0.0, 6.0, 0.0)
+        conn.server(LiveEvent.Action("guide_to", "cafe"))
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(3, directionFrames().size)
+        assertTrue(directionFrames().last(), directionFrames().last().contains("примерно в 6 метрах"))
+    }
+
+    @Test
+    fun `live directions - no robot position, no frame, and the session keeps working`() = runTest(dispatcher) {
+        coEvery { robot.getPosition() } returns null
+        val vm = vm()
+        assertTrue(directionFrames().isEmpty())
+        assertTrue(vm.liveOpen)
+        assertTrue(NavJournal.texts().contains("live directions (start): нет позиции робота — не шлю"))
+        // getPosition падает (RobotApi) — тоже без кадра и без сбоя сессии.
+        coEvery { robot.getPosition() } throws IllegalStateException("RobotApi died")
+        conn.server(LiveEvent.Action("guide_to", "cafe"))
+        advanceTimeBy(2_000); runCurrent()
+        assertTrue(directionFrames().isEmpty())
+        assertTrue(vm.liveOpen)
+        assertTrue(conn.framesOfType("hello").size == 1 && !conn.closed)
+    }
+
+    @Test
+    fun `live directions - periodic check sends only when the robot moved at least half a meter or turned 20 degrees`() = runTest(dispatcher) {
+        val file = java.io.File.createTempFile("places", ".json").apply { delete(); deleteOnExit() }
+        val vm = MainViewModel(
+            backend, voice, camera, phrases, clock = { testScheduler.currentTime },
+            wayFinder = WayFinder(PlaceRepository(backend, robot, file, dispatcher), robot), robot = robot,
+            chatMode = { mode }, presence = presence, liveFactory = factory(), foreground = foreground,
+            liveDirectionsPeriodMillis = 15_000,
+        )
+        runCurrent()
+        assertEquals(1, directionFrames().size) // start
+        coEvery { robot.getPosition() } returns RobotPose(0.3, 0.0, Math.toRadians(10.0))
+        advanceTimeBy(15_001); runCurrent()
+        assertEquals("small shift - nothing new", 1, directionFrames().size)
+        coEvery { robot.getPosition() } returns RobotPose(0.0, 0.0, Math.toRadians(25.0))
+        advanceTimeBy(15_000); runCurrent()
+        assertEquals("turned 25 degrees", 2, directionFrames().size)
+        coEvery { robot.getPosition() } returns RobotPose(0.0, 0.6, Math.toRadians(25.0))
+        advanceTimeBy(15_000); runCurrent()
+        assertEquals("moved 0.6 m", 3, directionFrames().size)
+        assertTrue(NavJournal.texts().contains("live directions → сервер: мест 1, причина=moved"))
+        advanceTimeBy(15_000); runCurrent()
+        assertEquals("standing still", 3, directionFrames().size)
+        // Приложение ушло с экрана — live закрыт, проверки остановлены.
+        foreground.value = false
+        runCurrent()
+        assertFalse(vm.liveOpen)
+        coEvery { robot.getPosition() } returns RobotPose(5.0, 5.0, 0.0)
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(3, directionFrames().size)
     }
 
     /** Ход сервера, как его шлёт настоящий сервер: turn_start → phrase → звук → turn_end. */

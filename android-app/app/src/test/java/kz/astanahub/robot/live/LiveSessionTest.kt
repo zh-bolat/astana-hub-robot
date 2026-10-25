@@ -54,6 +54,22 @@ class LiveSessionTest {
     }
 
     @Test
+    fun `directions go out only after ready and never after close`() = runTest(dispatcher) {
+        val h = harness(conn = FakeLiveConnection(autoReady = null))
+        val d = mapOf("cafe" to mapOf(Lang.RU to "Кафе — справа от вас, примерно в 15 метрах."))
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        assertFalse("no ready yet", h.session.sendDirections(d))
+        h.conn.server(LiveEvent.Ready(LiveAudioFormat.DEFAULT))
+        runCurrent()
+        assertTrue(h.session.sendDirections(d))
+        runCurrent()
+        assertEquals(listOf(LiveFrames.directions(d)), h.conn.framesOfType("state"))
+        h.session.close()
+        assertFalse(h.session.sendDirections(d))
+    }
+
+    @Test
     fun `hello first, visitor_arrived after ready, mic streams 40 ms frames`() = runTest(dispatcher) {
         val h = harness()
         h.session.start(Lang.RU, "reception", greet = true)
