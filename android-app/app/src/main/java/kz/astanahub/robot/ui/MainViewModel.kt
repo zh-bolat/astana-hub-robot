@@ -1224,7 +1224,11 @@ class MainViewModel(
             }
             return true
         }
-        if (clock() < liveDownUntil) return false
+        if (clock() < liveDownUntil) {
+            // Повтор мог быть отменён сном — запланировать заново на остаток паузы.
+            if (liveRetryJob?.isActive != true) scheduleLiveRetry(liveDownUntil - clock())
+            return false
+        }
         val session = factory.create(viewModelScope, sessionId, _state.value.lang) ?: return false
         Timber.i("live: opening session")
         live = session
@@ -1386,6 +1390,7 @@ class MainViewModel(
         livePendingQuestion = null
         liveTurn = null
         _state.update { it.copy(partialQuestion = null) }
+        if (_state.value.phase == Phase.THINKING) setBusy(null)
         if (pending == null) return
         emotionJob?.cancel()
         _state.update { it.copy(question = null, answer = null, subtitle = null, emotion = Emotion.NEUTRAL) }
@@ -1518,10 +1523,10 @@ class MainViewModel(
         }
     }
 
-    private fun scheduleLiveRetry() {
+    private fun scheduleLiveRetry(after: Long = liveRetryMillis) {
         liveRetryJob?.cancel()
         liveRetryJob = viewModelScope.launch {
-            delay(liveRetryMillis)
+            delay(after)
             while (live == null && chatMode() == ChatMode.LIVE && _state.value.mode != ScreenMode.SLEEP) {
                 // Не посреди ответа agent и не во время поездки: дождаться паузы в разговоре.
                 if (!busyNow()) {
