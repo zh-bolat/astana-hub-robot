@@ -248,6 +248,8 @@
                     android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="agent" />
                 <Button android:id="@+id/chatModeLegacy" style="@style/Widget.Hub.LangButton"
                     android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="legacy" />
+                <Button android:id="@+id/chatModeLive" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="live" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
             <TextView android:id="@+id/presenceLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_presence" />

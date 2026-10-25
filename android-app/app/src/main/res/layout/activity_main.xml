@@ -691,6 +691,24 @@
             android:textSize="34sp"
             tools:text="«Где здесь можно выпить кофе»" />
 
+        <!-- Живой режим, where_is: направление по карте робота (озвучивает сервер) -->
+        <TextView
+            android:id="@+id/faceWay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:paddingStart="80dp"
+            android:paddingEnd="80dp"
+            android:textColor="@color/hub_ink"
+            android:textSize="36sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            tools:text="➤ Кафе справа от вас, метров 15."
+            tools:visibility="visible" />
+
         <!-- Крупные субтитры: фраза, которую робот говорит сейчас -->
         <TextView
             android:id="@+id/faceSubtitle"

@@ -159,8 +159,14 @@ class ServerVoiceGateway(
 
     /** Пауза постоянного прослушивания (сон без человека рядом); кнопка микрофона работает и на паузе. */
     override fun setListeningPaused(paused: Boolean) {
-        if (this.paused.value != paused) Timber.i("server ASR paused=%s", paused)
+        if (this.paused.value == paused) return
+        Timber.i("server ASR paused=%s", paused)
         this.paused.value = paused
+        // Текущая запись тоже прекращается: микрофон нужен живому режиму (/v1/live), и сон не должен дослушивать фразу.
+        if (paused && continuous) {
+            continuous = false
+            setContinuous(true)
+        }
     }
 
     fun stopListening() {

@@ -235,12 +235,23 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
         val chat = container.chatSettings
-        binding.chatModeGroup.check(if (chat.mode.value == ChatMode.AGENT) R.id.chatModeAgent else R.id.chatModeLegacy)
+        binding.chatModeGroup.check(
+            when (chat.mode.value) {
+                ChatMode.AGENT -> R.id.chatModeAgent
+                ChatMode.LEGACY -> R.id.chatModeLegacy
+                ChatMode.LIVE -> R.id.chatModeLive
+            },
+        )
         binding.chatModeGroup.addOnButtonCheckedListener { _, id, checked ->
             if (!checked) return@addOnButtonCheckedListener
-            val mode = if (id == R.id.chatModeAgent) ChatMode.AGENT else ChatMode.LEGACY
+            val mode = when (id) {
+                R.id.chatModeAgent -> ChatMode.AGENT
+                R.id.chatModeLive -> ChatMode.LIVE
+                else -> ChatMode.LEGACY
+            }
             chat.set(mode)
-            log("Разговор: ${mode.code}")
+            log("Разговор: ${mode.code}" + if (mode == ChatMode.LIVE) " (WS /v1/live; сбой → agent, повтор через 30 с)" else "")
+            if (mode == ChatMode.LIVE) log("Live-микрофон: ${container.liveMicrophone.lastConfig}")
         }
 
         // Эмулятор: подошёл / ушёл человек (на роботе — PersonApi, кнопок нет).

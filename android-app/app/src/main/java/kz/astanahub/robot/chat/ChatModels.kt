@@ -65,11 +65,18 @@ sealed interface ChatEvent {
     data class Error(val error: BackendError) : ChatEvent
 }
 
-/** Режим разговора: agent — `/v1/chat`; legacy — прежний путь (локальные правила + `/v1/ask`). */
+/**
+ * Режим разговора: agent — `/v1/chat`; legacy — прежний путь (локальные правила + `/v1/ask`);
+ * live — живой голосовой режим `WS /v1/live` (при сбое — как agent, возврат в live через 30 с).
+ */
 enum class ChatMode(val code: String) {
     AGENT("agent"),
     LEGACY("legacy"),
+    LIVE("live"),
     ;
+
+    /** Лицо на весь экран и агент на сервере (agent и live). */
+    val usesAgent: Boolean get() = this != LEGACY
 
     companion object {
         fun fromCode(code: String?): ChatMode? = entries.firstOrNull { it.code.equals(code?.trim(), ignoreCase = true) }

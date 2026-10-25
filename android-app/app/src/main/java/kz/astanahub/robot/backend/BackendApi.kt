@@ -48,6 +48,9 @@ interface BackendApi {
      */
     val supportsLiveStt: Boolean get() = false
 
+    /** Живой голосовой режим (WS /v1/live); null — не поддерживается (заглушки, нет адреса сервера). */
+    fun openLive(lang: Lang, sessionId: String): kz.astanahub.robot.live.LiveConnection? = null
+
     /**
      * `POST /v1/chat` (SSE). Поток заканчивается [ChatEvent.Done] или [ChatEvent.Error];
      * отмена сборщика обрывает соединение (посетитель перебил). Действие `look` клиент выполняет сам
