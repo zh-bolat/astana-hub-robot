@@ -34,9 +34,9 @@ def test_places_and_etag(client):
 
 def test_quick_questions(client):
     ru = client.get("/v1/quick-questions", headers=AUTH).json()["items"]
-    assert {"id": "wifi", "text": "Какой пароль от Wi-Fi?"} in ru
+    assert {"id": "transport", "text": "Как сюда добраться?"} in ru
     kk = client.get("/v1/quick-questions?lang=kk", headers=AUTH).json()["items"]
-    assert {"id": "wifi", "text": "Wi-Fi құпиясөзі қандай?"} in kk
+    assert {"id": "transport", "text": "Мұнда қалай жетуге болады?"} in kk
     r = client.get("/v1/quick-questions?lang=de", headers=AUTH)
     assert r.status_code == 400
 

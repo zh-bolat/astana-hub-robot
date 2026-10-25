@@ -1,11 +1,13 @@
-# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ. Кнопки частых вопросов на экране робота (шаг 7.3).
+# Кнопки частых вопросов на экране робота (шаг 7.3).
 # Нажатие кнопки = POST /v1/ask с текстом кнопки на текущем языке.
+# Ответы — факты facts.yaml: transport → transport_lrt, hours, cafe, coworking, residency.
+# После правки пересобрать sheet_template/buttons.csv (тест test_template_equals_yaml_examples).
 items:
-  - id: wifi
+  - id: transport
     text:
-      ru: Какой пароль от Wi-Fi?
-      kk: Wi-Fi құпиясөзі қандай?
-      en: What is the Wi-Fi password?
+      ru: Как сюда добраться?
+      kk: Мұнда қалай жетуге болады?
+      en: How do I get here?
   - id: hours
     text:
       ru: Во сколько работает хаб?
