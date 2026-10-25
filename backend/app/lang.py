@@ -117,3 +117,44 @@ def lang_instruction(requested: str | None, text: str) -> str:
     if script == "lat":
         return "kk (казахский)" if req == "kk" else "en (английский)"
     return req or "определи по вопросу"
+
+
+# Коды языка от STT: ISO 639-1/639-3 и локали («rus», «kaz», «en-US»)
+_STT_CODES = {"rus": "ru", "kaz": "kk", "kz": "kk", "eng": "en"}
+
+
+def stt_lang_code(value: object) -> Lang | None:
+    """Язык, который вернул распознаватель, → ru / kk / en; другой язык или пусто — None."""
+    raw = str(getattr(value, "value", value) or "").strip().lower().replace("_", "-")
+    if not raw:
+        return None
+    base = raw.split("-")[0]
+    return normalize_lang(_STT_CODES.get(base, base))
+
+
+def utterance_lang(text: str, stt_lang: Lang | None, session_lang: Lang) -> Lang:
+    """Язык реплики посетителя (live): казахские буквы и частицы → kk; иначе язык от STT, если он из
+    ru/kk/en и совпадает с письменностью; иначе — язык сессии (STT вернул другой язык или ничего)."""
+    script = script_of(text)
+    if script == "cyr":
+        if _is_kazakh(text):
+            return "kk"
+        if stt_lang in ("ru", "kk"):
+            return stt_lang
+        return session_lang if session_lang in ("ru", "kk") else "ru"
+    if script == "lat":
+        return "kk" if stt_lang == "kk" else "en"
+    return stt_lang or session_lang
+
+
+def tts_lang(phrase: str, fallback: Lang) -> Lang:
+    """Голос для фразы ответа — по самой фразе: казахские буквы/частицы → kk (казахский текст никогда не
+    уходит в ru/en-голос и модель flash), латиница → en, кириллица без примет — ru или kk хода."""
+    script = script_of(phrase)
+    if script == "cyr":
+        if _is_kazakh(phrase):
+            return "kk"
+        return fallback if fallback in ("ru", "kk") else "ru"
+    if script == "lat":
+        return "en"
+    return fallback

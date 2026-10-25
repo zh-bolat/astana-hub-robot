@@ -251,9 +251,21 @@ STT и TTS выбираются раздельно (`app/speech/`):
   модель с казахским), ru/en → `eleven_flash_v2_5`, `language_code` передаётся. STT — Scribe `scribe_v2`, сырой PCM
   (`file_format=pcm_s16le_16`), `language_code` при известном языке, иначе автоопределение; `confidence` =
   `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs; по умолчанию
-  женские: RU Matilda, KZ Bella, EN Alice). `voice_settings`: `ELEVENLABS_STABILITY` 0.4, `ELEVENLABS_SIMILARITY` 0.8,
-  `ELEVENLABS_STYLE` 0.35, `ELEVENLABS_SPEAKER_BOOST` true, `ELEVENLABS_SPEED` 1.05 (0.7–1.2); `eleven_v3` (kk)
-  получает только `stability`, округлённую до 0.0 / 0.5 / 1.0. Настройки входят в ключ кеша TTS.
+  выбранные на прослушивании: RU Alina `dVRDrbP5ULGXB94se4KZ`, EN Laura `FGY2WhTYpPnrIDTdsKH5` — `eleven_flash_v2_5`,
+  KZ Kari `Jbte7ht1CqapnZvc4KpK` — `eleven_v3`); те же голоса берёт live. `voice_settings` flash (ru/en, общие):
+  `ELEVENLABS_STABILITY` 0.35, `ELEVENLABS_SIMILARITY` 0.8, `ELEVENLABS_STYLE` 0.45, `ELEVENLABS_SPEAKER_BOOST` true,
+  `ELEVENLABS_SPEED` 1.1 (0.7–1.2); `eleven_v3` (kk) — только `ELEVENLABS_V3_STABILITY` 0.5 (0.0 / 0.5 / 1.0) и
+  звуковой тег `ELEVENLABS_V3_TAG` (`[cheerfully]`) перед каждой фразой — только в теле запроса синтеза, не в
+  субтитрах, истории и журнале. Настройки и тег входят в ключ кеша TTS. Казахский текст (буквы ә, ғ, қ, …) всегда
+  синтезируется голосом kk и v3, даже если робот прислал `lang=ru`; модель kk без казахского (flash) заменяется на
+  `eleven_v3`. `ELEVENLABS_TTS_MODEL_RU/EN` — своя модель /v1/tts для языка.
+- **Текст для синтеза** (`app/tts_text.py`, /v1/tts и live; субтитры и журнал — как написал агент): «…»/«...» →
+  запятая/точка (v3 читает их как запинки), `[..]` вырезаются, `(..)` — через запятую, междометия в начале фразы
+  («Хм», «Ммм», «Э-э», «Ну», «Um») убираются, фраза из одних междометий не звучит; числа и время словами для ru и kk
+  (num2words + падеж от предлога / казахский сингармонизм: «с 9:00 до 18:00» → «с девяти до восемнадцати»,
+  «9:00-ден 18:00-ге дейін» → «тоғыздан он сегізге дейін», «на 2 этаже» → «на втором этаже», «2-қабат» → «екінші
+  қабат»); словарь произношений (Astana Hub → Астана Хаб, TikTok → Тик-Ток, Wi-Fi → вай-фай / уай-фай, IT → ай-ти, …)
+  дополняется файлом `pronunciations.yaml` в папке базы знаний (`ru: {Astana Hub: Астана Хаб}`), без перезапуска.
 - **Запасной TTS** (`TTS_FALLBACK_PROVIDER`): при ошибке основного (кончились кредиты ElevenLabs, 5xx, сеть) фраза
   синтезируется запасным — для мероприятия `TTS_PROVIDER=elevenlabs` + `TTS_FALLBACK_PROVIDER=openrouter` (те же
   voice_id). Таймаут не переключает: время запроса уже вышло. В логе — событие `tts_fallback`.
@@ -296,7 +308,7 @@ transport.input (LiveSerializer: PCM16 16 кГц + JSON-команды)
   → VADProcessor (Silero, start/stop 0,2 с)
   → ElevenLabsRealtimeSTTService (scribe_v2_realtime, ручной commit на паузе VAD → финал сразу)
   → LiveConversation (smart-turn v3 → конец реплики; перебивание; агент ChatService; события)
-  → TTS: ServiceSwitcher по языку хода — ru/en ElevenLabsTTSService (WebSocket, eleven_flash_v2_5),
+  → TTS: ServiceSwitcher по языку КАЖДОЙ фразы — ru/en ElevenLabsTTSService (WebSocket, eleven_flash_v2_5),
          kk ElevenLabsHttpTTSService (HTTP-поток, eleven_v3: WebSocket ElevenLabs не принимает v3)
   → transport.output (PCM16 24 кГц `pcm_s16le_24000` + JSON) → PlayoutTracker (часы воспроизведения)
 ```
@@ -307,8 +319,26 @@ transport.input (LiveSerializer: PCM16 16 кГц + JSON-команды)
   промежуточным текстом, но платится каждая секунда открытого микрофона (бесплатные 10 000 кредитов ElevenLabs
   ушли за ~45 минут сессий). Перебивание в `segmented` решается по тексту отрезка (не шум, не эхо).
 - **Конец реплики**: пауза VAD 0,2 с → smart-turn v3.2 (локальная ONNX-модель из пакета pipecat, CPU) решает,
-  договорил ли посетитель; «договорил» — ход сразу, «нет» — ждём тишину до `LIVE_TURN_MAX_SILENCE_S` (1,2 с).
-  `LIVE_SMART_TURN=false` — конец реплики после `LIVE_TURN_SILENCE_S` (0,5 с) тишины.
+  договорил ли посетитель; «договорил» — ход сразу, «нет» — ждём тишину до `LIVE_TURN_MAX_SILENCE_S` (0,8 с).
+  `LIVE_SMART_TURN=false` — конец реплики после `LIVE_TURN_SILENCE_S` (0,5 с) тишины. В `segmented` отрезки-тишина
+  (пик ниже `STT_SILENCE_PEAK`) и обрывки короче 0,25 с в STT не уходят.
+- **Язык реплики**: `LIVE_STT_LANGUAGE_HINT=false` (по умолчанию) — STT определяет язык сам; язык реплики — казахские
+  буквы/частицы → kk, иначе язык от STT, а если STT вернул язык не из ru/kk/en (или ничего) — язык сессии
+  (`hello.lang`). Он уходит в `user_final.lang` и агенту.
+- **Быстрый путь мест** (`LIVE_FAST_PLACES=true`, `app/agent/fastpath.py`): явный запрос «где X?» / «как пройти к X»
+  / «проводите (меня) до X» / «X қайда?» / «X-ке апарыңыз» / «where is X» / «take me to X», где X однозначно
+  находится в базе (id, map_name, названия, синонимы; русские падежи и казахский дательный снимаются), — шаблонный
+  ответ на языке реплики и `where_is` / `guide_to` без модели («Пойдёмте, провожу до кафе!»; where_is — словами
+  описания места, если в нём есть направление, иначе «смотрите стрелку на экране. Проводить вас?»). Короткое «да» на
+  «Проводить вас?» (в течение 2 мин) — сразу `guide_to`. Ход пишется в журнал (`category=kb`, `provider=local:places`)
+  и память агента, следующая реплика идёт агенту с контекстом. Сомнительное (два вопроса, «туда», несколько мест) —
+  агенту.
+- **Скорость звука**: при открытии сессии голоса прогреваются в фоне (`LIVE_TTS_WARMUP=all`: язык сессии, затем
+  остальные; не чаще `LIVE_TTS_WARMUP_INTERVAL_S` на голос; холодный голос ElevenLabs отвечает 10–19 с, тёплый —
+  0,5–0,8 с), звука роботу нет. Первая фраза агента короткая (промпт), длинная первая фраза уходит в TTS по запятой,
+  не дожидаясь точки; для синтеза фразы длиннее `LIVE_TTS_CHUNK_CHARS` (kk — `LIVE_TTS_CHUNK_CHARS_KK`, первая —
+  `LIVE_TTS_FIRST_CHUNK_CHARS_KK`) режутся по запятым. Звук шаблонных фраз быстрого пути — из кеша TTS
+  (`LIVE_TTS_PHRASE_CACHE`, PCM 24 кГц, промах — заполняется в фоне).
 - **Ответ**: тот же агент, что `/v1/chat` (промпт, тулы, память, эмоции, фильтры; шум → `ignored` без вызова модели),
   но фразы уходят в TTS по мере генерации — каждое законченное предложение (`LiveTurn` в `app/agent/service.py`).
   Если модель в том же ответе начала вызов инструмента, остаток текста этого ответа не озвучивается.

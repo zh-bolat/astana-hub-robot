@@ -13,10 +13,13 @@ LIVE_MAX_SESSIONS сессий на токен (иначе error rate_limited + 
 session_id закрывает старое. LIVE_ENABLED=false или нет ключей — error speech_unavailable + 1011 (робот
 уходит в запасной режим /v1/chat + /v1/stt + /v1/tts). Простой (ни речи, ни звука ответа, ни команд робота)
 дольше LIVE_IDLE_TIMEOUT_S — закрытие 1000 «idle timeout». Звук посетителя живёт только в памяти пайплайна.
+
+При открытии — прогрев голосов TTS в фоне (LIVE_TTS_WARMUP: язык сессии, затем остальные), звука роботу нет.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
@@ -40,13 +43,14 @@ from starlette.websockets import WebSocketState
 
 from app.api import check_token
 from app.errors import ApiError
-from app.lang import Lang, normalize_lang
+from app.lang import LANGS, Lang, normalize_lang
 from app.live.conversation import LiveConversation
 from app.live.playout import EchoGate, Playout, PlayoutTracker
 from app.live.protocol import AUDIO_FORMAT, AUDIO_IN_RATE, AUDIO_OUT_RATE, LiveSerializer
 from app.live.protocol import error_event as _error_event
 from app.live.protocol import event as _event
 from app.live.services import LiveServices
+from app.live.tts_cache import PhraseAudioCache
 from app.logging_setup import logger, new_request_id, reset_request_id, set_request_id
 
 router = APIRouter(prefix="/v1")
@@ -104,6 +108,7 @@ class LiveSession:
         self.conversation: LiveConversation | None = None
         self.worker: PipelineWorker | None = None
         self.service_errors = 0
+        self.phrase_cache: PhraseAudioCache | None = None
         self.close_code = 1000
         self.close_reason = ""
 
@@ -133,6 +138,12 @@ class LiveSession:
         playout = Playout(sample_rate=AUDIO_OUT_RATE)
         gate = EchoGate(playout, threshold=s.live_echo_rms, tail_s=s.live_echo_tail_s)
         serializer = LiveSerializer()
+        phrase_cache = None
+        if services.synth_pcm is not None and services.tts_signature is not None:
+            phrase_cache = PhraseAudioCache(
+                self.app.state.tts_cache, services.synth_pcm, services.tts_signature
+            )
+        self.phrase_cache = phrase_cache
         transport = FastAPIWebsocketTransport(
             self.ws,
             FastAPIWebsocketParams(
@@ -158,8 +169,23 @@ class LiveSession:
             set_stt_lang=services.set_stt_lang,
             provider=services.provider,
             stt_segmented=services.stt_segmented,
+            phrase_cache=phrase_cache,
+            warmup=services.warmup if s.live_tts_warmup != "off" else None,
+            pronunciations=s.knowledge_dir / "pronunciations.yaml",
+            tts_text=services.tts_text,
         )
         self.conversation = conv
+        warm_task: asyncio.Task | None = None
+
+        async def warm_voices() -> None:
+            """Холодный голос ElevenLabs отвечает 10–19 с: греем язык сессии, затем остальные."""
+            assert services.warmup is not None
+            langs = [self.lang] + (
+                [c for c in LANGS if c != self.lang] if s.live_tts_warmup == "all" else []
+            )
+            for code in langs:
+                await services.warmup(code)
+
         pipeline = Pipeline(
             [
                 transport.input(),
@@ -194,8 +220,11 @@ class LiveSession:
 
         @worker.event_handler("on_pipeline_started")
         async def _started(_worker, _frame) -> None:
+            nonlocal warm_task
             await conv.send_now(_event("ready", audio_format=AUDIO_FORMAT))
             await conv.send_now(_event("listening"))
+            if services.warmup is not None and s.live_tts_warmup != "off":
+                warm_task = asyncio.create_task(warm_voices(), name="live_tts_warmup")
 
         @worker.event_handler("on_idle_timeout")
         async def _idle(_worker) -> None:
@@ -242,6 +271,12 @@ class LiveSession:
             await runner.run()
         finally:
             await conv.close(interrupted=True)
+            if warm_task is not None and not warm_task.done():
+                warm_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await warm_task
+            if phrase_cache is not None:
+                await phrase_cache.aclose()
             if services.aclose is not None:
                 with contextlib.suppress(Exception):
                     await services.aclose()

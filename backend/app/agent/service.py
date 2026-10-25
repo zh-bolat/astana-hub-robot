@@ -39,6 +39,12 @@ from agents import (
 from agents.agent import StopAtTools
 from openai import AsyncOpenAI, OpenAIError
 
+from app.agent.fastpath import (
+    PlaceIntent,
+    is_consent,
+    match_place_intent,
+    place_reply,
+)
 from app.agent.prompts import (
     EMOTIONS,
     GREETINGS,
@@ -63,6 +69,7 @@ from app.safety import BLOCKED_ANSWERS, blocked_reason, kb_corpus, limit_phrases
 from app.schemas import AnswerResponse, ChatAction, ChatRequest, ChatResponse
 from app.service import AnswerService
 from app.text import clean_for_tts, split_phrases
+from app.tts_text import is_filler_only
 
 set_tracing_disabled(True)
 
@@ -70,6 +77,7 @@ ASTANA_TZ = timezone(timedelta(hours=5))
 HISTORY_TIMEOUT_S = 1.0
 _EPHEMERAL = {"type": "ephemeral"}
 RECENT_SESSIONS = 1000  # разговоров в кеше памяти; старые вытесняются
+OFFER_TTL_S = 120.0  # «Проводить вас?» ждёт «да» не дольше
 _ERROR_STATUS = {"timeout": 504, "llm_unavailable": 503}
 
 
@@ -126,6 +134,9 @@ class LiveTurn:
 
 # Конец предложения в потоке текста: знак и пробел после него (следующий токен уже пришёл)
 _SENTENCE_END = re.compile(r"[.!?…]+[»\")]*\s+")
+# Первая фраза live без конца предложения, но уже длинная — уходит в TTS по запятой: звук начинается раньше
+_CLAUSE_END = re.compile(r"[,;:]\s+|\s+[—–]\s+")
+FIRST_CLAUSE_CHARS = 60
 
 
 # Модель без размышлений иногда «думает» текстом: «The visitor asks…», «Посетитель просит…»
@@ -172,6 +183,15 @@ def _is_narration(phrase: str, lang: Lang) -> bool:
         return True
     # по-английски посреди русского/казахского ответа — это разбор реплики, а не ответ
     return lang != "en" and script_of(phrase) == "lat" and len(phrase.split()) >= 4
+
+
+@dataclass
+class _Offer:
+    """Робот предложил проводить к месту («Проводить вас?») — короткое «да» сразу отдаёт guide_to."""
+
+    place_id: str
+    lang: Lang
+    at: float
 
 
 @dataclass
@@ -282,6 +302,7 @@ class ChatService:
             OpenAIChatCompletionsModel(settings.agent_model, client) if client is not None else None
         )
         self._recent: OrderedDict[str, _Recent] = OrderedDict()
+        self._offers: OrderedDict[str, _Offer] = OrderedDict()
 
     @property
     def name(self) -> str:
@@ -496,6 +517,8 @@ class ChatService:
         interrupted: bool = False,
     ) -> dict:
         st.logged = True
+        if not st.greeting:
+            self._remember_offer(req, st)
         found = st.category not in ("out_of_scope", "blocked")
         done = {
             "request_id": request_id,
@@ -557,6 +580,9 @@ class ChatService:
         """Фразы, которые можно отправить: выходной фильтр + лимит 4 фразы / 600 символов."""
         out: list[str] = []
         for phrase in split_phrases(clean_for_tts(text)):
+            if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
+                logger.info("agent_filler_dropped", extra={"chars": len(phrase)})
+                continue
             if _is_narration(phrase, st.lang):
                 logger.warning("agent_narration_dropped", extra={"chars": len(phrase)})
                 continue
@@ -606,6 +632,7 @@ class ChatService:
                 },
             )
             return
+        offer = None if st.greeting else self._offers.pop(req.session_id, None)
         quick = None if st.greeting else self.answers._quick(req, request_id)
         if quick is not None:
             st.lang, st.category, st.provider = quick.lang, "small_talk", "local:smalltalk"
@@ -616,6 +643,11 @@ class ChatService:
                 for event in _phrase_events(st, phrase):
                     yield event
             yield "done", done
+            return
+        intent = self._fast_place(req, st, offer)
+        if intent is not None:
+            async for event in self._place_reply(req, request_id, st, started, intent, offer):
+                yield event
             return
         if self.model is None:
             source = self._ready_greeting if st.greeting else self._fallback
@@ -687,6 +719,16 @@ class ChatService:
                         if st.live is not None and not tool_started:
                             text = "".join(turn_text)
                             ends = list(_SENTENCE_END.finditer(text, streamed))
+                            if (
+                                not ends
+                                and not st.emitted
+                                and len(text) - streamed >= FIRST_CLAUSE_CHARS
+                            ):
+                                ends = [
+                                    m
+                                    for m in _CLAUSE_END.finditer(text, streamed)
+                                    if m.start() - streamed >= 20
+                                ][-1:]
                             if ends:
                                 chunk, streamed = text[streamed : ends[-1].end()], ends[-1].end()
                                 for phrase in self._admit(
@@ -790,6 +832,83 @@ class ChatService:
                 for event in _phrase_events(st, phrase):
                     yield event
         yield "done", await self._finish(req, request_id, st, started)
+
+    # ---------- быстрый путь живого режима: места без модели ----------
+    def _fast_place(
+        self, req: ChatRequest, st: _ChatState, offer: _Offer | None
+    ) -> PlaceIntent | None:
+        """WS /v1/live: «где X?» / «проводи до X» с однозначным местом или «да» на «Проводить вас?»."""
+        if st.live is None or st.greeting or not self.settings.live_fast_places:
+            return None
+        kb = self.store.get()
+        intent = match_place_intent(req.question, kb)
+        if intent is not None:
+            return intent
+        if (
+            offer is None
+            or time.monotonic() - offer.at > OFFER_TTL_S
+            or not is_consent(req.question)
+        ):
+            return None
+        place = kb.place(offer.place_id)
+        if place is None:
+            return None
+        return PlaceIntent("guide_to", place, resolve_lang(offer.lang, None, req.question))
+
+    async def _place_reply(
+        self,
+        req: ChatRequest,
+        request_id: str,
+        st: _ChatState,
+        started: float,
+        intent: PlaceIntent,
+        offer: _Offer | None,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """Шаблонный ответ + действие, как у агента: журнал (category=kb), память с вызовом инструмента."""
+        place, lang = intent.place, intent.lang
+        consent = offer is not None and offer.place_id == place.id and intent.kind == "guide_to"
+        emotion, phrases = place_reply(intent)
+        st.lang, st.category, st.provider = lang, "kb", "local:places"
+        st.emotion = emotion
+        action = {"type": intent.kind, "place_id": place.id}
+        st.actions.append(action)
+        st.sources = [place.source_id]
+        result = {"ok": True, "place_id": place.source_id, "name": place.names.get(lang)}
+        st.calls = [
+            (
+                intent.kind,
+                {"place_id": place.source_id},
+                json.dumps(result | {"fast_path": True}, ensure_ascii=False),
+            )
+        ]
+        st.emitted.extend(phrases)
+        logger.info(
+            "chat_fast_place",
+            extra={
+                "session_id": req.session_id,
+                "action": intent.kind,
+                "place_id": place.id,
+                "lang": lang,
+                "consent": consent,
+            },
+        )
+        done = await self._finish(req, request_id, st, started)
+        yield "action", action
+        for phrase in phrases:
+            for kind, data in _phrase_events(st, phrase):
+                # шаблонная фраза: звук можно взять из кеша (live), текст не зависит от модели
+                yield kind, (data | {"cache": True} if kind == "phrase" else data)
+        yield "done", done
+
+    def _remember_offer(self, req: ChatRequest, st: _ChatState) -> None:
+        """Ответ с where_is, который кончается вопросом («Проводить вас?»): ждём «да»."""
+        where = [a for a in st.actions if a.get("type") == "where_is" and a.get("place_id")]
+        if not where or not st.emitted or not st.emitted[-1].rstrip().endswith("?"):
+            return
+        self._offers[req.session_id] = _Offer(where[-1]["place_id"], st.lang, time.monotonic())
+        self._offers.move_to_end(req.session_id)
+        while len(self._offers) > RECENT_SESSIONS:
+            self._offers.popitem(last=False)
 
     async def _ready_greeting(
         self, req: ChatRequest, request_id: str, st: _ChatState, started: float

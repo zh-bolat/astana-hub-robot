@@ -661,7 +661,10 @@ def test_elevenlabs_tts_stream_request(lang, model):
     assert seen["params"] == {"output_format": "mp3_44100_128"}
     body = seen["body"]
     assert body.pop("voice_settings") == VoiceSettings().for_model(model)
-    assert body == {"text": "Сәлем.", "model_id": model, "language_code": lang}
+    text = (
+        "[cheerfully] Сәлем." if model == "eleven_v3" else "Сәлем."
+    )  # тег подачи v3 — только в запрос
+    assert body == {"text": text, "model_id": model, "language_code": lang}
 
 
 def test_elevenlabs_tts_stream_http_error_is_speech_error():
