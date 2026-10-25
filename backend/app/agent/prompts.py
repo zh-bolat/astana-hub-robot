@@ -46,13 +46,13 @@ _COMMON = """Ты — голосовой робот-помощник техно�
 Инструменты:
 - where_is(place_id) — показать на экране, где место («где X?»);
 - guide_to(place_id) — поехать и проводить посетителя («проводите», «отведите», «покажите дорогу»);
-- look() — посмотреть камерой («что это?», «что ты видишь?», «где я?» по картинке);
+- look() — посмотреть камерой («что это?», «что ты видишь?», «где я?» по картинке);{search_tool}
 - no_answer() — {no_answer_rule}
 
 place_id — id из раздела «Места» (например "place:cafe"). Место выбирай по смыслу, а не по буквам: его называют
 на любом языке и своими словами (elevator / лифт / көтергіш → "place:lift", «хочу перекусить» → "place:snacks");
 подсказки — names и aliases. Места нет в списке — не выдумывай, уточни. Подходят несколько — коротко переспроси.
-Помни разговор: «туда», «а там», «а он» — про то, о чём говорили раньше.
+Помни разговор: «туда», «а там», «а он» — про то, о чём говорили раньше.{search_rule}
 
 Правила ответа:
 1. Факты о хабе — ТОЛЬКО из «БАЗЫ ЗНАНИЙ». Не придумывай чисел, имён, часов, цен, событий.
@@ -115,6 +115,15 @@ _GENERAL_OPEN = (
 )
 
 
+_SEARCH_TOOL = """
+- search_kb(query) — найти подробности о хабе в базе знаний;"""
+_SEARCH_RULE = """
+Поиск: ответа нет в «Фактах», а вопрос о деталях хаба (программы, правила, цены, льготы, резидентство, визы,
+пространства, мероприятия) — вызови search_kb, query — суть вопроса по-русски. Не ищи для приветствий,
+«где X» / «проводи» и вопросов не про хаб. После поиска отвечай только по найденному, 1–3 предложения;
+подходящего нет — «Точно не знаю, уточните на ресепшене». Источник и ссылки вслух не называй."""
+
+
 def _kb_events_json(kb: KnowledgeBase) -> str:
     events = [
         {
@@ -130,10 +139,13 @@ def _kb_events_json(kb: KnowledgeBase) -> str:
     return json.dumps(events, ensure_ascii=False, separators=(",", ":"))
 
 
-def agent_instructions(kb: KnowledgeBase, mode: str = "open") -> str:
+def agent_instructions(kb: KnowledgeBase, mode: str = "open", search: bool = False) -> str:
+    """search — есть инструмент search_kb (RETRIEVAL_MODE=hybrid): строка о нём и правило поиска."""
     rules = _COMMON.format(
         no_answer_rule=_NO_ANSWER_OPEN if mode == "open" else _NO_ANSWER_STRICT,
         general_rule=_GENERAL_OPEN if mode == "open" else _GENERAL_STRICT,
+        search_tool=_SEARCH_TOOL if search else "",
+        search_rule=_SEARCH_RULE if search else "",
     )
     return (
         f"{rules}\n\n"

@@ -10,6 +10,9 @@
   CHAT_PROVIDER=off → всегда /v1/ask.
 - Трассировка SDK выключена: тексты посетителей не уходят в OpenAI.
 
+- Поиск по базе (RETRIEVAL_MODE=hybrid): инструмент search_kb; найденное — в `sources` и `citations` ответа
+  (done, JSON, live turn_end) и в корпус выходного фильтра (ссылки и телефоны из найденного не блокируются).
+
 Категории в логе вопросов (endpoint=chat): agent — ответ агента; small_talk — локальный быстрый ответ;
 out_of_scope — агент вызвал no_answer или промолчал; blocked — ответ не прошёл выходной фильтр.
 """
@@ -55,10 +58,11 @@ from app.agent.prompts import (
     agent_instructions,
     agent_turn,
 )
-from app.agent.tools import STOP_TOOLS, TOOLS, ChatContext
+from app.agent.tools import SEARCH_TOOLS, STOP_TOOLS, TOOLS, ChatContext
 from app.config import Settings
 from app.db import MessageRepo, SessionRepo
 from app.errors import ApiError, error_body, llm_timeout
+from app.knowledge.search import KbSearch
 from app.knowledge.source import KnowledgeStore
 from app.lang import Lang, resolve_lang, script_of
 from app.log_writer import BackgroundLogWriter
@@ -91,6 +95,8 @@ class _ChatState:
     actions: list[dict] = field(default_factory=list)
     calls: list[tuple[str, dict, str]] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)  # v1.3: найденное search_kb в этом ответе
+    search_ms: int | None = None
     category: str = "agent"
     provider: str = ""
     stop: bool = False  # лимит длины или фильтр — дальше модель не слушаем
@@ -151,7 +157,7 @@ _NARRATION = re.compile(
 )
 # Комментарии модели о своих правилах и инструментах: «по правилам я могу…», «вызову guide_to»
 _META = re.compile(
-    r"по правилам|согласно правилам|системн\w* промпт|\b(where_is|guide_to|no_answer|look\(\))",
+    r"по правилам|согласно правилам|системн\w* промпт|\b(where_is|guide_to|no_answer|search_kb|look\(\))",
     re.IGNORECASE,
 )
 
@@ -293,9 +299,11 @@ class ChatService:
         messages: MessageRepo | None = None,
         sessions: SessionRepo | None = None,
         metrics: LatencyRecorder | None = None,
+        search: KbSearch | None = None,
     ) -> None:
         self.settings = settings
         self.metrics = metrics or NULL_RECORDER
+        self.search = search  # None — без инструмента search_kb (RETRIEVAL_MODE=off)
         self.store = store
         self.answers = answers
         self.log_writer = log_writer
@@ -436,6 +444,7 @@ class ChatService:
                         lang=data["lang"],
                         found=data["found"],
                         sources=data["sources"],
+                        citations=data.get("citations", []),
                         actions=actions,
                         emotion=emotion,
                     )
@@ -495,6 +504,7 @@ class ChatService:
                 "llm_first_token_ms": st.first_token_ms,
                 "first_phrase_ms": st.first_phrase_ms,
                 "llm_total_ms": elapsed_ms(st.started),
+                "kb_search_ms": st.search_ms,
             },
             lang=st.lang,
             provider=st.provider or "off",
@@ -529,6 +539,7 @@ class ChatService:
             "lang": st.lang,
             "found": found,
             "sources": st.sources if found else [],
+            "citations": st.citations if found else [],
             "actions": st.actions,
         }
         if st.live is not None:  # живой режим запишет то, что робот успел сказать
@@ -581,7 +592,8 @@ class ChatService:
         self.remember(req.session_id, st.lang, req.question, resp.answer, st.calls)
 
     def _admit(self, st: _ChatState, text: str, question: str, corpus: str) -> list[str]:
-        """Фразы, которые можно отправить: выходной фильтр + лимит 4 фразы / 600 символов."""
+        """Фразы, которые можно отправить: выходной фильтр + лимит 4 фразы / 600 символов.
+        corpus — база и найденное поиском в этом ходе (ссылка из найденного — не выдумка модели)."""
         out: list[str] = []
         for phrase in split_phrases(clean_for_tts(text)):
             if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
@@ -661,16 +673,26 @@ class ChatService:
 
         st.provider = self.name
         kb = self.store.get()
-        corpus = kb_corpus(kb)
+        kb_text = kb_corpus(kb)
         history = await self._history(req.session_id)
+        search = None if st.greeting else self.search  # приветствие — без поиска
         ctx = ChatContext(
-            kb=kb, lang=st.lang, directions=st.live.directions if st.live is not None else {}
+            kb=kb,
+            lang=st.lang,
+            directions=st.live.directions if st.live is not None else {},
+            search=search,
         )
+
+        def corpus() -> str:
+            return "\n".join([kb_text, *ctx.found_texts]) if ctx.found_texts else kb_text
+
         agent = Agent[ChatContext](
             name="astana_hub",
-            instructions=agent_instructions(kb, self.settings.answer_mode),
+            instructions=agent_instructions(
+                kb, self.settings.answer_mode, search=self.search is not None
+            ),
             model=self.model,
-            tools=TOOLS,
+            tools=SEARCH_TOOLS if self.search is not None else TOOLS,
             tool_use_behavior=StopAtTools(stop_at_tool_names=STOP_TOOLS),
             model_settings=self._model_settings(),
         )
@@ -738,7 +760,7 @@ class ChatService:
                             if ends:
                                 chunk, streamed = text[streamed : ends[-1].end()], ends[-1].end()
                                 for phrase in self._admit(
-                                    st, _take_emotion(st, chunk), req.question, corpus
+                                    st, _take_emotion(st, chunk), req.question, corpus()
                                 ):
                                     st.emitted.append(phrase)
                                     for event in _phrase_events(st, phrase):
@@ -759,7 +781,7 @@ class ChatService:
                             dropped += len(text.strip())
                             continue
                         text = _take_emotion(st, text)
-                        for phrase in self._admit(st, text, req.question, corpus):
+                        for phrase in self._admit(st, text, req.question, corpus()):
                             st.emitted.append(phrase)
                             for event in _phrase_events(st, phrase):
                                 yield event
@@ -796,6 +818,7 @@ class ChatService:
             },
         )
         st.calls = ctx.calls
+        st.search_ms = ctx.search_ms if ctx.searches else None
         if st.greeting:
             if not st.emitted:  # ошибка, долгий ответ или пустой текст — готовое приветствие
                 st.fallback = True
@@ -805,6 +828,7 @@ class ChatService:
             yield "done", await self._finish(req, request_id, st, started)
             return
         st.sources = ctx.sources
+        st.citations = ctx.citations
         for action in ctx.actions[sent_actions:]:
             st.actions.append(action)
             yield "action", action
@@ -952,5 +976,5 @@ class ChatService:
                     continue
                 if event == "done":
                     self.remember(req.session_id, data["lang"], req.question, " ".join(phrases))
-                    data = {**data, "actions": []}
+                    data = {**data, "citations": [], "actions": []}
                 yield event, data

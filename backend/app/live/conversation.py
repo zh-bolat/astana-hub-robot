@@ -180,6 +180,9 @@ class _BotTurn:
     finished: bool = False  # ход закончен: доиграл, перебит или ошибка
     interrupted: bool = False
     found: bool = True
+    # из done агента → turn_end (v1.3: id найденного и citations поиска по базе)
+    sources: list[str] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)
     stt_final_ms: int | None = None
     first_audio_ms: int | None = None
     llm_first_token_ms: int | None = None
@@ -585,6 +588,8 @@ class LiveConversation(FrameProcessor):
                             ignored = True
                             break
                         turn.lang, turn.found = data["lang"], data["found"]
+                        turn.sources = list(data.get("sources", []))
+                        turn.citations = list(data.get("citations", []))
                     elif kind == "error":
                         error = data["error"]["code"]
                         await self.send_now(data | {"type": "error"})
@@ -626,7 +631,14 @@ class LiveConversation(FrameProcessor):
             return
         turn.ended = True  # журнал, память и метрики — когда доиграет (_finish)
         await self._send_queued(
-            event("turn_end", turn_id=turn.turn_id, lang=turn.lang, found=turn.found)
+            event(
+                "turn_end",
+                turn_id=turn.turn_id,
+                lang=turn.lang,
+                found=turn.found,
+                sources=turn.sources,
+                citations=turn.citations,
+            )
         )
 
     async def speak_text(self, text: str, lang: Lang | None = None) -> bool:

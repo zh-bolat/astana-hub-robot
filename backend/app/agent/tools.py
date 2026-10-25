@@ -1,21 +1,32 @@
 """Инструменты агента. Это не код на сервере, а действия робота: сервер только проверяет место
 и отдаёт действие клиенту событием `action` (docs/api-contract.md, /v1/chat). Ехать, показывать стрелку,
 снимать кадр — делает приложение.
+
+Исключение — search_kb: поиск по базе на сервере (app/knowledge/search.py), регистрируется только при
+RETRIEVAL_MODE=hybrid. Найденное уходит модели (до 3 фрагментов, ≤ ~2500 символов) и в ответ клиенту —
+`sources` и `citations` (docs/api-contract.md, «Источники и поиск по документам»).
 """
 
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
 from app.agent.fastpath import direction_phrase
 from app.knowledge.models import KnowledgeBase
+from app.knowledge.search import KbSearch, SearchHit, excerpt
 from app.lang import Lang
+from app.logging_setup import logger
 
 # После этих инструментов агент не говорит: фразу подставляет сервер
 STOP_TOOLS = ["look", "no_answer"]
+SEARCH_RESULTS = 3
+SEARCH_BUDGET_CHARS = 2500  # текст всех фрагментов в ответе инструмента
+SEARCH_MAX_CALLS = 2  # повторный поиск в том же ходе — один раз (защита от циклов)
+_SEARCH_WEIGHTS = (3, 2, 1)  # доля бюджета: первому фрагменту больше
 
 
 @dataclass
@@ -29,6 +40,22 @@ class ChatContext:
     stopped_by: str | None = None
     # WS /v1/live: фразы «где X» от позиции робота (state.directions), place_id → {ru|kk|en: фраза}
     directions: dict[str, dict[str, str]] = field(default_factory=dict)
+    # search_kb: поиск (None — инструмента нет), найденное в этом ходе
+    search: KbSearch | None = None
+    searches: int = 0
+    search_ms: int = 0
+    citations: list[dict] = field(default_factory=list)
+    found_texts: list[str] = field(
+        default_factory=list
+    )  # отданное модели — в корпус выходного фильтра
+
+    def add_citation(self, hit: SearchHit) -> None:
+        if hit.id not in self.sources:
+            self.sources.append(hit.id)
+        if all(c["id"] != hit.id for c in self.citations):
+            self.citations.append(
+                {"id": hit.id, "type": hit.type, "title": hit.title, "url": hit.url}
+            )
 
 
 _NEXT = {
@@ -107,4 +134,56 @@ def no_answer(wrapper: RunContextWrapper[ChatContext]) -> str:
     return _result(ctx, "no_answer", {}, {"ok": True})
 
 
+def search_texts(hits: list[SearchHit], query: str, budget: int = SEARCH_BUDGET_CHARS) -> list[str]:
+    """Текст каждого фрагмента для модели: всё вместе ≤ budget (первому — большая доля, недобор — дальше)."""
+    weights = [_SEARCH_WEIGHTS[i] if i < len(_SEARCH_WEIGHTS) else 1 for i in range(len(hits))]
+    out: list[str] = []
+    left = budget
+    for i, hit in enumerate(hits):
+        share = left * weights[i] // sum(weights[i:])
+        part = excerpt(hit.content, query, max(share, 200))
+        out.append(part)
+        left = max(0, left - len(part))
+    return out
+
+
+@function_tool
+async def search_kb(wrapper: RunContextWrapper[ChatContext], query: str) -> str:
+    """Найти подробности о хабе: программы, правила, цены, льготы, резидентство, визы, пространства,
+    мероприятия. Возвращает до трёх фрагментов базы знаний.
+
+    Args:
+        query: суть вопроса по-русски, например "льготы для резидентов".
+    """
+    ctx = wrapper.context
+    args = {"query": query}
+    if ctx.search is None:
+        return _result(ctx, "search_kb", args, {"ok": False, "error": "search unavailable"})
+    if ctx.searches >= SEARCH_MAX_CALLS:
+        return _result(
+            ctx,
+            "search_kb",
+            args,
+            {"ok": False, "error": "search limit reached, answer from what was found"},
+        )
+    ctx.searches += 1
+    started = time.perf_counter()
+    try:
+        hits = await ctx.search.search(query, ctx.lang, k=SEARCH_RESULTS)
+    except Exception as exc:  # БД недоступна
+        logger.warning("kb_search_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+        return _result(ctx, "search_kb", args, {"ok": False, "error": "search unavailable"})
+    finally:
+        ctx.search_ms += int((time.perf_counter() - started) * 1000)
+    results = []
+    for hit, part in zip(hits, search_texts(hits, query), strict=True):
+        ctx.add_citation(hit)
+        ctx.found_texts.append(part)
+        results.append({"id": hit.id, "title": hit.title, "text": part})
+    if not results:
+        return _result(ctx, "search_kb", args, {"ok": True, "results": [], "note": "nothing found"})
+    return _result(ctx, "search_kb", args, {"ok": True, "results": results})
+
+
 TOOLS: list[FunctionTool] = [where_is, guide_to, look, no_answer]
+SEARCH_TOOLS: list[FunctionTool] = [*TOOLS, search_kb]

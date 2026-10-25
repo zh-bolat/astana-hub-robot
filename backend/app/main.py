@@ -22,7 +22,9 @@ from app.db import LatencyRepo, MessageRepo, QuestionLogRepo, SessionRepo, make_
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
+from app.knowledge.index import KbIndexer
 from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo
+from app.knowledge.search import KbSearch
 from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
@@ -30,6 +32,7 @@ from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
 from app.live.session import router as live_router
 from app.llm.base import LLMProvider
+from app.llm.embeddings import Embedder, build_embedder
 from app.llm.factory import build_text_provider, build_vision_provider
 from app.log_writer import BackgroundLogWriter, purge_job
 from app.logging_setup import (
@@ -180,11 +183,14 @@ def create_app(
     stt_stream: StreamingStt | None = None,
     chat_client: AsyncOpenAI | None = None,
     live_services: LiveServicesFactory | None = None,
+    embedder: Embedder | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
-    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi).
+    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi); с подменённой базой
+    поиска по базе нет (он работает по kb_chunks в Postgres).
     chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт).
-    live_services — фабрика сервисов Pipecat для WS /v1/live (тесты: фейковые VAD/STT/TTS)."""
+    live_services — фабрика сервисов Pipecat для WS /v1/live (тесты: фейковые VAD/STT/TTS).
+    embedder — эмбеддинги поиска (тесты: FakeEmbeddings); иначе по EMBEDDING_PROVIDER."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
     route_pipecat_logs()
@@ -221,6 +227,20 @@ def create_app(
         else NULL_RECORDER
     )
     service = AnswerService(settings, store, text_llm, vision_llm, log_writer, metrics)
+    # Поиск по базе (RAG): инструмент агента search_kb + фоновая индексация kb_chunks
+    kb_search: KbSearch | None = None
+    indexer: KbIndexer | None = None
+    if (
+        knowledge_source is None
+        and settings.retrieval_mode == "hybrid"
+        and (embedder is not None or settings.resolved_retrieval_mode() == "hybrid")
+    ):
+        embedder = embedder or build_embedder(settings)
+    else:
+        embedder = None
+    if embedder is not None:
+        kb_search = KbSearch(engine, embedder, settings.embedding_query_timeout_s)
+        indexer = KbIndexer(engine, embedder, settings.embedding_batch_size)
     chat = ChatService(
         settings,
         store,
@@ -230,13 +250,14 @@ def create_app(
         messages=MessageRepo(engine) if log_repo is None else None,
         sessions=SessionRepo(engine) if log_repo is None else None,
         metrics=metrics,
+        search=kb_search,
     )
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        sync_task = refresh_task = retention_task = None
+        sync_task = refresh_task = retention_task = index_task = None
         sheet_client = None
         if syncer is not None:
             refresh_task = asyncio.create_task(
@@ -247,6 +268,11 @@ def create_app(
                 sync_task = asyncio.create_task(
                     syncer.run_sheet_periodic(settings.knowledge_sync_interval_s, sheet_client)
                 )
+        if indexer is not None:
+            # при старте (фрагментов нет / устарели) и после синков, которые что-то поменяли; не блокирует
+            index_task = asyncio.create_task(
+                indexer.run_periodic(settings.knowledge_reload_interval_s)
+            )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(
                 _retention_loop(log_writer, repo, settings.question_log_retention_days)
@@ -257,7 +283,10 @@ def create_app(
             await _cancel(sync_task)
             await _cancel(refresh_task)
             await _cancel(retention_task)
-            await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider, chat)
+            await _cancel(index_task)
+            await close_resources(
+                sheet_client, text_llm, vision_llm, stt, tts_provider, chat, embedder
+            )
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
 
@@ -278,6 +307,8 @@ def create_app(
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service
     app.state.chat = chat
+    app.state.kb_search = kb_search
+    app.state.indexer = indexer
     app.state.log_repo = repo
     app.state.log_writer = log_writer
     app.state.metrics = metrics
@@ -315,6 +346,7 @@ def create_app(
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
             "chat": chat.name,
+            "retrieval": f"hybrid:{embedder.name}:{embedder.model}" if embedder else "off",
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,
