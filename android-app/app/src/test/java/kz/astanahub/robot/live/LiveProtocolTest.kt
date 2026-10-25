@@ -44,6 +44,30 @@ class LiveProtocolTest {
     }
 
     @Test
+    fun `directions frame - state with place_id keys and a phrase per language, nothing else`() {
+        val frame = LiveFrames.directions(
+            linkedMapOf(
+                "cafe" to mapOf(
+                    Lang.RU to "Кафе — справа от вас, примерно в 15 метрах.",
+                    Lang.KK to "Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.",
+                    Lang.EN to "Cafe is on your right, about 15 meters away.",
+                ),
+                "wc" to mapOf(Lang.RU to "Туалет совсем рядом — слева от вас.", Lang.KK to "…", Lang.EN to "…"),
+            ),
+        )
+        val o = obj(frame)
+        assertEquals(setOf("type", "directions"), o.keys) // без place_id/navigating: поля state независимы
+        assertEquals("state", o["type"]!!.jsonPrimitive.content)
+        val d = o["directions"]!!.jsonObject
+        assertEquals(listOf("cafe", "wc"), d.keys.toList())
+        val cafe = d["cafe"]!!.jsonObject
+        assertEquals(setOf("ru", "kk", "en"), cafe.keys)
+        assertEquals("Кафе — справа от вас, примерно в 15 метрах.", cafe["ru"]!!.jsonPrimitive.content)
+        assertEquals("Cafe is on your right, about 15 meters away.", cafe["en"]!!.jsonPrimitive.content)
+        assertEquals("""{"type":"state","directions":{}}""", LiveFrames.directions(emptyMap()))
+    }
+
+    @Test
     fun `audio format from ready`() {
         assertEquals(24_000, LiveAudioFormat.parse("pcm_s16le_24000")?.sampleRate)
         assertEquals(16_000, LiveAudioFormat.parse("pcm_s16le_16000")?.sampleRate)

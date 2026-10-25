@@ -8,6 +8,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.RetrofitBackendApi
@@ -38,6 +39,20 @@ object LiveFrames {
         put("type", "state")
         put("place_id", placeId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
         put("navigating", navigating)
+    }.toString()
+
+    /**
+     * `{"type":"state","directions":{"<place_id>":{"ru":"…","kk":"…","en":"…"}, …}}` — готовые фразы «где X» от
+     * текущей позиции робота (без «проводить»: предложение добавляет сервер). Полный набор: сервер заменяет прежний.
+     * Только `directions` — `place_id`/`navigating` этот кадр не трогает (поля `state` независимы).
+     */
+    fun directions(directions: Map<String, Map<Lang, String>>): String = buildJsonObject {
+        put("type", "state")
+        putJsonObject("directions") {
+            directions.forEach { (placeId, byLang) ->
+                putJsonObject(placeId) { byLang.forEach { (lang, text) -> put(lang.code, text) } }
+            }
+        }
     }.toString()
 }
 

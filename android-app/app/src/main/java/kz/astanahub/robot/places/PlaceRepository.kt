@@ -101,6 +101,9 @@ class PlaceRepository(
         return server + mapOnly
     }
 
+    /** Только места базы (`/v1/places` или его кеш на диске), без точек карты, которых нет на сервере. */
+    suspend fun basePlaces(): List<Place> = mutex.withLock { loadCacheIfNeeded(); serverPlaces.orEmpty() }
+
     fun findOnMap(place: Place, map: List<MapPlace>): MapPlace? =
         map.firstOrNull { it.name.trim().equals(place.mapName.trim(), ignoreCase = true) }
 

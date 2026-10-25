@@ -58,6 +58,49 @@ class WayFinderTest {
     }
 
     @Test
+    fun `live directions - base places on the map keyed by place_id, all languages, no guide offer`() = runBlocking {
+        online()
+        coEvery { robot.getPlaces() } returns listOf(
+            MapPlace("Кафе", 0.0, 15.0),
+            MapPlace("Ресепшен", 3.0, 0.0),
+            MapPlace("Склад", -5.0, 0.0, status = 1), // точки нет в базе — сервер её не знает
+            MapPlace("Туалет", 0.0, -1.5, status = 1), // недостижима, но направление известно
+        )
+        val wf = finder()
+        wf.refreshPlaces()
+
+        val d = wf.directionsFrom(RobotPose(0.0, 0.0, 0.0))
+        // Коворкинга и конференц-зала нет на карте; «Склад» — не место базы.
+        assertEquals(listOf("reception", "cafe", "wc"), d.keys.toList())
+        d.values.forEach { assertEquals(Lang.entries.toSet(), it.keys) }
+        assertEquals("Кафе — справа от вас, примерно в 15 метрах.", d.getValue("cafe")[Lang.RU])
+        assertEquals("Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.", d.getValue("cafe")[Lang.KK])
+        assertEquals("Cafe is on your right, about 15 meters away.", d.getValue("cafe")[Lang.EN])
+        assertEquals("Әжетхана өте жақын — сіздің сол жағыңызда.", d.getValue("wc")[Lang.KK])
+        val offers = Lang.entries.map(WayPhrases::offerGuide)
+        d.values.flatMap { it.values }.forEach { phrase ->
+            assertTrue(phrase, offers.none { phrase.contains(it) })
+            assertTrue(phrase, !phrase.contains("провод", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun `live directions follow the robot pose and are empty without a map`() = runBlocking {
+        online()
+        coEvery { robot.getPlaces() } returns listOf(MapPlace("Кафе", 0.0, 15.0))
+        val wf = finder()
+        wf.refreshPlaces()
+        // Робот развернулся на 90° влево: кафе теперь перед ним — за спиной посетителя.
+        val turned = wf.directionsFrom(RobotPose(0.0, 0.0, Math.PI / 2))
+        assertEquals("Кафе — у вас за спиной, примерно в 15 метрах.", turned.getValue("cafe")[Lang.RU])
+
+        coEvery { robot.getPlaces() } returns emptyList()
+        val noMap = WayFinder(PlaceRepository(backend, robot, File(tmp.root, "other.json")), robot)
+        noMap.refreshPlaces()
+        assertTrue(noMap.directionsFrom(RobotPose(0.0, 0.0, 0.0)).isEmpty())
+    }
+
+    @Test
     fun `offline uses file cache from previous run`() = runBlocking {
         online()
         coEvery { robot.getPlaces() } returns map

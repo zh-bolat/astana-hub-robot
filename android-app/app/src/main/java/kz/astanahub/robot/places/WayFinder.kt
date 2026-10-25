@@ -3,6 +3,7 @@ package kz.astanahub.robot.places
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.robot.RobotGateway
+import kz.astanahub.robot.robot.RobotPose
 
 /** Место для офлайн-кнопки «Где X?» / «Проводите: X». */
 data class QuickPlace(val place: Place, val canGuide: Boolean)
@@ -60,6 +61,26 @@ class WayFinder(
             ?: return WayAnswer(WayPhrases.whereIsNoPose(name, lang, canGuide), place, place.takeIf { canGuide })
         val bearing = Directions.bearing(pose, point.x, point.y)
         return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide })
+    }
+
+    /**
+     * Фразы «где X» для live (`state.directions`, docs/api-contract.md): `place_id` → язык → фраза от позы [pose].
+     * Ключ — id места базы (тот же, что сервер шлёт в `action`); места базы без точки на карте не включаем,
+     * точки карты без места в базе — тоже (сервер их не знает). Фраза — как у [describe], но без «Могу проводить»:
+     * предложение проводить добавляет сервер.
+     */
+    suspend fun directionsFrom(pose: RobotPose): Map<String, Map<Lang, String>> {
+        val map = repository.mapPlaces()
+        if (map.isEmpty()) return emptyMap()
+        val result = LinkedHashMap<String, Map<Lang, String>>()
+        for (place in repository.basePlaces()) {
+            val point = repository.findOnMap(place, map) ?: continue
+            val bearing = Directions.bearing(pose, point.x, point.y)
+            result[place.id] = Lang.entries.associateWith { lang ->
+                WayPhrases.whereIs(displayName(place, lang), bearing, lang, canGuide = false)
+            }
+        }
+        return result
     }
 
     /**
