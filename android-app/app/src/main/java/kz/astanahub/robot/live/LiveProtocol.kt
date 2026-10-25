@@ -72,7 +72,8 @@ sealed interface LiveEvent {
     data class Phrase(val text: String) : LiveEvent
     /** Бинарный кадр: звук ответа в формате из [Ready]. */
     class Audio(val pcm: ByteArray) : LiveEvent
-    data class Action(val type: String, val placeId: String?) : LiveEvent
+    /** [turnId] — ход, к которому относится действие (контракт v1.x); старый сервер его не шлёт. */
+    data class Action(val type: String, val placeId: String?, val turnId: String? = null) : LiveEvent
     data class TurnEnd(val turnId: String?, val lang: Lang?, val found: Boolean?) : LiveEvent
     data class Interrupted(val turnId: String?) : LiveEvent
     /** `{"type":"error"}` с сервера. */
@@ -98,7 +99,7 @@ sealed interface LiveEvent {
                 "emotion" -> str("name")?.let(::Emotion)
                 "phrase" -> str("text")?.trim()?.takeIf { it.isNotEmpty() }?.let(::Phrase)
                 // Тип действия — в `type_` (поле `type` занято типом кадра); `action` — на всякий случай.
-                "action" -> (str("type_") ?: str("action"))?.let { Action(it, str("place_id")) }
+                "action" -> (str("type_") ?: str("action"))?.let { Action(it, str("place_id"), str("turn_id")?.takeIf(String::isNotBlank)) }
                 "turn_end" -> TurnEnd(str("turn_id"), Lang.fromCode(str("lang")), (obj["found"] as? JsonPrimitive)?.booleanOrNull)
                 "interrupted" -> Interrupted(str("turn_id"))
                 "error" -> {

@@ -65,6 +65,10 @@ class LiveProtocolTest {
         assertEquals(LiveEvent.Emotion("happy"), LiveEvent.parse("""{"type":"emotion","name":"happy"}"""))
         assertEquals(LiveEvent.Phrase("Привет!"), LiveEvent.parse("""{"type":"phrase","text":"Привет!"}"""))
         assertEquals(LiveEvent.Action("guide_to", "cafe"), LiveEvent.parse("""{"type":"action","type_":"guide_to","place_id":"cafe"}"""))
+        assertEquals(
+            LiveEvent.Action("guide_to", "cafe", "trn_1"),
+            LiveEvent.parse("""{"type":"action","type_":"guide_to","place_id":"cafe","turn_id":"trn_1"}"""),
+        )
         assertEquals(LiveEvent.TurnEnd("trn_1", Lang.EN, true), LiveEvent.parse("""{"type":"turn_end","turn_id":"trn_1","lang":"en","found":true}"""))
         assertEquals(LiveEvent.Interrupted("trn_1"), LiveEvent.parse("""{"type":"interrupted","turn_id":"trn_1"}"""))
         val error = LiveEvent.parse("""{"type":"error","error":{"code":"llm_unavailable","message":"x"}}""") as LiveEvent.Error

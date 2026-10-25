@@ -139,6 +139,55 @@ class LiveSessionTest {
     }
 
     @Test
+    fun `action after playback_done keeps its turn_id from the event (real server order)`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.TurnStart("t1"))
+        h.conn.server(LiveEvent.Phrase("Провожаю, идите за мной."))
+        h.conn.server(LiveEvent.Audio(pcm(200)))
+        h.conn.server(LiveEvent.TurnEnd("t1", Lang.RU, true))
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(1, h.conn.framesOfType("playback_done").size)
+        // Сервер шлёт guide_to уже после playback_done: ход — из события, а не «текущий» (он уже null).
+        h.conn.server(LiveEvent.Action("guide_to", "cafe", "t1"))
+        runCurrent()
+        assertEquals(LiveSignal.Action("guide_to", "cafe", "t1"), h.signals.last())
+    }
+
+    @Test
+    fun `action without turn_id - current turn while playing, null between turns`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.TurnStart("t1"))
+        h.conn.server(LiveEvent.Action("where_is", "cafe"))
+        runCurrent()
+        assertEquals(LiveSignal.Action("where_is", "cafe", "t1"), h.signals.last())
+        h.conn.server(LiveEvent.TurnEnd("t1", Lang.RU, true))
+        advanceTimeBy(500); runCurrent()
+        h.conn.server(LiveEvent.Action("guide_to", "cafe"))
+        runCurrent()
+        assertEquals(LiveSignal.Action("guide_to", "cafe", null), h.signals.last())
+    }
+
+    @Test
+    fun `action of an interrupted turn is dropped, action of an earlier finished turn is not`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.TurnStart("t2"))
+        h.conn.server(LiveEvent.Audio(pcm(800)))
+        advanceTimeBy(200); runCurrent()
+        h.conn.server(LiveEvent.Interrupted("t2"))
+        h.conn.server(LiveEvent.Action("guide_to", "cafe", "t2"))
+        h.conn.server(LiveEvent.Action("guide_to", "lift", "t1"))
+        runCurrent()
+        val actions = h.signals.filterIsInstance<LiveSignal.Action>()
+        assertEquals(listOf(LiveSignal.Action("guide_to", "lift", "t1")), actions)
+    }
+
+    @Test
     fun `turn without audio is done at turn_end`() = runTest(dispatcher) {
         val h = harness()
         h.session.start(Lang.RU, null, greet = false)

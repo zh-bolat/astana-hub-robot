@@ -240,7 +240,13 @@ class LiveSession(
             is LiveEvent.Emotion -> if (!dropping) emit(LiveSignal.Emotion(event.name))
             is LiveEvent.Phrase -> if (!dropping) emit(LiveSignal.Phrase(event.text))
             is LiveEvent.Audio -> if (!dropping) player.enqueue(event.pcm)
-            is LiveEvent.Action -> if (!dropping) emit(LiveSignal.Action(event.type, event.placeId, currentTurn))
+            is LiveEvent.Action -> {
+                // Ход берём из события; без `turn_id` (старый сервер) — текущий (null после `playback_done`).
+                val turn = event.turnId ?: currentTurn
+                // Отбрасываем только действия оборванного хода; действие уже доигранного хода — в силе.
+                if (dropping && turn == currentTurn) return
+                emit(LiveSignal.Action(event.type, event.placeId, turn))
+            }
             is LiveEvent.TurnEnd -> {
                 if (dropping) return
                 player.endTurn(event.turnId ?: currentTurn)
