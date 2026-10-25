@@ -7,7 +7,10 @@
    фильтром is_active мог бы вернуть меньше 20 строк (docs/db-schema.md, раздел 2).
 3. По словам: top-20 по полнотексту (`tsv`, конфигурация 'simple'), запрос — ИЛИ по словам вопроса без
    служебных слов; длинные слова — префиксом (`резиден:*` находит «резидент», «резидентам»), это заменяет
-   стемминг, которого у 'simple' нет. Ранг — ts_rank_cd.
+   стемминг, которого у 'simple' нет; названия с точкой, дефисом и цифрами («C4.6», «alem.ai», «Wi-Fi») —
+   целиком, как их индексирует PG. Ранг — BM25 по совпавшим словам: редкое слово весит больше частого (IDF),
+   длинный фрагмент штрафуется (у ts_rank_cd нет IDF, и при ИЛИ-запросе вверх лезли длинные фрагменты
+   с частыми словами).
 4. Слияние RRF (k=60): score = Σ 1 / (60 + место в списке).
 5. Один и тот же фрагмент на разных языках (факт и место — по фрагменту на язык) — один результат: текст на
    языке вопроса, иначе ru, en, kk. Ссылка — documents.source_url (у фактов и мест — нет).
@@ -16,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -32,7 +36,11 @@ CANDIDATES = 20
 RRF_K = 60
 
 _TERM = re.compile(r"[^\W_]+", re.UNICODE)
+# слово вопроса как токен PG: «c4.6», «alem.ai», «wi-fi» — одним куском
+_TOKEN = re.compile(r"[^\W_]+(?:[.-][^\W_]+)*", re.UNICODE)
 _LATIN = re.compile(r"[a-z]")
+BM25_K1 = 1.2
+BM25_B = 0.75
 # Служебные слова и то, что есть почти в каждом фрагменте (название хаба): по ним поиск только шумит
 _STOPWORDS = """
     как где что кто когда какой какая какие какое каких какую каким это эти этот эта есть для при или они
@@ -58,12 +66,15 @@ class Term:
 
 
 def query_terms(query: str) -> list[Term]:
-    """Слова вопроса для полнотекста: без служебных, длинные — префиксом (обрезанное окончание)."""
+    """Слова вопроса для полнотекста: без служебных, длинные — префиксом (обрезанное окончание),
+    числа и названия с точкой/дефисом/цифрами — как есть."""
     out: dict[str, Term] = {}
-    for word in _TERM.findall(query.lower()):
+    for word in _TOKEN.findall(query.lower()):
         if word in STOPWORDS:
             continue
-        if word.isdigit():
+        if not word.isalpha():  # число, «c4.6», «wi-fi»
+            if len(word) < 2:
+                continue
             term = Term(word, False)
         elif len(word) < 3:
             continue
@@ -77,9 +88,27 @@ def query_terms(query: str) -> list[Term]:
     return list(out.values())
 
 
+def _operand(t: Term) -> str:
+    # в словах только буквы, цифры, точка и дефис — спецсимволов tsquery нет
+    return f"{t.stem}:*" if t.prefix else t.stem
+
+
 def tsquery(terms: list[Term]) -> str:
-    # слова — только буквы и цифры: спецсимволов tsquery в них нет
-    return " | ".join(f"{t.stem}:*" if t.prefix else t.stem for t in terms)
+    return " | ".join(_operand(t) for t in terms)
+
+
+def bm25(rows: list, n_terms: int, total: int, avg_len: float) -> list[Key]:
+    """rows: (source_type, source_id, chunk_no, len, m0..mN) — совпало ли слово i. Ключи по убыванию BM25
+    (tf = 1: совпало или нет; IDF — по всем активным фрагментам)."""
+    df = [sum(1 for r in rows if r[4 + i]) for i in range(n_terms)]
+    idf = [math.log(1 + (total - d + 0.5) / (d + 0.5)) for d in df]
+    avg = avg_len or 1.0
+    scored = []
+    for pos, r in enumerate(rows):
+        norm = (BM25_K1 + 1) / (1 + BM25_K1 * (1 - BM25_B + BM25_B * (r[3] or 0) / avg))
+        score = norm * sum(idf[i] for i in range(n_terms) if r[4 + i])
+        scored.append((-score, pos, (r[0], r[1], r[2])))
+    return [key for _, _, key in sorted(scored)]
 
 
 @dataclass(frozen=True)
@@ -180,18 +209,7 @@ class KbSearch:
                 )
                 lists.append([tuple(r) for r in rows])
             if terms:
-                rows = conn.execute(
-                    text(
-                        """
-                        SELECT source_type, source_id, chunk_no
-                        FROM kb_chunks, to_tsquery('simple', :q) AS q
-                        WHERE is_active AND tsv @@ q
-                        ORDER BY ts_rank_cd(tsv, q) DESC, id LIMIT :n
-                        """
-                    ),
-                    {"q": tsquery(terms), "n": self.candidates},
-                )
-                lists.append([tuple(r) for r in rows])
+                lists.append(self._words(conn, terms))
             top = rrf(lists, self.rrf_k)[:k]
             if not top:
                 return []
@@ -233,6 +251,23 @@ class KbSearch:
                 )
             )
         return hits
+
+    def _words(self, conn, terms: list[Term]) -> list[Key]:
+        """Полнотекст: все фрагменты, где есть хоть одно слово (их немного), → BM25 → top-N."""
+        total, avg_len = conn.execute(
+            text("SELECT count(*), avg(length(tsv)) FROM kb_chunks WHERE is_active")
+        ).one()
+        matched = ", ".join(
+            f"tsv @@ to_tsquery('simple', :t{i}) AS m{i}" for i in range(len(terms))
+        )
+        rows = conn.execute(
+            text(
+                f"SELECT source_type, source_id, chunk_no, length(tsv), {matched} "
+                "FROM kb_chunks WHERE is_active AND tsv @@ to_tsquery('simple', :q) ORDER BY id"
+            ),
+            {"q": tsquery(terms), **{f"t{i}": _operand(t) for i, t in enumerate(terms)}},
+        ).all()
+        return bm25(rows, len(terms), total, float(avg_len or 0))[: self.candidates]
 
 
 def _vector_literal(vec: list[float]) -> str:
@@ -276,7 +311,8 @@ def excerpt(content: str, query: str, limit: int) -> str:
     terms = query_terms(query)
 
     def score(unit: str) -> int:
-        words = _TERM.findall(unit.lower())
+        low = unit.lower()
+        words = {*_TOKEN.findall(low), *_TERM.findall(low)}
         return sum(1 for t in terms if any(t.matches(w) for w in words))
 
     scores = [score(u) for u in units]

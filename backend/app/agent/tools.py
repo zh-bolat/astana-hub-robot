@@ -24,6 +24,9 @@ from app.logging_setup import logger
 # После этих инструментов агент не говорит: фразу подставляет сервер
 STOP_TOOLS = ["look", "no_answer"]
 SEARCH_RESULTS = 3
+# Кандидатов поиска: факты и так лежат в промпте целиком, поэтому в ответ инструмента сначала идут документы
+# и места, факт — только если осталось место (иначе короткие факты вытесняют нужный фрагмент документа)
+SEARCH_CANDIDATES = 5
 SEARCH_BUDGET_CHARS = 2500  # текст всех фрагментов в ответе инструмента
 SEARCH_MAX_CALLS = 2  # повторный поиск в том же ходе — один раз (защита от циклов)
 
@@ -133,6 +136,11 @@ def no_answer(wrapper: RunContextWrapper[ChatContext]) -> str:
     return _result(ctx, "no_answer", {}, {"ok": True})
 
 
+def prefer_documents(hits: list[SearchHit], k: int = SEARCH_RESULTS) -> list[SearchHit]:
+    """До k результатов: документы и места по порядку поиска, затем факты."""
+    return sorted(hits, key=lambda h: h.type == "fact")[:k]
+
+
 def search_texts(hits: list[SearchHit], query: str, budget: int = SEARCH_BUDGET_CHARS) -> list[str]:
     """Текст каждого фрагмента для модели: всё вместе ≤ budget, поровну (первый по RRF не обязательно
     содержит ответ); короткий фрагмент отдаёт недобор следующим. Длинный — выдержка по словам вопроса."""
@@ -167,7 +175,7 @@ async def search_kb(wrapper: RunContextWrapper[ChatContext], query: str) -> str:
     ctx.searches += 1
     started = time.perf_counter()
     try:
-        hits = await ctx.search.search(query, ctx.lang, k=SEARCH_RESULTS)
+        hits = prefer_documents(await ctx.search.search(query, ctx.lang, k=SEARCH_CANDIDATES))
     except Exception as exc:  # БД недоступна
         logger.warning("kb_search_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
         return _result(ctx, "search_kb", args, {"ok": False, "error": "search unavailable"})

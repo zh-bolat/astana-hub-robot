@@ -19,14 +19,23 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app.agent.tools import SEARCH_BUDGET_CHARS, search_texts
+from app.agent.tools import SEARCH_BUDGET_CHARS, prefer_documents, search_texts
 from app.config import Settings
 from app.knowledge.chunks import MAX_CHARS, DocumentSource, chunk_document, kb_chunks
 from app.knowledge.documents import load_documents, parse_document
 from app.knowledge.index import KB_INDEX_LOCK_KEY, KbIndexer
 from app.knowledge.models import Fact, LocalizedText, Place
 from app.knowledge.pg import KnowledgeRepo
-from app.knowledge.search import KbSearch, SearchHit, Term, excerpt, query_terms, rrf, tsquery
+from app.knowledge.search import (
+    KbSearch,
+    SearchHit,
+    Term,
+    bm25,
+    excerpt,
+    query_terms,
+    rrf,
+    tsquery,
+)
 from app.knowledge.source import YamlKnowledgeSource, build_kb
 from app.knowledge.sync import seed_yaml
 from app.llm.embeddings import (
@@ -433,6 +442,32 @@ def test_query_terms_drop_stopwords_and_use_prefixes():
     assert terms == {"льго": True, "резиден": True, "2026": False, "год": True, "lrt": False}
     assert tsquery([Term("льго", True), Term("2026", False)]) == "льго:* | 2026"
     assert query_terms("как где что") == []
+    # названия — целиком, как их индексирует PG ('c4.6', 'alem.ai', 'wi-fi')
+    assert {t.stem: t.prefix for t in query_terms("Переговорная в C4.6 и alem.ai, Wi-Fi?")} == {
+        "перегов": True,
+        "c4.6": False,
+        "alem.ai": False,
+        "wi-fi": False,
+    }
+
+
+def test_bm25_rare_word_outweighs_common_and_long_chunks_are_penalized():
+    a, b, c = (("fact", x, 0) for x in "abc")
+    # слово 0 — во всех трёх фрагментах (частое), слово 1 — только в c (редкое)
+    rows = [(*a, 10, True, False), (*b, 10, True, False), (*c, 10, True, True)]
+    assert bm25(rows, 2, total=100, avg_len=10)[0] == c
+    rows = [(*a, 50, True, False), (*b, 5, True, False)]  # те же слова, b короче
+    assert bm25(rows, 2, total=100, avg_len=20) == [b, a]
+
+
+def test_tool_prefers_documents_because_facts_are_in_prompt():
+    def hit(i: str, kind: str) -> SearchHit:
+        return SearchHit(i, kind, i, "текст", None, "ru", 0.1)
+
+    hits = [hit("fact:a", "fact"), hit("document:d#1", "document"), hit("fact:b", "fact")]
+    hits += [hit("place:p", "place"), hit("document:d#2", "document")]
+    assert [h.id for h in prefer_documents(hits)] == ["document:d#1", "place:p", "document:d#2"]
+    assert [h.id for h in prefer_documents(hits[:3])] == ["document:d#1", "fact:a", "fact:b"]
 
 
 def test_rrf_merges_lists_and_collapses_language_duplicates():
