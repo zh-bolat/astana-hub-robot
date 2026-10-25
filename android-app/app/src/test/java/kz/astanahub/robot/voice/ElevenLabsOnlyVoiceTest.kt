@@ -39,7 +39,7 @@ class ElevenLabsOnlyVoiceTest {
 
     private val phrases = Phrases { key, lang -> "${key.name}:${lang.code}." }
     private val cantSpeak = phrases.get(PhraseKey.CANT_SPEAK, Lang.RU)
-    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null }
+    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null; every { supportsLiveStt } returns false }
     private val config = MutableStateFlow(VoiceConfig())
     private val settings = mockk<VoiceSettings> { every { config } returns this@ElevenLabsOnlyVoiceTest.config }
     private val builtinTts = mockk<VoiceGateway>(relaxed = true) {

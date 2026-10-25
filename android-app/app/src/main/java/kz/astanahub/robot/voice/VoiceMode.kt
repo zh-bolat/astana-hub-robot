@@ -3,6 +3,7 @@ package kz.astanahub.robot.voice
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kz.astanahub.robot.audio.MicSensitivity
 import kz.astanahub.robot.core.Lang
 
 /** Откуда голос: встроенный (робот: AgentOS / SkillApi; emulator: Android TTS) или наш backend. */
@@ -30,11 +31,13 @@ data class VoiceConfig(
     val vadEndSilenceMillis: Int = VadConfigDefaults.END_SILENCE_MS,
     /** `/v1/tts?stream=true`: воспроизведение с первых байт. */
     val ttsStreaming: Boolean = true,
+    /** Чувствительность микрофона: порог громкости и минимальная длительность речи до старта распознавания. */
+    val micSensitivity: MicSensitivity = MicSensitivity.NORMAL,
 ) {
     fun ttsFor(lang: Lang): VoiceSource = tts[lang] ?: VoiceSource.SERVER
 
     fun describe(): String = "ASR=${asr.code}; TTS " + Lang.entries.joinToString(", ") { "${it.code}=${ttsFor(it).code}" } +
-        "; builtinFallback=$builtinFallback; vad=${vadEndSilenceMillis}ms; stream=$ttsStreaming"
+        "; builtinFallback=$builtinFallback; vad=${vadEndSilenceMillis}ms; stream=$ttsStreaming; mic=${micSensitivity.code}"
 
     companion object {
         val DEFAULT_TTS = Lang.entries.associateWith { VoiceSource.SERVER }
@@ -60,7 +63,13 @@ class VoiceSettings(context: Context, private val defaults: VoiceConfig) {
         builtinFallback = if (prefs.contains(KEY_FALLBACK)) prefs.getBoolean(KEY_FALLBACK, false) else defaults.builtinFallback,
         vadEndSilenceMillis = prefs.getInt(KEY_VAD, defaults.vadEndSilenceMillis),
         ttsStreaming = if (prefs.contains(KEY_STREAM)) prefs.getBoolean(KEY_STREAM, true) else defaults.ttsStreaming,
+        micSensitivity = MicSensitivity.fromCode(prefs.getString(KEY_MIC, null)) ?: defaults.micSensitivity,
     )
+
+    fun setMicSensitivity(value: MicSensitivity) {
+        prefs.edit().putString(KEY_MIC, value.code).apply()
+        _config.value = _config.value.copy(micSensitivity = value)
+    }
 
     fun setBuiltinFallback(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_FALLBACK, enabled).apply()
@@ -99,6 +108,7 @@ class VoiceSettings(context: Context, private val defaults: VoiceConfig) {
         const val KEY_FALLBACK = "builtin_fallback"
         const val KEY_VAD = "vad_end_silence_ms"
         const val KEY_STREAM = "tts_streaming"
+        const val KEY_MIC = "mic_sensitivity"
     }
 }
 

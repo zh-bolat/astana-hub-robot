@@ -158,7 +158,10 @@ class AppContainer(app: Application) {
         backend = backend,
         recorder = micRecorder,
         player = Mp3Player(),
-        vadConfig = { VadConfig(endSilenceMillis = voiceSettings.config.value.vadEndSilenceMillis) },
+        vadConfig = {
+            val c = voiceSettings.config.value
+            VadConfig(endSilenceMillis = c.vadEndSilenceMillis).withSensitivity(c.micSensitivity)
+        },
         cache = phraseCache,
         streaming = { voiceSettings.config.value.ttsStreaming },
     )

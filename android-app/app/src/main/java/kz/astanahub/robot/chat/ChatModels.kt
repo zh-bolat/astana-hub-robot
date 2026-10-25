@@ -54,6 +54,8 @@ sealed interface ChatEvent {
         val sources: List<String> = emptyList(),
         /** Все действия ответа (те же, что пришли событиями `action`). */
         val actions: List<ChatAction> = emptyList(),
+        /** v1.2: реплика — шум, модель не звали. Робот молчит, лицо без реакции, запасного пути нет. */
+        val ignored: Boolean = false,
     ) : ChatEvent
 
     /**

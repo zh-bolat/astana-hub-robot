@@ -74,6 +74,22 @@ class ChatApiTest {
     }
 
     @Test
+    fun `noise - sse done with ignored and json mode with ignored`() = runBlocking {
+        server.enqueue(sse("event: done\ndata: {\"request_id\":\"r1\",\"lang\":\"ru\",\"found\":false,\"actions\":[],\"ignored\":true}\n\n"))
+        val sse = withTimeout(5_000) { api.chat(request).toList() }
+        assertTrue((sse.single() as ChatEvent.Done).ignored)
+
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("{\"request_id\":\"r2\",\"lang\":\"ru\",\"answer\":\"\",\"found\":false,\"sources\":[],\"actions\":[],\"ignored\":true}"),
+        )
+        val json = withTimeout(5_000) { api.chat(request).toList() }
+        val done = json.single() as ChatEvent.Done
+        assertTrue(done.ignored)
+        assertEquals("r2", done.requestId)
+    }
+
+    @Test
     fun `visitor arrived goes with empty text and event`() = runBlocking {
         server.enqueue(sse("event: phrase\ndata: {\"text\":\"Сәлем!\"}\n\nevent: done\ndata: {}\n\n"))
         api.chat(ChatRequest("s-2", "", Lang.KK, event = ChatRequest.EVENT_VISITOR_ARRIVED)).toList()

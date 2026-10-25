@@ -389,6 +389,8 @@ class RoutingVoiceGateway(
         server.setLanguage(lang)
     }
 
+    override fun setListeningPaused(paused: Boolean) = server.setListeningPaused(paused)
+
     override fun setSessionId(id: String) {
         server.setSessionId(id)
     }

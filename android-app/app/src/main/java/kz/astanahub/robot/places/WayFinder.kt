@@ -19,6 +19,17 @@ class WayFinder(
 
     suspend fun find(query: String): Place? = PlaceMatcher.match(query, repository.places())?.place
 
+    /**
+     * Названия мест (все языки, синонимы, имя точки карты) и их слова от 3 букв — нормализованные [TextNormalizer]:
+     * для фильтра шума (название места одним словом — осмысленная реплика).
+     */
+    suspend fun placeWords(): Set<String> = repository.places()
+        .flatMap { p -> p.names.values + p.synonyms + p.mapName }
+        .map(TextNormalizer::normalize)
+        .flatMap { n -> listOf(n) + n.split(' ') }
+        .filter { it.length >= 3 }
+        .toSet()
+
     /** null — место не узнали (тогда спрашиваем сервер, если он есть). */
     suspend fun whereIs(query: String, lang: Lang): WayAnswer? {
         val place = find(query) ?: return null

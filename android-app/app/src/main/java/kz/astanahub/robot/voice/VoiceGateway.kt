@@ -58,6 +58,12 @@ interface VoiceGateway {
     /** Язык ASR/TTS. На роботе API для этого в доке AgentOS SDK v0.4.12 нет — см. реализацию. */
     fun setLanguage(lang: Lang)
 
+    /**
+     * Робот спит и рядом никого (PersonApi): постоянное прослушивание можно приостановить —
+     * голос не будит разговор, будят только человек и касание. По умолчанию ничего не делает.
+     */
+    fun setListeningPaused(paused: Boolean) = Unit
+
     /** Сессия разговора (session_id для /v1/stt = session_id экрана). */
     fun setSessionId(id: String) = Unit
 

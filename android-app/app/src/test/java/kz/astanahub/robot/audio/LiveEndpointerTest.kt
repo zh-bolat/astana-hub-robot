@@ -6,6 +6,7 @@ import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,5 +71,69 @@ class LiveEndpointerTest {
         val ep = LiveEndpointer(VadConfig())
         val audio = le(silence(3_000))
         assertFalse(audio.toList().chunked(3_200).any { ep.accept(it.toByteArray()) })
+    }
+
+    // --- порог старта live STT: громкость + минимальная длительность речи ---
+
+    private fun chunks(samples: ShortArray): List<ByteArray> = le(samples).toList().chunked(3_200).map { it.toByteArray() }
+
+    /** На каком куске (100 мс) случился старт речи; null — не случился. */
+    private fun startChunk(config: VadConfig, samples: ShortArray): Int? {
+        val ep = LiveEndpointer(config)
+        chunks(samples).forEachIndexed { i, c -> if (ep.feed(c) == LiveVadEvent.SPEECH_STARTED) return i }
+        return null
+    }
+
+    private fun quietTone(ms: Int) = pcm(ms) { (300 * sin(2 * PI * 220 * it / 16_000)).toInt() }
+
+    @Test
+    fun `default minimum speech is 250 ms`() {
+        assertEquals(250, VadConfig().startMillis)
+        assertEquals(250, MicSensitivity.NORMAL.minSpeechMillis)
+    }
+
+    @Test
+    fun `short sound does not start speech and is counted, no end is sent`() {
+        val ep = LiveEndpointer(VadConfig())
+        val events = chunks(silence(500) + tone(200) + silence(1_500)).map { ep.feed(it) }
+        assertFalse(ep.started)
+        assertFalse(events.contains(LiveVadEvent.SPEECH_STARTED))
+        assertFalse(events.contains(LiveVadEvent.SPEECH_ENDED))
+        assertEquals(1, ep.shortSounds)
+        assertTrue(ep.lastShortSoundMillis in 160..240)
+    }
+
+    @Test
+    fun `several short laughs and claps never open live STT`() {
+        val ep = LiveEndpointer(VadConfig())
+        var audio = silence(300)
+        repeat(5) { audio += tone(120) + silence(150) }
+        audio += silence(1_000)
+        assertTrue(chunks(audio).none { ep.feed(it) == LiveVadEvent.SPEECH_STARTED })
+        assertEquals(5, ep.shortSounds)
+    }
+
+    @Test
+    fun `quiet sound below the threshold does not start speech`() {
+        assertNull(startChunk(VadConfig(), silence(300) + quietTone(2_000) + silence(500)))
+    }
+
+    @Test
+    fun `speech of at least the minimum duration starts`() {
+        // речь с 300 мс; 250 мс подряд громко -> старт в куске, покрывающем 550 мс
+        assertEquals(5, startChunk(VadConfig(), silence(300) + tone(300) + silence(1_000)))
+        assertNotNull(startChunk(VadConfig(), silence(300) + tone(1_000)))
+    }
+
+    @Test
+    fun `sensitivity changes the minimum duration and the volume threshold`() {
+        val audio = silence(300) + tone(300) + silence(800)
+        assertNull("низкая: 300 мс мало", startChunk(VadConfig().withSensitivity(MicSensitivity.LOW), audio))
+        assertNotNull(startChunk(VadConfig().withSensitivity(MicSensitivity.HIGH), silence(300) + tone(200) + silence(800)))
+        assertNull(startChunk(VadConfig().withSensitivity(MicSensitivity.NORMAL), silence(300) + tone(200) + silence(800)))
+        // тихий голос (RMS ≈ 400) слышен только на высокой
+        val voice = silence(300) + pcm(1_000) { (560 * sin(2 * PI * 220 * it / 16_000)).toInt() }
+        assertNull(startChunk(VadConfig(), voice))
+        assertNotNull(startChunk(VadConfig().withSensitivity(MicSensitivity.HIGH), voice))
     }
 }

@@ -195,7 +195,7 @@ class RoutingVoiceGatewayTest {
     @Test
     fun `config description`() {
         assertEquals(
-            "ASR=server; TTS ru=server, kk=server, en=server; builtinFallback=false; vad=500ms; stream=true",
+            "ASR=server; TTS ru=server, kk=server, en=server; builtinFallback=false; vad=500ms; stream=true; mic=normal",
             VoiceConfig().describe(),
         )
     }
