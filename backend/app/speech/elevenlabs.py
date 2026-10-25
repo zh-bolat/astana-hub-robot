@@ -7,11 +7,16 @@
 - STT: POST {base}/v1/speech-to-text, multipart: model_id=scribe_v2, file, language_code? (ISO 639-1/3,
   без него — автоопределение), file_format=pcm_s16le_16 (сырой PCM 16 кГц mono — ниже задержка),
   tag_audio_events=false. Ответ: {language_code, language_probability, text, words}.
+- voice_settings (TTS и /stream): stability, similarity_boost, style, use_speaker_boost, speed (0.7–1.2).
+  Eleven v3 принимает только stability (0.0 Creative / 0.5 Natural / 1.0 Robust): similarity, speaker boost и
+  speed для v3 недоступны (elevenlabs.io/docs/eleven-creative/playground/text-to-speech), style для v3
+  не документирован — не шлём. Остальным моделям (flash_v2_5, multilingual_v2) — все поля.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import httpx
 
@@ -20,6 +25,35 @@ from app.speech.base import SpeechError, SttResult, has_letters
 
 # Scribe может вернуть ISO 639-3
 _ISO3 = {"rus": "ru", "kaz": "kk", "eng": "en"}
+_V3_STABILITY = (0.0, 0.5, 1.0)
+
+
+@dataclass(frozen=True)
+class VoiceSettings:
+    """Настройки голоса ElevenLabs (env ELEVENLABS_STABILITY и т.д.). По умолчанию — живее и выразительнее
+    стандартных (0.5 / 0.75 / 0 / 1.0): ниже стабильность, немного стиля, чуть быстрее."""
+
+    stability: float = 0.4
+    similarity_boost: float = 0.8
+    style: float = 0.35
+    use_speaker_boost: bool = True
+    speed: float = 1.05
+
+    def for_model(self, model: str) -> dict:
+        """Поля voice_settings, которые модель принимает."""
+        if model.startswith("eleven_v3"):
+            return {"stability": min(_V3_STABILITY, key=lambda v: abs(v - self.stability))}
+        return {
+            "stability": self.stability,
+            "similarity_boost": self.similarity_boost,
+            "style": self.style,
+            "use_speaker_boost": self.use_speaker_boost,
+            "speed": min(1.2, max(0.7, self.speed)),
+        }
+
+    def signature(self, model: str) -> str:
+        """Для ключа кеша TTS: другие настройки — другое аудио."""
+        return ",".join(f"{k}={v}" for k, v in sorted(self.for_model(model).items()))
 
 
 class ElevenLabsProvider:
@@ -34,6 +68,7 @@ class ElevenLabsProvider:
         tts_model_default: str = "eleven_flash_v2_5",
         output_format: str = "mp3_44100_128",
         stt_model: str = "scribe_v2",
+        voice_settings: VoiceSettings | None = None,
         timeout_s: float = 10.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -43,6 +78,7 @@ class ElevenLabsProvider:
         self.tts_model_default = tts_model_default
         self.output_format = output_format
         self.stt_model = stt_model
+        self.voice_settings = voice_settings or VoiceSettings()
         self.client = client or httpx.AsyncClient(
             timeout=timeout_s, headers={"xi-api-key": api_key}
         )
@@ -55,11 +91,17 @@ class ElevenLabsProvider:
         return self.tts_model_kk if lang == "kk" else self.tts_model_default
 
     def voice_id(self, lang: Lang) -> str:
-        return f"{self.voices[lang]}:{self.tts_model(lang)}:{self.output_format}"
+        model = self.tts_model(lang)
+        settings = self.voice_settings.signature(model)
+        return f"{self.voices[lang]}:{model}:{self.output_format}:{settings}"
 
     def _tts_body(self, text: str, lang: Lang) -> dict:
         model = self.tts_model(lang)
-        body: dict = {"text": text, "model_id": model}
+        body: dict = {
+            "text": text,
+            "model_id": model,
+            "voice_settings": self.voice_settings.for_model(model),
+        }
         if "multilingual_v2" not in model:
             body["language_code"] = lang
         return body
