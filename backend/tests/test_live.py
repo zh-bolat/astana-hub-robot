@@ -24,6 +24,7 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     InputTransportMessageFrame,
     InterimTranscriptionFrame,
+    ManuallySwitchServiceFrame,
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
     OutputTransportMessageUrgentFrame,
@@ -35,18 +36,21 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
+from pydantic import SecretStr
 from sqlalchemy import text
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.frames import Close
 
+from app.agent.service import LiveTurn
 from app.config import Settings
 from app.live.conversation import cut_words, is_echo
 from app.live.playout import EchoGate, Playout, rms
 from app.live.protocol import AUDIO_FORMAT, LiveSerializer
-from app.live.services import LiveServices
+from app.live.services import LiveServices, build_live_services
 from app.llm.fake import FakeProvider
 from app.main import create_app
+from app.schemas import ChatRequest
 from tests.conftest import AUTH, JPEG, SESSION, TOKEN
 from tests.test_chat import FakeModel, call, messages, say
 
@@ -696,3 +700,42 @@ def test_echo_gate_mutes_quiet_audio_while_playing():
     assert not gate.should_mute(loud)  # громкая речь рядом с роботом проходит
     gate.aec = True
     assert not gate.should_mute(quiet_echo)  # эхо гасит робот
+
+
+# ---------- агент в живом режиме ----------
+def test_agent_live_turn_defers_memory_until_commit(make_client):
+    model = FakeModel(say("[happy] Кафе на первом этаже. Справа от входа."))
+    client = make_client(chat_client=model.client())
+    chat = client.app.state.chat
+
+    async def check() -> None:
+        live = LiveTurn()
+        req = ChatRequest(question="Где кафе?", lang="ru", session_id=SESSION)
+        events = [e async for e in chat.chat_stream(req, "req_live", live=live)]
+        assert [d["text"] for k, d in events if k == "phrase"] == [
+            "Кафе на первом этаже.",
+            "Справа от входа.",
+        ]
+        assert live.pending and live.first_token_at is not None
+        assert messages(client) == []  # память и журнал ждут, что робот успел сказать
+        await live.commit(["Кафе на первом этаже."], True)
+        await live.commit(["второй раз не пишется"], False)
+
+    asyncio.run(check())
+    assert messages(client) == [
+        ("visitor", "Где кафе?", None),
+        ("assistant", "Кафе на первом этаже.", None),
+    ]
+
+
+def test_real_services_build_without_network(settings):
+    s = settings.model_copy(update={"elevenlabs_api_key": SecretStr("k"), "live_enabled": True})
+
+    async def check() -> None:
+        services = build_live_services(s, "kk")
+        assert services.turn_analyzer is not None
+        assert isinstance(services.switch_tts("ru"), ManuallySwitchServiceFrame)
+        assert services.provider.startswith("pipecat:elevenlabs")
+        await services.aclose()
+
+    asyncio.run(check())
