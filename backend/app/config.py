@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     # БД без единого факта и таблица не задана → при старте засеять из YAML (разработка)
     kb_seed_yaml_if_empty: bool = True
 
+    # Поиск по базе (RAG, docs/db-schema.md раздел 2): инструмент агента search_kb — по смыслу (эмбеддинги в
+    # kb_chunks) и по словам (полнотекст), слияние RRF. Эмбеддинги: auto — openrouter при OPENROUTER_API_KEY,
+    # иначе off; fake — без сети (тесты). off — поиска нет, агент работает только с фактами в промпте.
+    embedding_provider: Literal["auto", "openrouter", "fake", "off"] = "auto"
+    embedding_model: str = "google/gemini-embedding-2"
+    # Эмбеддинг вопроса на пути ответа, сек: не успел — поиск только по словам
+    embedding_query_timeout_s: float = 1.0
+    # Индексация: текстов в одном запросе к провайдеру; таймаут одного запроса, сек
+    embedding_batch_size: int = Field(64, ge=1, le=256)
+    embedding_timeout_s: float = 30.0
+    # hybrid — инструмент search_kb (если эмбеддинги доступны); off — без инструмента, всё как раньше
+    retrieval_mode: Literal["off", "hybrid"] = "hybrid"
+
     # PostgreSQL 16 + pgvector — единственная рабочая БД (docs/db-schema.md).
     # Локально: infra/docker-compose.dev.yml (порт 127.0.0.1:5432), пароль — в backend/.env.
     database_url: str = "postgresql+psycopg://hub@127.0.0.1:5432/hub"
@@ -339,6 +352,17 @@ class Settings(BaseSettings):
         if self.agent_enabled is False:
             return "off"
         return "openrouter" if self.openrouter_api_key else "off"
+
+    def resolved_embedding_provider(self) -> str:
+        if self.embedding_provider != "auto":
+            return self.embedding_provider
+        return "openrouter" if self.openrouter_api_key else "off"
+
+    def resolved_retrieval_mode(self) -> str:
+        """hybrid только при доступных эмбеддингах (поиск без них — не включаем)."""
+        if self.retrieval_mode == "off" or self.resolved_embedding_provider() == "off":
+            return "off"
+        return "hybrid"
 
     def resolved_stt_stream_provider(self) -> str:
         if self.stt_stream_provider != "auto":
