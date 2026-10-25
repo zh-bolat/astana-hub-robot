@@ -21,7 +21,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
@@ -96,6 +96,36 @@ class _ChatState:
     ignored: bool = False  # v1.2: реплика — шум, модель не вызывалась
     fallback: bool = False  # агент не ответил — ответ дал /v1/ask или готовое приветствие
     error: str | None = None
+    live: LiveTurn | None = None  # WS /v1/live: фразы по мере генерации, журнал — по сказанному
+
+
+@dataclass
+class LiveTurn:
+    """Ход живого режима (WS /v1/live, app/live).
+
+    - Фразы отдаются по мере генерации — каждое законченное предложение сразу, не дожидаясь конца ответа
+      модели (в /v1/chat текст ответа придерживается до конца: вдруг в нём же вызов инструмента). Если
+      в ответе начался вызов инструмента, дальнейший текст этого ответа не озвучивается.
+    - Журнал вопросов и память агента пишутся не по done, а когда живой режим знает, что робот успел
+      сказать на самом деле: `commit(said, interrupted)` — только произнесённые фразы."""
+
+    endpoint: str = "live"
+    first_token_at: float | None = None  # time.perf_counter() первого токена модели
+    _commit: Callable[[list[str], bool], Awaitable[None]] | None = None
+
+    @property
+    def pending(self) -> bool:
+        return self._commit is not None
+
+    async def commit(self, said: list[str], interrupted: bool) -> None:
+        """Один раз: журнал + память с тем, что прозвучало (повторный вызов ничего не делает)."""
+        commit, self._commit = self._commit, None
+        if commit is not None:
+            await commit(said, interrupted)
+
+
+# Конец предложения в потоке текста: знак и пробел после него (следующий токен уже пришёл)
+_SENTENCE_END = re.compile(r"[.!?…]+[»\")]*\s+")
 
 
 # Модель без размышлений иногда «думает» текстом: «The visitor asks…», «Посетитель просит…»
@@ -387,16 +417,18 @@ class ChatService:
         raise ApiError(500, "internal_error", "Internal server error")
 
     async def chat_stream(
-        self, req: ChatRequest, request_id: str
+        self, req: ChatRequest, request_id: str, live: LiveTurn | None = None
     ) -> AsyncIterator[tuple[str, dict]]:
         """SSE: ("emotion", {name}) перед первой фразой, ("phrase", {text}), ("action", {type, place_id}),
         затем ("done", {...}) или ("error", {...}).
-        Клиент оборвал поток до done → в лог и память идут уже отправленные фразы (interrupted=true)."""
+        Клиент оборвал поток до done → в лог и память идут уже отправленные фразы (interrupted=true).
+        live — ход WS /v1/live (см. LiveTurn): фразы по мере генерации, журнал и память — по live.commit."""
         started = time.perf_counter()
         st = _ChatState(
             lang=resolve_lang(req.lang, None, req.question),
             greeting=req.event == "visitor_arrived",
             started=started,
+            live=live,
         )
         finished = False
         try:
@@ -465,10 +497,38 @@ class ChatService:
     ) -> dict:
         st.logged = True
         found = st.category not in ("out_of_scope", "blocked")
+        done = {
+            "request_id": request_id,
+            "lang": st.lang,
+            "found": found,
+            "sources": st.sources if found else [],
+            "actions": st.actions,
+        }
+        if st.live is not None:  # живой режим запишет то, что робот успел сказать
+
+            async def commit(said: list[str], cut: bool) -> None:
+                await self._persist(req, request_id, st, started, said, interrupted or cut)
+
+            st.live._commit = commit
+        else:
+            await self._persist(req, request_id, st, started, list(st.emitted), interrupted)
+        return done
+
+    async def _persist(
+        self,
+        req: ChatRequest,
+        request_id: str,
+        st: _ChatState,
+        started: float,
+        said: list[str],
+        interrupted: bool,
+    ) -> None:
+        """Журнал вопросов (кроме приветствия) и память агента."""
+        found = st.category not in ("out_of_scope", "blocked")
         resp = AnswerResponse(
             request_id=request_id,
-            answer=" ".join(st.emitted),
-            phrases=list(st.emitted),
+            answer=" ".join(said),
+            phrases=list(said),
             lang=st.lang,
             found=found,
             sources=st.sources if found else [],
@@ -480,7 +540,7 @@ class ChatService:
             )
         else:
             await self.answers._log(
-                endpoint="chat",
+                endpoint=st.live.endpoint if st.live is not None else "chat",
                 request_id=request_id,
                 session_id=req.session_id,
                 question=req.question,
@@ -492,13 +552,6 @@ class ChatService:
                 interrupted=interrupted,
             )
         self.remember(req.session_id, st.lang, req.question, resp.answer, st.calls)
-        return {
-            "request_id": request_id,
-            "lang": resp.lang,
-            "found": resp.found,
-            "sources": resp.sources,
-            "actions": st.actions,
-        }
 
     def _admit(self, st: _ChatState, text: str, question: str, corpus: str) -> list[str]:
         """Фразы, которые можно отправить: выходной фильтр + лимит 4 фразы / 600 символов."""
@@ -608,6 +661,8 @@ class ChatService:
         total_deadline = loop.time() + self.settings.agent_total_s
         events = result.stream_events().__aiter__()
         turn_text: list[str] = []
+        streamed = 0  # live: сколько символов текущего ответа модели уже ушло фразами
+        tool_started = False  # live: в текущем ответе модели начался вызов инструмента
         sent_actions = 0
         dropped = 0
         error: ApiError | None = None
@@ -625,11 +680,30 @@ class ChatService:
                     data = ev.data
                     if st.first_token_ms is None and data.type.endswith(".delta"):
                         st.first_token_ms = elapsed_ms(started)  # текст или аргументы тула
+                        if st.live is not None:
+                            st.live.first_token_at = time.perf_counter()
                     if data.type == "response.output_text.delta":
                         turn_text.append(data.delta)
+                        if st.live is not None and not tool_started:
+                            text = "".join(turn_text)
+                            ends = list(_SENTENCE_END.finditer(text, streamed))
+                            if ends:
+                                chunk, streamed = text[streamed : ends[-1].end()], ends[-1].end()
+                                for phrase in self._admit(
+                                    st, _take_emotion(st, chunk), req.question, corpus
+                                ):
+                                    st.emitted.append(phrase)
+                                    for event in _phrase_events(st, phrase):
+                                        yield event
+                    elif (
+                        data.type == "response.output_item.added"
+                        and getattr(data.item, "type", None) == "function_call"
+                    ):
+                        tool_started = True
                     elif data.type == "response.completed":
-                        text = "".join(turn_text)
+                        text = "".join(turn_text)[streamed:]
                         turn_text.clear()
+                        streamed, tool_started = 0, False
                         if any(
                             getattr(i, "type", None) == "function_call"
                             for i in data.response.output

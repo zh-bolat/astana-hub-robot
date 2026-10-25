@@ -281,6 +281,76 @@ curl -N -X POST 'http://127.0.0.1:8000/v1/tts?stream=true' -H "Authorization: Be
   -H 'Content-Type: application/json' -d '{"text": "Кафе на первом этаже.", "lang": "ru"}' -o phrase.mp3
 ```
 
+## Live-режим (WS /v1/live)
+
+Голосовой режим «как у ChatGPT»: один WebSocket на разговор, звук посетителя идёт непрерывно, сервер сам находит
+конец реплики, отвечает агентом `/v1/chat` и сразу стримит голос; посетитель может перебить робота на полуслове.
+Протокол кадров — `docs/api-contract.md`, раздел «WS /v1/live». WebSocket в OpenAPI не попадает — он описан здесь
+и в контракте. `/v1/chat` + `/v1/stt` + `/v1/tts` остаются запасным режимом робота.
+
+Реализация — [Pipecat](https://docs.pipecat.ai) 1.14 (`app/live/`), один `PipelineWorker` на соединение:
+
+```
+transport.input (LiveSerializer: PCM16 16 кГц + JSON-команды)
+  → EchoGate (hello.aec=false: тихий звук, пока играет ответ, — эхо, глушится)
+  → VADProcessor (Silero, start/stop 0,2 с)
+  → ElevenLabsRealtimeSTTService (scribe_v2_realtime, ручной commit на паузе VAD → финал сразу)
+  → LiveConversation (smart-turn v3 → конец реплики; перебивание; агент ChatService; события)
+  → TTS: ServiceSwitcher по языку хода — ru/en ElevenLabsTTSService (WebSocket, eleven_flash_v2_5),
+         kk ElevenLabsHttpTTSService (HTTP-поток, eleven_v3: WebSocket ElevenLabs не принимает v3)
+  → transport.output (PCM16 24 кГц `pcm_s16le_24000` + JSON) → PlayoutTracker (часы воспроизведения)
+```
+
+- **Конец реплики**: пауза VAD 0,2 с → smart-turn v3.2 (локальная ONNX-модель из пакета pipecat, CPU) решает,
+  договорил ли посетитель; «договорил» — ход сразу, «нет» — ждём тишину до `LIVE_TURN_MAX_SILENCE_S` (1,2 с).
+  `LIVE_SMART_TURN=false` — конец реплики после `LIVE_TURN_SILENCE_S` (0,5 с) тишины.
+- **Ответ**: тот же агент, что `/v1/chat` (промпт, тулы, память, эмоции, фильтры; шум → `ignored` без вызова модели),
+  но фразы уходят в TTS по мере генерации — каждое законченное предложение (`LiveTurn` в `app/agent/service.py`).
+  Если модель в том же ответе начала вызов инструмента, остаток текста этого ответа не озвучивается.
+  События хода встают в очередь за звуком: `turn_start → emotion → phrase → звук → … → turn_end`.
+  `guide_to` уходит после `playback_done` этого хода, `where_is`/`look` — сразу.
+- **Перебивание**: речь посетителя, пока ход робота не закончен (модель думает или звук ещё играет у робота),
+  становится перебиванием, если длится ≥ `LIVE_BARGE_IN_MIN_MS` (300) и промежуточный текст STT — не шум
+  (`app/noise.py`) и не эхо фразы робота (≥ 70 % слов совпадают с тем, что робот сейчас говорит). Тогда: отмена
+  агента, `InterruptionFrame` (TTS бросает синтез, транспорт — очередь звука), `interrupted` роботу, в память и журнал
+  — только прозвучавшее: «что услышал посетитель» считается по часам воспроизведения (транспорт шлёт звук быстрее
+  реального времени, робот играет подряд), недоигранная фраза обрезается по словам с «…». «Угу» во время ответа
+  отбрасывается целиком. `{"type": "interrupt"}` от робота — перебивание без условий.
+- **Эхо без AEC** (`hello.aec=false`): пока звучит ответ (+ `LIVE_ECHO_TAIL_S` 0,3 с реверберации), кадры микрофона
+  с RMS ниже `LIVE_ECHO_RMS` (1800 по PCM16) заменяются тишиной — VAD и STT не слышат собственный голос робота;
+  громкая речь рядом с роботом проходит, но перебивание требует уже `LIVE_ECHO_MIN_MS` (600 мс) речи. Плюс
+  проверка «текст = эхо фразы робота» работает всегда.
+- **`look`**: ответ `POST /v1/look` с той же `session_id` сервер сам озвучивает новым ходом в live-сессии
+  (если робот не думает над другим ответом и посетитель не говорит), иначе не озвучивает вовсе.
+- **Подключение**: токен робота в `Authorization` (без него — закрытие 1008 до accept); не больше
+  `LIVE_MAX_SESSIONS` (2) сессий на токен — иначе `error rate_limited` + 1013; повторное подключение с тем же
+  `session_id` закрывает старое. `LIVE_ENABLED` (пусто — включён при `ELEVENLABS_API_KEY` и агенте через
+  `OPENROUTER_API_KEY`); выключен — `error speech_unavailable` + 1011. Ошибка STT/TTS, после которой сервис
+  неработоспособен (или 3 ошибки), — `error speech_unavailable` + 1011, робот уходит в запасной режим. Простой
+  (ни речи, ни звука ответа, ни команд) дольше `LIVE_IDLE_TIMEOUT_S` (120 с) — закрытие 1000 `idle timeout`.
+- **Приватность**: звук посетителя живёт только в памяти пайплайна; логи Pipecat (loguru) идут в наш JSON-лог
+  только с уровня WARNING (в debug-логах Pipecat есть тексты); в `latency_events` — только миллисекунды и метки.
+- **Caddy** (`infra/caddy/Caddyfile`): отдельный `handle /v1/live` — `stream_close_delay 5m` (перезагрузка конфига не
+  рвёт идущий разговор); таймауты сервера `read_body`/`idle` на открытый WebSocket не действуют (Go снимает дедлайны
+  соединения при апгрейде).
+
+Проверка руками (нужны ключи ElevenLabs и OpenRouter в `.env`; звук — сырой PCM16 16 кГц):
+
+```bash
+uv run python - <<'EOF'
+import asyncio, json, os, websockets
+async def main():
+    url = "ws://127.0.0.1:8000/v1/live?session_id=demo&lang=ru"
+    async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {os.environ['ROBOT_TOKEN']}"}) as ws:
+        print(await ws.recv())                       # {"type":"ready","audio_format":"pcm_s16le_24000"}
+        await ws.send(json.dumps({"type": "hello", "lang": "ru", "place_id": "reception", "aec": True}))
+        await ws.send(json.dumps({"type": "visitor_arrived"}))
+        async for msg in ws:                         # JSON-события и бинарный PCM 24 кГц приветствия
+            print(msg if isinstance(msg, str) else f"<{len(msg)} байт звука>")
+asyncio.run(main())
+EOF
+```
+
 ## База знаний
 
 База знаний живёт в Postgres: таблицы `facts`, `places`, `quick_questions`, `events` (+ `kb_sync` — журнал
@@ -381,6 +451,8 @@ session_id, ok, extra`. Только числа и метки — тексты �
 | `look` | `llm_total_ms` | `/v1/look` |
 | `tts` | `tts_first_byte_ms`, `tts_total_ms` | `/v1/tts`; `extra`: `cache` (hit/miss), `chars`, `stream` |
 | `robot` | `stt_final_ms`, `first_audio_ms`, … и `turn` (без ms) | `POST /v1/metrics/turn` с робота; `provider` = `mode` |
+| `live` | `live_stt_final_ms`, `live_llm_first_token_ms`, `live_first_audio_ms` | WS /v1/live, ход: от конца речи посетителя до финала STT / от конца реплики до первого токена / от конца речи до первого байта звука роботу; `extra`: `greeting`, `interrupted`, `phrases`, `aec`, `ignored`, `error` |
+| `live` | `live_interrupt_ms`, `live_session_ms`, `live_error` (без ms) | от начала перебившей речи до `interrupted`; длительность сессии (`extra`: `ended_by`, `turns`, `interrupts`); ошибка STT/TTS |
 
 Как смотреть статистику:
 
@@ -415,6 +487,8 @@ app/
   llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
   speech/          STT/TTS: gemini_stt.py, openrouter.py, streaming.py (live STT), elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
   speech_api.py    эндпоинты /v1/stt, /v1/tts (и ?stream=true), WebSocket /v1/stt/stream
+  live/            WS /v1/live на Pipecat: session.py (подключение, пайплайн), conversation.py (ход, перебивание),
+                   services.py (Silero, smart-turn, ElevenLabs), playout.py (часы воспроизведения, эхо), protocol.py
   metrics.py       LatencyRecorder: тайминги этапов → latency_events (фоном, без текстов)
   metrics_api.py   POST /v1/metrics/turn, GET /v1/admin/metrics, страница metrics_page.html
   knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML

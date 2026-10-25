@@ -298,9 +298,14 @@ async def look(request: Request) -> AnswerResponse:
         if not image.startswith(b"\xff\xd8"):
             raise bad_request("Image must be a JPEG")
         try:
-            return await service.look(meta, image, _request_id())
+            resp = await service.look(meta, image, _request_id())
         finally:
             del image
+        # WS /v1/live открыт для этого разговора — описание кадра звучит голосом live-сессии
+        live = request.app.state.live_registry.get(meta.session_id)
+        if live is not None and resp.answer:
+            await live.speak_look(resp.answer, resp.lang)
+        return resp
     finally:
         # image может прийти текстовым полем (str) — тогда закрывать нечего (иначе было 500)
         if isinstance(image_part, UploadFile):
