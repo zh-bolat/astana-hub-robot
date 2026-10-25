@@ -163,6 +163,9 @@ class RetrofitBackendApi(
 
     override val supportsLiveStt: Boolean get() = true
 
+    override fun openLive(lang: Lang, sessionId: String): kz.astanahub.robot.live.LiveConnection =
+        kz.astanahub.robot.live.OkHttpLiveConnection(client, baseUrl, token, lang, sessionId)
+
     private val chatClient by lazy { OkHttpChatClient(baseUrl, token, client) }
 
     override fun chat(request: ChatRequest): Flow<ChatEvent> = chatClient.chat(request)

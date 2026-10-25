@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
                     presence = container.presence,
                     head = container.head,
                     vadSilenceMillis = { container.voiceSettings.config.value.vadEndSilenceMillis },
+                    liveFactory = container.liveFactory,
                 )
             }
         }
@@ -300,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         // Слева: лицо, статус, что слышу, субтитры.
         binding.face.phase = state.phase
         binding.statusText.text = str(statusRes(state.phase), lang)
-        binding.heardText.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
+        binding.heardText.text = state.partialQuestion?.let { "«$it»" } ?: state.wayHint?.let { "\u27A4 $it" }.orEmpty()
         renderSubtitles(state)
 
         // Справа: один из трёх экранов. Ушли с приветствия — подсветка нажатой плитки снимается.
@@ -342,7 +343,7 @@ class MainActivity : AppCompatActivity() {
         val faceMode = state.mode == ScreenMode.FACE
         binding.faceLayer.isVisible = faceMode
         binding.face.emotion = state.emotion
-        binding.faceButton.isVisible = state.mode == ScreenMode.MENU && container.chatSettings.mode.value == ChatMode.AGENT
+        binding.faceButton.isVisible = state.mode == ScreenMode.MENU && container.chatSettings.mode.value.usesAgent
         binding.faceButton.text = str(R.string.action_face, lang)
         if (!faceMode) return
 
@@ -355,6 +356,9 @@ class MainActivity : AppCompatActivity() {
         binding.faceOffline.isVisible = state.offline
         binding.faceOffline.text = str(R.string.offline_badge, lang)
         binding.faceHeard.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
+        // Живой режим, where_is: направление по карте (озвучивает сервер, робот показывает).
+        binding.faceWay.isVisible = state.wayHint != null
+        binding.faceWay.text = state.wayHint?.let { "\u27A4 $it" }.orEmpty()
         binding.faceMenuButton.text = str(R.string.action_menu, lang)
         binding.faceInputLayout.hint = str(R.string.input_hint, lang)
         binding.faceSendButton.text = str(R.string.action_send, lang)

@@ -3,6 +3,10 @@ package kz.astanahub.robot.di
 import android.app.Application
 import kz.astanahub.robot.BuildConfig
 import kz.astanahub.robot.audio.MicRecorder
+import kz.astanahub.robot.live.AndroidAudioSink
+import kz.astanahub.robot.live.AndroidLiveMicrophone
+import kz.astanahub.robot.live.LiveSession
+import kz.astanahub.robot.live.LiveSessionFactory
 import kz.astanahub.robot.audio.Mp3Player
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.BackendSettings
@@ -97,7 +101,7 @@ class AppContainer(app: Application) {
             .shareIn(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), SharingStarted.WhileSubscribed(), 0)
     }
 
-    /** Режим разговора: agent (`/v1/chat`) или legacy; меняется на экране диагностики. */
+    /** Режим разговора: agent (`/v1/chat`), legacy или live (`WS /v1/live`); меняется на экране диагностики. */
     val chatSettings = ChatSettings(app, ChatMode.fromCode(BuildConfig.CHAT_MODE) ?: ChatMode.AGENT)
 
     /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
@@ -165,6 +169,20 @@ class AppContainer(app: Application) {
         cache = phraseCache,
         streaming = { voiceSettings.config.value.ttsStreaming },
     )
+
+    /** Микрофон живого режима (VOICE_COMMUNICATION + AEC/NS, если есть). */
+    val liveMicrophone = AndroidLiveMicrophone(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
+
+    /** Живой голосовой режим WS /v1/live (ChatMode.LIVE): одна сессия на посетителя. */
+    val liveFactory = LiveSessionFactory { scope, sessionId, lang ->
+        LiveSession(
+            parent = scope,
+            connect = { backend.openLive(lang, sessionId) },
+            microphone = liveMicrophone,
+            sink = AndroidAudioSink(),
+            clock = android.os.SystemClock::elapsedRealtime,
+        )
+    }
 
     /** Синтез кеша фраз: при старте — недостающие, при смене сервера — все заново, при восстановлении связи — недостающие. */
     val phraseCacheWarmer = PhraseCacheWarmer(backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO))

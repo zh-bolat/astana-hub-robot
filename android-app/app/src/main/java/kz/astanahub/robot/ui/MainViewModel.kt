@@ -64,6 +64,9 @@ import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
 import kz.astanahub.robot.core.LogSafe
+import kz.astanahub.robot.live.LiveSession
+import kz.astanahub.robot.live.LiveSessionFactory
+import kz.astanahub.robot.live.LiveSignal
 import timber.log.Timber
 
 /** Индикатор на экране. */
@@ -93,6 +96,8 @@ data class MainUiState(
     /** Фраза ответа, которая звучит сейчас (крупные субтитры в FACE); null — показываем весь [answer]. */
     val subtitle: String? = null,
     val screen: Screen = Screen.HOME,
+    /** Живой режим, `action: where_is`: направление по карте робота (озвучивает сервер, робот только показывает). */
+    val wayHint: String? = null,
     /** Страница частых вопросов (по [FAQ_PAGE_SIZE] на странице). */
     val faqPage: Int = 0,
     /** Раскрытый вопрос в списке частых вопросов (id), null — все свёрнуты. */
@@ -141,6 +146,10 @@ class MainViewModel(
     private val head: HeadController? = null,
     /** Порог тишины VAD (для `/v1/metrics/turn`). */
     private val vadSilenceMillis: () -> Int? = { null },
+    /** Живой голосовой режим `WS /v1/live` (ChatMode.LIVE); null — нет. */
+    private val liveFactory: LiveSessionFactory? = null,
+    /** Сбой live → запасной режим (agent), повторная попытка live через столько. */
+    private val liveRetryMillis: Long = LIVE_RETRY_MILLIS,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -214,6 +223,29 @@ class MainViewModel(
     /** Последний промежуточный текст посетителя (по нему решаем, «думать» ли лицу по концу речи). */
     private var lastPartial: String? = null
 
+    // --- Живой режим (WS /v1/live) ---
+    /** Открытая живая сессия; null — live выключен, не открыт или упал (тогда работает agent). */
+    private var live: LiveSession? = null
+    private var liveJob: Job? = null
+    private var liveRetryJob: Job? = null
+    private var liveLookJob: Job? = null
+    /** До этого момента (clock) live не открываем: недавно упал. */
+    private var liveDownUntil = Long.MIN_VALUE
+    /** Реплика посетителя, на которую live ещё не начал отвечать (при сбое — уходит в agent). */
+    private var livePendingQuestion: String? = null
+    /** Просили поздороваться (`visitor_arrived`), ответа ещё не было (при сбое — здороваемся через agent). */
+    private var liveGreetPending = false
+    /** Тайминги текущего хода live (`/v1/metrics/turn`, mode=live). */
+    private var liveTurn: TurnClock? = null
+    /** `guide_to` ждёт `playback_done` своего хода. */
+    private val liveGuides = mutableMapOf<String?, ChatAction>()
+    /** Фразы текущего хода live (текст ответа на экране). */
+    private val liveSpoken = mutableListOf<String>()
+    /** Последний доигранный ход ([liveGuides] для действия, пришедшего уже после `playback_done`). */
+    private var liveLastDone: String? = null
+    /** Сколько ходов live начато (для решения, озвучил ли сервер результат `look`). */
+    private var liveTurnStarts = 0
+
     /** Тайминги одного хода: все отметки — мс от [origin] (конец речи по VAD или нажатие кнопки). */
     private class TurnClock(val origin: Long, val sttFinalMs: Long?, var lang: Lang?) {
         var mode: String = TurnMetrics.MODE_AGENT
@@ -233,7 +265,12 @@ class MainViewModel(
             voice.transcripts.collect(::onTranscript)
         }
         viewModelScope.launch {
-            voice.activity.collect { refreshPhase(); restartIdleTimer() }
+            voice.activity.collect {
+                // Своя озвучка мимо сервера (навигация, agent-ответ на кнопку) — live шлёт вместо микрофона тишину.
+                live?.setLocalSpeech(it == VoiceActivity.SPEAKING)
+                refreshPhase()
+                restartIdleTimer()
+            }
         }
         viewModelScope.launch {
             voice.connection.collect { up -> if (up) onConnectionRestored() else onConnectionLost() }
@@ -249,11 +286,10 @@ class MainViewModel(
         }
         // Спим и рядом никого (есть PersonApi): постоянное прослушивание на паузе — голос не будит.
         viewModelScope.launch {
-            _state.map { it.mode == ScreenMode.SLEEP }.distinctUntilChanged().collect { asleep ->
-                voice.setListeningPaused(asleep && presence != null && !visitorPresent)
-            }
+            _state.map { it.mode == ScreenMode.SLEEP }.distinctUntilChanged().collect { updateListeningPaused() }
         }
         restartIdleTimer()
+        ensureLive(greet = false)
     }
 
     private fun refreshPlaces() {
@@ -402,6 +438,7 @@ class MainViewModel(
     /** Касание экрана / голос: убрать заставку и перезапустить таймер бездействия. */
     fun wake() {
         if (_state.value.mode == ScreenMode.SLEEP) _state.update { it.copy(mode = awakeMode()) }
+        ensureLive(greet = false)
         restartIdleTimer()
         if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
     }
@@ -412,7 +449,7 @@ class MainViewModel(
         idleJob = viewModelScope.launch {
             delay(timeout)
             val s = _state.value
-            if (s.phase == Phase.IDLE && navJob?.isActive != true && requestJob?.isActive != true && !visitorPresent) {
+            if (phaseIdle(s.phase) && navJob?.isActive != true && requestJob?.isActive != true && !visitorPresent) {
                 goIdle()
             } else {
                 restartIdleTimer()
@@ -421,7 +458,7 @@ class MainViewModel(
     }
 
     /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
-    private fun awakeMode(): ScreenMode = if (chatMode() == ChatMode.AGENT) ScreenMode.FACE else ScreenMode.MENU
+    private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
     /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
@@ -441,6 +478,12 @@ class MainViewModel(
     fun onSettingsChanged() {
         val mode = _state.value.mode
         if (mode != ScreenMode.SLEEP && mode != awakeMode()) _state.update { it.copy(mode = awakeMode()) }
+        if (chatMode() != ChatMode.LIVE) {
+            closeLive()
+        } else if (mode != ScreenMode.SLEEP) {
+            liveDownUntil = Long.MIN_VALUE // включили live в диагностике — пробуем сразу
+            ensureLive(greet = false)
+        }
     }
 
     private fun restartMenuTimer() {
@@ -460,6 +503,7 @@ class MainViewModel(
     /** Заставка: сброс сессии и экрана к начальному виду (шаг 7.4). */
     private fun goIdle() {
         Timber.i("idle → screensaver, session reset")
+        closeLive()
         sessionId = newSessionId()
         langChosenExplicitly = false
         val langChanged = _state.value.lang != Lang.RU
@@ -469,7 +513,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
-                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL,
+                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null,
             )
         }
@@ -487,6 +531,11 @@ class MainViewModel(
         _state.update { it.copy(lang = lang) }
         voice.setLanguage(lang)
         loadQuickQuestions()
+        // Язык живой сессии задаётся в `hello`: переоткрываем (память разговора — по session_id на сервере).
+        if (live != null) {
+            closeLive()
+            ensureLive(greet = false)
+        }
     }
 
     /** Вопрос текстом (поле ввода на эмуляторе) или финальный ASR: ответ — на экране ответа. */
@@ -510,6 +559,8 @@ class MainViewModel(
         touchSession()
         wake()
         voice.stopSpeaking()
+        // Вопрос кнопкой/текстом при живом режиме: звук live обрываем, отвечает agent (/v1/chat, та же сессия).
+        live?.interrupt()
         requestJob?.cancel()
         if (faqId == null) {
             // Вопрос из любого места → экран ответа; прежний экран запоминаем для «Назад».
@@ -525,9 +576,9 @@ class MainViewModel(
         turn = clockForTurn
         requestJob = viewModelScope.launch {
             try {
-                _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null) }
+                _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null, wayHint = null) }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
-                if (chatMode() == ChatMode.AGENT && !_state.value.offline && !chatUnsupported) {
+                if (chatMode().usesAgent && !_state.value.offline && !chatUnsupported) {
                     handleAgent(question, lang ?: _state.value.lang)
                 } else {
                     clockForTurn.mode = TurnMetrics.MODE_ASK
@@ -555,7 +606,7 @@ class MainViewModel(
             firstPhraseMs = t.firstPhraseMs,
             ttsFirstByteMs = t.ttsFirstByteMs,
             firstAudioMs = t.firstAudioMs,
-            vadSilenceMs = vadSilenceMillis(),
+            vadSilenceMs = if (t.mode == TurnMetrics.MODE_LIVE) null else vadSilenceMillis(),
             fallback = t.fallback,
             interrupted = t.interrupted,
         )
@@ -662,6 +713,7 @@ class MainViewModel(
             setBusy(Phase.NAVIGATING)
             // Слежение головой занимает шасси — на время поездки выключаем (одно устройство — одно API).
             head?.setNavigating(true)
+            live?.sendState(placeHint, navigating = true)
             val trip = this
             // Фраза старта звучит параллельно с началом движения; агент («Провожаю вас…») её уже сказал.
             val startSpeech = launch { if (announce) voice.speak(listOf(WayPhrases.guideStart(name, lang)), lang) }
@@ -679,6 +731,7 @@ class MainViewModel(
                 }
             } finally {
                 head?.setNavigating(false)
+                live?.sendState(placeHint, navigating = false)
                 _state.update { it.copy(guidingTo = null) }
                 setBusy(null)
             }
@@ -785,6 +838,8 @@ class MainViewModel(
         clearThinkingEarly(resetPhase = false)
         requestJob?.cancel()
         voice.stopSpeaking()
+        live?.interrupt()
+        liveGuides.clear()
         if (stopNavigationOnly()) {
             viewModelScope.launch { say(WayPhrases.guideCancelled(_state.value.lang), offline = _state.value.offline) }
         }
@@ -817,7 +872,10 @@ class MainViewModel(
                 }
                 wake()
                 showEmotion(MoodRules.visitorArrived)
-                if (event.greet && !busyNow()) greet()
+                if (event.greet && !busyNow()) {
+                    // Живой режим: здоровается агент на сервере (`visitor_arrived`); live не открылся — как раньше.
+                    if (!ensureLive(greet = true)) greet()
+                }
             }
             is PresenceEvent.FaceId -> head?.follow(event.personId)
             PresenceEvent.Left -> {
@@ -832,14 +890,18 @@ class MainViewModel(
     }
 
     private fun busyNow(): Boolean =
-        requestJob?.isActive == true || navJob?.isActive == true || _state.value.phase != Phase.IDLE
+        requestJob?.isActive == true || navJob?.isActive == true || !phaseIdle(_state.value.phase) ||
+            live?.playing == true || liveLookJob?.isActive == true
+
+    /** Покой: IDLE; в живом режиме и «слушаю» — покой (микрофон открыт всегда). */
+    private fun phaseIdle(phase: Phase): Boolean = phase == Phase.IDLE || (live != null && phase == Phase.LISTENING)
 
     /** Приветствие подошедшему: агент (`visitor_arrived`), не ответил за 2 с или нет связи — своя фраза. */
     private fun greet() {
         val lang = _state.value.lang
         requestJob?.cancel()
         requestJob = viewModelScope.launch {
-            val agent = chatMode() == ChatMode.AGENT && !_state.value.offline && !chatUnsupported
+            val agent = chatMode().usesAgent && !_state.value.offline && !chatUnsupported
             val outcome = if (agent) {
                 runAgentTurn(
                     question = null, event = ChatRequest.EVENT_VISITOR_ARRIVED, lang = lang,
@@ -1144,6 +1206,343 @@ class MainViewModel(
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Живой режим: WS /v1/live. Звук ответа — только с сервера; робот показывает лицо, субтитры, направление,
+    // выполняет действия. Сбой → agent (/v1/chat + live STT + потоковый TTS), повтор live через [liveRetryMillis].
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Открыть живую сессию, если выбран live и робот не спит. [greet] — агент здоровается (`visitor_arrived`).
+     * @return true — live открыт (или уже был открыт); false — работаем по-старому (agent).
+     */
+    private fun ensureLive(greet: Boolean): Boolean {
+        val factory = liveFactory ?: return false
+        if (chatMode() != ChatMode.LIVE || _state.value.mode == ScreenMode.SLEEP) return false
+        live?.takeIf { it.active }?.let { session ->
+            if (greet) {
+                liveGreetPending = true
+                session.visitorArrived()
+            }
+            return true
+        }
+        if (clock() < liveDownUntil) {
+            // Повтор мог быть отменён сном — запланировать заново на остаток паузы.
+            if (liveRetryJob?.isActive != true) scheduleLiveRetry(liveDownUntil - clock())
+            return false
+        }
+        val session = factory.create(viewModelScope, sessionId, _state.value.lang) ?: return false
+        Timber.i("live: opening session")
+        live = session
+        liveGreetPending = greet
+        updateListeningPaused()
+        liveJob = viewModelScope.launch { session.signals.collect { onLive(session, it) } }
+        session.start(_state.value.lang, placeHint, greet)
+        return true
+    }
+
+    /** Закрыть живую сессию штатно (сон, ушёл посетитель, сменили режим). */
+    private fun closeLive() {
+        liveRetryJob?.cancel()
+        liveRetryJob = null
+        val session = live ?: return
+        live = null
+        liveJob?.cancel()
+        liveJob = null
+        session.close()
+        resetLiveTurn()
+        updateListeningPaused()
+    }
+
+    private fun resetLiveTurn() {
+        liveLookJob?.cancel()
+        liveLookJob = null
+        livePendingQuestion = null
+        liveGreetPending = false
+        liveGuides.clear()
+        liveSpoken.clear()
+        liveTurn = null
+    }
+
+    /**
+     * Обычное прослушивание (live STT / `/v1/stt`) на паузе: робот спит без человека рядом или микрофон
+     * у живого режима.
+     */
+    private fun updateListeningPaused() {
+        val asleep = _state.value.mode == ScreenMode.SLEEP
+        voice.setListeningPaused((asleep && presence != null && !visitorPresent) || live != null)
+    }
+
+    private fun onLive(session: LiveSession, signal: LiveSignal) {
+        if (session !== live) return
+        when (signal) {
+            is LiveSignal.Ready -> {
+                Timber.i("live: ready (aec=%s)", signal.aec)
+                if (_state.value.offline) _state.update { it.copy(offline = false) }
+            }
+            LiveSignal.Listening -> if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
+            LiveSignal.UserSpeaking -> {
+                restartIdleTimer()
+                if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
+            }
+            is LiveSignal.UserPartial -> {
+                restartIdleTimer()
+                if (signal.text.isNotBlank()) _state.update { it.copy(partialQuestion = signal.text) }
+            }
+            is LiveSignal.UserFinal -> onLiveUserFinal(signal.text, signal.lang)
+            LiveSignal.Ignored -> onLiveIgnored()
+            LiveSignal.Thinking -> {
+                markLiveEvent(phrase = false)
+                setBusy(Phase.THINKING)
+            }
+            is LiveSignal.TurnStart -> {
+                liveTurnStarts++
+                livePendingQuestion = null
+                liveGreetPending = false
+                liveSpoken.clear()
+                markLiveEvent(phrase = false)
+                liveTurn?.requestId = signal.turnId
+            }
+            is LiveSignal.Emotion -> {
+                markLiveEvent(phrase = false)
+                Emotion.fromName(signal.name)?.let(::setEmotion)
+            }
+            is LiveSignal.Phrase -> {
+                markLiveEvent(phrase = true)
+                liveSpoken += signal.text
+                _state.update { it.copy(answer = liveSpoken.joinToString(" "), subtitle = signal.text, partialQuestion = null) }
+            }
+            is LiveSignal.AudioStarted -> {
+                liveTurn?.let { t -> if (t.firstAudioMs == null) t.firstAudioMs = clock() - t.origin }
+                setBusy(Phase.SPEAKING)
+            }
+            is LiveSignal.Action -> onLiveAction(signal)
+            is LiveSignal.TurnEnd -> {
+                val doneLang = signal.lang
+                if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
+                    _state.update { it.copy(lang = doneLang) }
+                    voice.setLanguage(doneLang)
+                    loadQuickQuestions()
+                }
+                liveTurn?.let { t -> t.lang = doneLang ?: t.lang }
+            }
+            is LiveSignal.Interrupted -> {
+                Timber.i("live: interrupted (%s, local=%s)", signal.turnId, signal.local)
+                liveGuides.remove(signal.turnId)
+                _state.update { it.copy(subtitle = null) }
+                setBusy(null)
+                finishLiveTurn(interrupted = true)
+            }
+            is LiveSignal.PlaybackDone -> {
+                liveLastDone = signal.turnId
+                touchLiveSession()
+                setBusy(null)
+                _state.update { it.copy(subtitle = null) }
+                relaxEmotion()
+                finishLiveTurn(interrupted = false)
+                // Согласие агент уже получил; едем после того, как ответ доиграл (своей фразы старта нет).
+                liveGuides.remove(signal.turnId)?.let { action -> startLiveGuide(action) }
+                restartIdleTimer()
+            }
+            is LiveSignal.Failed -> onLiveFailed(session, signal)
+        }
+    }
+
+    private fun onLiveUserFinal(text: String, lang: Lang?) {
+        val question = text.trim()
+        restartIdleTimer()
+        if (question.isEmpty()) {
+            _state.update { it.copy(partialQuestion = null) }
+            return
+        }
+        // «Стоп» во время поездки — останавливаемся (звук сервер оборвёт сам, это перебивание).
+        if (UtteranceFilter.isStopCommand(question) && navJob?.isActive == true) {
+            _state.update { it.copy(partialQuestion = null) }
+            stop()
+            return
+        }
+        touchLiveSession()
+        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        remember()
+        _state.update {
+            it.copy(
+                screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
+                answer = null, subtitle = null, guideTarget = null, wayHint = null,
+            )
+        }
+        if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
+            _state.update { it.copy(lang = lang) }
+            voice.setLanguage(lang)
+            loadQuickQuestions()
+        }
+        MoodRules.forUtterance(question)?.let { showEmotion(it) }
+        // Прошлый ход ещё не отчитан (перебили без `interrupted`) — отчитываем как прерванный.
+        if (liveTurn != null) finishLiveTurn(interrupted = true)
+        // Отсчёт хода — от `user_final`: это момент, когда сервер решил, что посетитель закончил.
+        liveTurn = TurnClock(origin = clock(), sttFinalMs = null, lang = lang ?: _state.value.lang).apply {
+            mode = TurnMetrics.MODE_LIVE
+        }
+        livePendingQuestion = question
+    }
+
+    /** Сервер счёл реплику шумом: лицо без реакции, экран как был. */
+    private fun onLiveIgnored() {
+        NoiseStats.utteranceFiltered("server_ignored")
+        val pending = livePendingQuestion
+        livePendingQuestion = null
+        liveTurn = null
+        _state.update { it.copy(partialQuestion = null) }
+        if (_state.value.phase == Phase.THINKING) setBusy(null)
+        if (pending == null) return
+        emotionJob?.cancel()
+        _state.update { it.copy(question = null, answer = null, subtitle = null, emotion = Emotion.NEUTRAL) }
+        val prev = history.removeLastOrNull()
+        if (prev != null && _state.value.screen == Screen.ANSWER) {
+            _state.update {
+                it.copy(screen = prev.screen, faqPage = prev.faqPage, question = prev.question, answer = prev.answer, guideTarget = prev.guideTarget)
+            }
+        }
+    }
+
+    private fun markLiveEvent(phrase: Boolean) {
+        val t = liveTurn ?: return
+        val ms = clock() - t.origin
+        if (t.chatFirstEventMs == null) t.chatFirstEventMs = ms
+        if (phrase && t.firstPhraseMs == null) t.firstPhraseMs = ms
+    }
+
+    /** Ход live закончен (доиграл / перебили / сбой): метрики, если это был ответ на реплику. */
+    private fun finishLiveTurn(interrupted: Boolean, fallback: Boolean = false) {
+        val t = liveTurn ?: return
+        liveTurn = null
+        if (t.requestId == null && t.chatFirstEventMs == null && !fallback) return // ответа ещё не было
+        t.interrupted = interrupted
+        t.fallback = fallback
+        sendTurnMetrics(t)
+    }
+
+    /** Разговор идёт: сессия не стареет (смена session_id переоткрывает live — см. [touchSession]). */
+    private fun touchLiveSession() {
+        lastInteraction = clock()
+    }
+
+    private fun onLiveAction(signal: LiveSignal.Action) {
+        markLiveEvent(phrase = false)
+        val action = ChatAction(signal.type, signal.placeId)
+        Timber.i("live action %s place=%s turn=%s", action.type, action.placeId, signal.turnId)
+        when (action.type) {
+            ChatAction.WHERE_IS -> viewModelScope.launch { liveWhereIs(action) }
+            ChatAction.GUIDE_TO -> {
+                // Действие пришло уже после того, как ход доиграл, — едем сразу.
+                if (signal.turnId != null && signal.turnId == liveLastDone) startLiveGuide(action)
+                else liveGuides[signal.turnId] = action
+            }
+            ChatAction.LOOK -> liveLook()
+            else -> Timber.w("unknown live action: %s", action.type)
+        }
+    }
+
+    /** `where_is` в live: направление по карте робота — только на экране (говорит сервер), кнопка «Проводить». */
+    private suspend fun liveWhereIs(action: ChatAction) {
+        val wf = wayFinder ?: return
+        val lang = _state.value.lang
+        val place = wf.placeFor(action.placeId, null)
+        if (place == null) {
+            Timber.w("live where_is: unknown place %s", action.placeId)
+            return
+        }
+        val answer = wf.describe(place, lang)
+        _state.update { it.copy(wayHint = answer.text, guideTarget = answer.guideTarget) }
+    }
+
+    private fun startLiveGuide(action: ChatAction) {
+        viewModelScope.launch {
+            val wf = wayFinder ?: return@launch
+            val place = wf.placeFor(action.placeId, null)
+            if (place == null) {
+                Timber.w("live guide_to: unknown place %s", action.placeId)
+                return@launch
+            }
+            startGuide(place, announce = false)
+        }
+    }
+
+    /**
+     * `look` в live: кадр → `POST /v1/look` (та же session_id). Сервер продолжает ход сам (контракт); текст описания
+     * сразу на экране. Если за [LIVE_LOOK_SPEAK_FALLBACK_MILLIS] после ответа сервер не начал новый ход —
+     * описание озвучивает робот сам (обычный TTS; микрофон live на это время глушится). Ошибка камеры или `/look` —
+     * готовая фраза робота сразу (серверу продолжать нечем).
+     */
+    private fun liveLook() {
+        if (liveLookJob?.isActive == true) return
+        val lang = _state.value.lang
+        val question = _state.value.question ?: LOOK_DEFAULT_QUESTION.getValue(lang)
+        val session = live
+        setEmotion(MoodRules.looking)
+        liveLookJob = viewModelScope.launch {
+            val result = lookRequest(question)
+            val startsBefore = liveTurnStarts
+            val text = when (result) {
+                null -> phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang)
+                is ApiResult.Success -> result.value.text
+                is ApiResult.Failure -> {
+                    Timber.w("live look: %s", result.error)
+                    showEmotion(MoodRules.trouble)
+                    phrases.get(phraseFor(result.error), lang)
+                }
+            }
+            if (result is ApiResult.Success) {
+                _state.update { it.copy(answer = text, subtitle = null) }
+                delay(LIVE_LOOK_SPEAK_FALLBACK_MILLIS)
+                if (liveTurnStarts != startsBefore || (live === session && session?.playing == true)) return@launch
+                Timber.w("live look: server did not voice the description, speaking locally")
+            }
+            say(text, offline = false)
+        }
+    }
+
+    /** Live упал: запасной режим без потери разговора (та же session_id), повтор live через [liveRetryMillis]. */
+    private fun onLiveFailed(session: LiveSession, signal: LiveSignal.Failed) {
+        if (session !== live) return
+        Timber.w("live → agent fallback: %s", signal.error.kind)
+        val pending = livePendingQuestion
+        val greetPending = liveGreetPending
+        val wasSpeaking = _state.value.phase == Phase.SPEAKING
+        live = null
+        liveJob?.cancel()
+        liveJob = null
+        liveDownUntil = clock() + liveRetryMillis
+        finishLiveTurn(interrupted = wasSpeaking, fallback = true)
+        resetLiveTurn()
+        setBusy(null)
+        _state.update { it.copy(subtitle = null) }
+        updateListeningPaused()
+        scheduleLiveRetry()
+        when {
+            // Посетитель уже сказал, а ответа ещё не было — отвечает agent.
+            pending != null -> submitInternal(pending, faqId = null, lang = _state.value.lang)
+            greetPending && requestJob?.isActive != true -> greet()
+        }
+    }
+
+    private fun scheduleLiveRetry(after: Long = liveRetryMillis) {
+        liveRetryJob?.cancel()
+        liveRetryJob = viewModelScope.launch {
+            delay(after)
+            while (live == null && chatMode() == ChatMode.LIVE && _state.value.mode != ScreenMode.SLEEP) {
+                // Не посреди ответа agent и не во время поездки: дождаться паузы в разговоре.
+                if (!busyNow()) {
+                    Timber.i("live: retry")
+                    ensureLive(greet = false)
+                    break
+                }
+                delay(LIVE_RETRY_BUSY_RECHECK_MILLIS)
+            }
+        }
+    }
+
+    /** Открыт ли живой режим (диагностика, тесты). */
+    val liveOpen: Boolean get() = live != null
+
+    // ---------------------------------------------------------------------------------------------
     // Эмоции лица.
     // ---------------------------------------------------------------------------------------------
 
@@ -1360,6 +1759,12 @@ class MainViewModel(
         if (now - lastInteraction > sessionIdleMillis) {
             sessionId = newSessionId()
             langChosenExplicitly = false
+            // Новый разговор — новая живая сессия (session_id задаётся при подключении).
+            if (live != null) {
+                lastInteraction = now
+                closeLive()
+                ensureLive(greet = false)
+            }
         }
         lastInteraction = now
     }
@@ -1385,6 +1790,13 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+
+        /** Live упал → через столько снова пробуем live. */
+        const val LIVE_RETRY_MILLIS = 30_000L
+        private const val LIVE_RETRY_BUSY_RECHECK_MILLIS = 2_000L
+
+        /** `look` в live: ждём, что сервер озвучит описание, столько; потом говорим сами. */
+        const val LIVE_LOOK_SPEAK_FALLBACK_MILLIS = 4_000L
 
         /** Меню без касаний столько — назад к лицу (agent). */
         const val MENU_IDLE_MILLIS = 30_000L

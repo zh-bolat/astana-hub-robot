@@ -56,7 +56,7 @@ data class TurnMetrics(
     val sessionId: String,
     val requestId: String? = null,
     val lang: Lang? = null,
-    /** `agent` / `ask` / `local`. */
+    /** `agent` / `ask` / `local` / `live`. */
     val mode: String,
     val sttFinalMs: Long? = null,
     val chatFirstEventMs: Long? = null,
@@ -71,5 +71,7 @@ data class TurnMetrics(
         const val MODE_AGENT = "agent"
         const val MODE_ASK = "ask"
         const val MODE_LOCAL = "local"
+        /** Живой режим WS /v1/live: все `*_ms` — от `user_final` сервера (см. MainViewModel.LiveTurn). */
+        const val MODE_LIVE = "live"
     }
 }
