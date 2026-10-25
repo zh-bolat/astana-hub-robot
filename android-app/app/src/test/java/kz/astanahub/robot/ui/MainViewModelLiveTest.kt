@@ -292,13 +292,13 @@ class MainViewModelLiveTest {
 
     @Test
     fun `live failed, robot slept and woke within the pause - retry is rescheduled`() = runTest(dispatcher) {
-        val vm = vm()
+        val vm = vm(screensaverMillis = 10_000)
         conn.server(LiveEvent.Closed(BackendError(ErrorKind.NETWORK)))
         runCurrent()
         presence.emit(PresenceEvent.Arrived(1, greet = false))
         runCurrent()
         presence.emit(PresenceEvent.Left)
-        runCurrent()
+        advanceTimeBy(10_001); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
         advanceTimeBy(1_000)
         presence.emit(PresenceEvent.Arrived(2, greet = false))
@@ -307,6 +307,8 @@ class MainViewModelLiveTest {
         advanceTimeBy(MainViewModel.LIVE_RETRY_MILLIS); runCurrent()
         assertTrue(vm.liveOpen)
         assertEquals(2, connections.size)
+        presence.emit(PresenceEvent.Left) // иначе таймер заставки перезапускается бесконечно (человек рядом)
+        advanceTimeBy(10_001); runCurrent()
     }
 
     @Test
@@ -374,8 +376,8 @@ class MainViewModelLiveTest {
     }
 
     @Test
-    fun `visitor leaves - robot sleeps and closes the live session`() = runTest(dispatcher) {
-        val vm = vm()
+    fun `visitor leaves - screen stays awake, idle timer then sleeps and closes the live session`() = runTest(dispatcher) {
+        val vm = vm(screensaverMillis = 10_000)
         presence.emit(PresenceEvent.Arrived(1, greet = true))
         runCurrent()
         val c = conn
@@ -383,6 +385,9 @@ class MainViewModelLiveTest {
         runCurrent()
         presence.emit(PresenceEvent.Left)
         runCurrent()
+        assertEquals(ScreenMode.FACE, vm.state.value.mode) // уход посетителя сам по себе не усыпляет
+        assertTrue(vm.liveOpen)
+        advanceTimeBy(10_001); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
         assertTrue(c.closed)
         assertFalse(vm.liveOpen)

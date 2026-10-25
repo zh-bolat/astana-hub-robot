@@ -880,11 +880,10 @@ class MainViewModel(
             is PresenceEvent.FaceId -> head?.follow(event.personId)
             PresenceEvent.Left -> {
                 visitorPresent = false
-                // Ведём к точке: посетитель идёт сзади, камера его не видит — не засыпаем и голову не трогаем.
+                // Ведём к точке: посетитель идёт сзади, камера его не видит — голову не трогаем.
                 if (navJob?.isActive == true) return
+                // Уход посетителя экран не усыпляет (мешало входу в диагностику) — только таймер бездействия.
                 head?.release()
-                if (_state.value.mode == ScreenMode.SLEEP) return
-                if (busyNow()) restartIdleTimer(LEFT_RECHECK_MILLIS) else goIdle()
             }
         }
     }
@@ -1804,8 +1803,6 @@ class MainViewModel(
         /** Эмоция держится после ответа / события, потом лицо спокойное. */
         const val EMOTION_LINGER_MILLIS = 6_000L
 
-        /** Посетитель ушёл, пока робот был занят: повторная проверка «можно ли спать». */
-        const val LEFT_RECHECK_MILLIS = 3_000L
         private const val MAX_HISTORY = 20
         const val NO_CONNECTION_REPEAT_MILLIS = 60_000L
         private const val PLACE_LOOKUP_TIMEOUT_MILLIS = 1_000L

@@ -461,7 +461,7 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `visitor left - sleep, session closed, head reset - but not while driving`() = runTest(dispatcher) {
+    fun `visitor left - head reset, screen stays awake - but not while driving`() = runTest(dispatcher) {
         chat { emit(done) }
         coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(10_000); NavigationResult.Arrived }
         val vm = vm()
@@ -479,8 +479,7 @@ class MainViewModelAgentTest {
         runCurrent()
         presence.emit(PresenceEvent.Left)
         runCurrent()
-        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
-        assertEquals(Emotion.NEUTRAL, vm.state.value.emotion)
+        assertEquals(ScreenMode.FACE, vm.state.value.mode) // не усыпляет: мешало входу в диагностику
         assertEquals("reset", headGateway.calls.last())
     }
 
