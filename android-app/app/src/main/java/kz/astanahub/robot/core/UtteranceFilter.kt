@@ -127,6 +127,9 @@ object UtteranceFilter {
         "помогите", "помощь", "комек", "help", "меню", "menu",
     ) + stopWords
 
+    /** Короткие вопросы из служебных слов («Бұл не?» — «Что это?» по-казахски: «не» = «что»). */
+    private val meaningfulPhrases = setOf("бул не", "не бул", "мынау не", "мына не", "бул кандай", "ол не")
+
     /**
      * Шум вместо реплики? null — осмысленная реплика (отправляем), иначе причина (в лог, без текста).
      * Название места из `/v1/places` — всегда осмысленно, даже одним словом.
@@ -138,6 +141,7 @@ object UtteranceFilter {
         val tokens = TextNormalizer.tokens(stripped).filter { t -> !t.all { it.isDigit() } }
         if (tokens.isEmpty()) return if (hadMarks) NoiseReason.MARKS_ONLY else NoiseReason.EMPTY
 
+        if (tokens.joinToString(" ") in meaningfulPhrases) return null
         if (context.placeWords.isNotEmpty()) {
             val joined = tokens.joinToString(" ")
             if (joined in context.placeWords) return null

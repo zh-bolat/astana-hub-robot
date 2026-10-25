@@ -36,5 +36,9 @@
     <string name="diag_builtin_fallback" translatable="false">Сбой /v1/tts → встроенный голос робота (VOICE_BUILTIN_FALLBACK)</string>
     <string name="diag_tts_streaming" translatable="false">Потоковый /v1/tts — звук с первых байт (TTS_STREAMING)</string>
     <string name="diag_vad" translatable="false">Конец фразы после тишины: %1$d мс (VAD)</string>
+    <string name="diag_mic_sensitivity" translatable="false">Чувствительность микрофона: %1$s (речь ≥ %2$d мс, RMS ≥ %3$d)</string>
+    <string name="diag_mic_low" translatable="false">Низкая (шумно)</string>
+    <string name="diag_mic_normal" translatable="false">Обычная</string>
+    <string name="diag_mic_high" translatable="false">Высокая (тихо)</string>
     <string name="diag_voice_cache_refresh" translatable="false">Обновить кеш голоса</string>
 </resources>

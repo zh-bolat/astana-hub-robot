@@ -24,6 +24,8 @@ import kz.astanahub.robot.backend.BackendUrlPolicy
 import kz.astanahub.robot.chat.ChatMode
 import kz.astanahub.robot.core.LogSafe
 import kz.astanahub.robot.core.Lang
+import kz.astanahub.robot.core.NoiseStats
+import kz.astanahub.robot.audio.MicSensitivity
 import kz.astanahub.robot.databinding.ActivityDiagnosticsBinding
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.voice.ServerSpeakResult
@@ -136,6 +138,26 @@ class DiagnosticsActivity : AppCompatActivity() {
             binding.vadLabel.text = getString(R.string.diag_vad, value.toInt())
             if (fromUser) settings.setVadEndSilence(value.toInt())
         }
+        // Чувствительность микрофона: порог громкости и минимальная длительность речи до старта live STT.
+        val micButtons = mapOf(
+            MicSensitivity.LOW to binding.micLow,
+            MicSensitivity.NORMAL to binding.micNormal,
+            MicSensitivity.HIGH to binding.micHigh,
+        )
+        fun showMic() {
+            val m = settings.config.value.micSensitivity
+            binding.micLabel.text = getString(R.string.diag_mic_sensitivity, m.code, m.minSpeechMillis, m.minSpeechRms.toInt()) +
+                "\n" + NoiseStats.summary()
+            micButtons.forEach { (level, button) -> button.isEnabled = level != m }
+        }
+        micButtons.forEach { (level, button) ->
+            button.setOnClickListener {
+                settings.setMicSensitivity(level)
+                log("Чувствительность микрофона: ${level.code} (речь ≥ ${level.minSpeechMillis} мс)")
+                showMic()
+            }
+        }
+        showMic()
         binding.voiceCacheRefresh.setOnClickListener {
             container.phraseCacheWarmer.warmUp(force = true)
             log("Кеш голоса: синтез заново")

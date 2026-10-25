@@ -5,6 +5,7 @@ import kz.astanahub.robot.core.Lang
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class SseParserTest {
@@ -92,5 +93,35 @@ class SseParserTest {
         val a = events("event: action\ndata: {\"type\": \"look\", \"place_id\": null}\n\n").single() as ChatEvent.Action
         assertEquals(ChatAction.LOOK, a.type)
         assertNull(a.placeId)
+    }
+
+    @Test
+    fun `done with ignored true - noise, no phrases`() {
+        val d = events(
+            "event: done\ndata: {\"request_id\": \"r\", \"lang\": \"ru\", \"found\": false, \"sources\": [], \"actions\": [], \"ignored\": true}\n\n",
+        ).single() as ChatEvent.Done
+        assertTrue(d.ignored)
+        assertEquals(false, d.found)
+        assertEquals(false, (events("event: done\ndata: {}\n\n").single() as ChatEvent.Done).ignored)
+    }
+
+    @Test
+    fun `json mode body - ignored, answer and error`() {
+        val ignored = ChatEventDecoder.decodeJsonBody(
+            """{"request_id": "r", "lang": "ru", "found": false, "sources": [], "actions": [], "ignored": true, "answer": ""}""",
+        )
+        assertEquals(1, ignored.size)
+        assertTrue((ignored.single() as ChatEvent.Done).ignored)
+
+        val answer = ChatEventDecoder.decodeJsonBody(
+            """{"request_id": "r", "lang": "kk", "answer": "Кафе бірінші қабатта.", "actions": [{"type": "where_is", "place_id": "cafe"}]}""",
+        )
+        assertEquals(ChatEvent.Phrase("Кафе бірінші қабатта."), answer[0])
+        val done = answer.last() as ChatEvent.Done
+        assertFalse(done.ignored)
+        assertEquals("cafe", done.actions.single().placeId)
+
+        val error = ChatEventDecoder.decodeJsonBody("""{"error": {"code": "llm_unavailable", "message": "x"}}""").single()
+        assertTrue(error is ChatEvent.Error)
     }
 }
