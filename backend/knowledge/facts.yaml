@@ -60,9 +60,9 @@ facts:
       kk: Astana Hub-та қанша компания бар?
       en: How many companies are in Astana Hub?
     answer:
-      ru: В Astana Hub больше 2500 компаний-участников. По итогам 2025 года они заработали больше 1,7 миллиарда долларов, а экспорт их IT-услуг составил около 634 миллионов долларов в 111 стран.
-      kk: Astana Hub-та 2500-ден астам қатысушы компания бар. 2025 жылдың қорытындысы бойынша олардың табысы 1,7 миллиард доллардан асты, ал IT-қызметтер экспорты 111 елге шамамен 634 миллион доллар болды.
-      en: Astana Hub has more than 2,500 member companies. In 2025 they earned over 1.7 billion dollars, and their IT exports reached about 634 million dollars to 111 countries.
+      ru: В Astana Hub больше 2500 компаний-участников. По итогам 2025 года они заработали больше 1,7 миллиарда долларов, а экспорт их IT-услуг превысил 600 миллионов долларов, услуги продавали в 111 стран.
+      kk: Astana Hub-та 2500-ден астам қатысушы компания бар. 2025 жылдың қорытындысы бойынша олардың табысы 1,7 миллиард доллардан асты, ал IT-қызметтер экспорты 600 миллион доллардан асты, қызметтер 111 елге сатылды.
+      en: Astana Hub has more than 2,500 member companies. In 2025 they earned over 1.7 billion dollars, and their IT exports exceeded 600 million dollars, with services sold to 111 countries.
 
   - id: contacts
     tags: [general, contacts]
@@ -230,9 +230,9 @@ facts:
       kk: Экскурсияға келуге бола ма?
       en: Can I come for a tour?
     answer:
-      ru: Заявку на экскурсию подают на сайте astanahub.com в разделе «Инфраструктура», для этого нужен аккаунт. Там же есть 3D-тур по павильону C4.6. Детали для групп уточните по номеру 1818.
-      kk: Экскурсияға өтінімді astanahub.com сайтындағы «Инфрақұрылым» бөлімінде береді, ол үшін аккаунт керек. Сол жерде C4.6 павильоны бойынша 3D-тур да бар. Топтарға арналған толық ақпаратты 1818 нөмірі арқылы нақтылаңыз.
-      en: You can request a tour on astanahub.com in the Infrastructure section; an account is required. There is also a 3D tour of pavilion C4.6 there. For group details, call 1818.
+      ru: Об экскурсии по Astana Hub спросите на ресепшене или по номеру 1818. Заранее посмотреть павильон C4.6 можно в 3D-туре на сайте astanahub.com, в разделе «Инфраструктура».
+      kk: Astana Hub-қа экскурсия туралы ресепшеннен немесе 1818 нөмірі арқылы сұраңыз. C4.6 павильонын astanahub.com сайтындағы «Инфрақұрылым» бөлімінде 3D-тур арқылы алдын ала көруге болады.
+      en: For a tour of Astana Hub, please ask at the reception or call 1818. You can preview pavilion C4.6 in the 3D tour on astanahub.com, in the Infrastructure section.
 
   - id: wifi
     tags: [infrastructure]
@@ -327,9 +327,9 @@ facts:
       kk: C4.6 павильонының қабаттарында не бар?
       en: What is on each floor of pavilion C4.6?
     answer:
-      ru: В павильоне C4.6 на первом этаже Event Hall, Lecture Hall и TikTok-пространство, на втором этаже девять переговорных, на третьем этаже Media Hall и GameDev Center.
-      kk: C4.6 павильонының бірінші қабатында Event Hall, Lecture Hall және TikTok кеңістігі, екінші қабатында тоғыз келіссөз бөлмесі, үшінші қабатында Media Hall және GameDev Center орналасқан.
-      en: In pavilion C4.6, the first floor has the Event Hall, the Lecture Hall and the TikTok space, the second floor has nine meeting rooms, and the third floor has the Media Hall and the GameDev Center.
+      ru: В павильоне C4.6 на первом этаже находятся Event Hall, Lecture Hall и место TikTok Space, на втором этаже девять переговорных, на третьем этаже GameDev Center.
+      kk: C4.6 павильонының бірінші қабатында Event Hall, Lecture Hall және TikTok Space орны, екінші қабатында тоғыз келіссөз бөлмесі, үшінші қабатында GameDev Center орналасқан.
+      en: In pavilion C4.6, the first floor has the Event Hall, the Lecture Hall and the TikTok Space area, the second floor has nine meeting rooms, and the third floor has the GameDev Center.
 
   - id: coworking
     tags: [spaces]
@@ -399,21 +399,21 @@ facts:
       kk: Келіссөз бөлмесін қалай брондауға болады?
       en: How can I book a meeting room?
     answer:
-      ru: В Astana Hub 19 переговорных в павильонах C4.6, C3.5 и в alem.ai, в C4.6 они на втором этаже. Их бронируют онлайн на astanahub.com участники программ и арендаторы, не больше трёх часов в день.
-      kk: Astana Hub-та C4.6, C3.5 павильондарында және alem.ai-да 19 келіссөз бөлмесі бар, C4.6-да олар екінші қабатта. Оларды бағдарлама қатысушылары мен жалға алушылар astanahub.com сайтында онлайн брондайды, күніне үш сағаттан аспайды.
-      en: Astana Hub has 19 meeting rooms in pavilions C4.6 and C3.5 and at alem.ai; in C4.6 they are on the second floor. Program participants and tenants book them online on astanahub.com, for up to three hours a day.
+      ru: Переговорные Astana Hub есть в павильонах C4.6 и C3.5 и в центре alem.ai, в павильоне C4.6 их девять, все на втором этаже. Их бронируют онлайн на astanahub.com участники программ и арендаторы, не больше трёх часов в день.
+      kk: Astana Hub келіссөз бөлмелері C4.6 және C3.5 павильондарында және alem.ai орталығында бар, C4.6 павильонында тоғыз бөлме, бәрі екінші қабатта. Оларды бағдарлама қатысушылары мен жалға алушылар astanahub.com сайтында онлайн брондайды, күніне үш сағаттан аспайды.
+      en: Astana Hub has meeting rooms in pavilions C4.6 and C3.5 and at alem.ai; pavilion C4.6 has nine of them, all on the second floor. Program participants and tenants book them online on astanahub.com, for up to three hours a day.
 
   - id: event_halls
     tags: [spaces, events]
-    keywords: [зал, залы, ивент холл, event hall, лекторий, lecture hall, media hall, медиа холл, кинозал, вместимость, сколько человек, hall, capacity, сыйымдылық, қанша адам]
+    keywords: [зал, залы, ивент холл, event hall, лекторий, lecture hall, media hall, медиа холл, вместимость, сколько человек, hall, capacity, сыйымдылық, қанша адам]
     question:
       ru: Какие залы есть для мероприятий?
       kk: Іс-шараларға қандай залдар бар?
       en: What halls are there for events?
     answer:
-      ru: В павильоне C4.6 на первом этаже Event Hall примерно на 120 человек и Lecture Hall на 30, на третьем этаже Media Hall на 70. В павильоне C4.5 есть кинозал на 70 мест, а в C3.5 — несколько аудиторий.
-      kk: C4.6 павильонының бірінші қабатында шамамен 120 адамға арналған Event Hall және 30 адамдық Lecture Hall, үшінші қабатында 70 адамдық Media Hall бар. C4.5 павильонында 70 орындық кинозал, ал C3.5-те бірнеше аудитория бар.
-      en: Pavilion C4.6 has the Event Hall for about 120 people and the Lecture Hall for 30 on the first floor, and the Media Hall for 70 on the third floor. Pavilion C4.5 has a 70-seat cinema hall, and C3.5 has several classrooms.
+      ru: В павильоне C4.6 на первом этаже Event Hall примерно на 120 человек и Lecture Hall на 30, ещё в этом павильоне есть Media Hall. В павильоне C3.5 есть несколько залов и аудиторий.
+      kk: C4.6 павильонының бірінші қабатында шамамен 120 адамға арналған Event Hall және 30 адамдық Lecture Hall бар, бұл павильонда Media Hall да бар. C3.5 павильонында бірнеше зал мен аудитория бар.
+      en: Pavilion C4.6 has the Event Hall for about 120 people and the Lecture Hall for 30 on the first floor, and it also has the Media Hall. Pavilion C3.5 has several halls and classrooms.
 
   - id: event_rent
     tags: [spaces, events]
@@ -423,9 +423,9 @@ facts:
       kk: Astana Hub-та өз іс-шарамды қалай өткізуге болады?
       en: How can I host my event at Astana Hub?
     answer:
-      ru: Заявку на проведение IT-мероприятия подают на сайте astanahub.com через Event Office. Для участников программ Astana Hub залы бесплатны, для остальных — по коммерческому предложению, детали по номеру 1818.
-      kk: IT-іс-шара өткізуге өтінім astanahub.com сайтында Event Office арқылы беріледі. Astana Hub бағдарламаларының қатысушылары үшін залдар тегін, басқаларға коммерциялық ұсыныс бойынша, толығырақ 1818 нөмірі арқылы.
-      en: To host an IT event, apply on astanahub.com through the Event Office. Halls are free for Astana Hub program participants; others get a commercial offer, and details are available at 1818.
+      ru: Заявку на проведение IT-мероприятия подают на сайте astanahub.com через Event Office. Условия и стоимость аренды залов можно узнать в Event Office или по номеру 1818.
+      kk: IT-іс-шара өткізуге өтінім astanahub.com сайтында Event Office арқылы беріледі. Залдарды жалға алу шарттары мен бағасын Event Office-тен немесе 1818 нөмірі арқылы білуге болады.
+      en: To host an IT event, apply on astanahub.com through the Event Office. You can find out the hall rental terms and prices from the Event Office or by calling 1818.
 
   - id: gamedev_center
     tags: [spaces, education]
