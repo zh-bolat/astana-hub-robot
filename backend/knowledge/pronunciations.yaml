@@ -1,0 +1,118 @@
+# Произношения для TTS: названия из базы знаний (facts.yaml), которые синтез читает плохо.
+# Дополняет встроенный словарь app/tts_text.py (Astana Hub, Wi-Fi, IT, EXPO…).
+# Ключ — без учёта регистра, целым словом; ключ из одних заглавных латинских букв — с учётом регистра.
+# Длинные ключи применяются раньше коротких («cv@astanahub.com» раньше «astanahub.com»).
+ru:
+  # сайты, почта, Telegram
+  info@astanahub.com: инфо собака астанахаб точка ком
+  cv@astanahub.com: си-ви собака астанахаб точка ком
+  media@astanahub.com: медиа собака астанахаб точка ком
+  astanahub.com: астанахаб точка ком
+  AstanaHub_HelpDesk_bot: Астана Хаб хелпдеск бот
+  astana_hub: астана хаб
+  astana.hub: астана точка хаб
+  astana.tumo.kz: астана точка тумо точка кей-зет
+  tomorrow-school.ai: тумороу скул точка эй-ай
+  alem.ai: алем эй-ай
+  # программы и сервисы хаба
+  Astana Hub Ventures: Астана Хаб Венчурс
+  Hub Space: Хаб Спейс
+  Hub Market: Хаб Маркет
+  Hub Perks: Хаб Пёркс
+  Hub Service: Хаб Сервис
+  Silkway Accelerator: Силкуэй Акселератор
+  Silkway: Силкуэй
+  Google for Startups: Гугл фор стартапс
+  Google Cloud: Гугл Клауд
+  Tech Orda: Тек Орда
+  Startup Orda: Стартап Орда
+  Tech Incubator: Тек Инкубатор
+  AI'preneurs: эй-ай-прэнёрс
+  GamePreneurs: гейм-прэнёрс
+  Digital Bridge: Диджитал Бридж
+  HackAlem: Хак Алем
+  Social Coins: Сошал Коинс
+  Digital Nomad: Диджитал Номад
+  Expat Centre: Экспат Центр
+  One Stop Shop: Уан Стоп Шоп
+  Event Office: Ивент Офис
+  QazCoders: Казкодерс
+  Skillbox: Скиллбокс
+  No Code: ноу-код
+  Low Code: лоу-код
+  Freelance School: Фриланс Скул
+  peer-to-peer: пир-ту-пир
+  # залы и места
+  Event Hall: Ивент Холл
+  Lecture Hall: Лекчер Холл
+  Media Hall: Медиа Холл
+  GameDev Center: Геймдев Центр
+  GameDev: геймдев
+  Face ID: фейс ай-ди
+  Global coffee: Глобал кофи
+  Mega Silk Way: Мега Силк Уэй
+  # транспорт и соседи
+  LRT: эл-ар-ти
+  Tarlan: Тарлан
+  Quantum Tech School: Квантум Тек Скул
+  TUMO: Тумо
+  Tomorrow School: Тумороу Скул
+  Qazaq AI Research University: Казак Эй-Ай Ресёрч Юниверсити
+  Astana IT University: Астана Ай-Ти Юниверсити
+  Terricon Valley: Террикон Вэлли
+  Zoom: Зум
+kk:
+  info@astanahub.com: инфо айқұлақ астанахаб нүкте ком
+  cv@astanahub.com: си-ви айқұлақ астанахаб нүкте ком
+  media@astanahub.com: медиа айқұлақ астанахаб нүкте ком
+  astanahub.com: астанахаб нүкте ком
+  AstanaHub_HelpDesk_bot: Астана Хаб хелпдеск бот
+  astana_hub: астана хаб
+  astana.hub: астана нүкте хаб
+  astana.tumo.kz: астана нүкте тумо нүкте кей-зет
+  tomorrow-school.ai: тумороу скул нүкте эй-ай
+  alem.ai: алем эй-ай
+  Astana Hub Ventures: Астана Хаб Венчурс
+  Hub Space: Хаб Спейс
+  Hub Market: Хаб Маркет
+  Hub Perks: Хаб Пёркс
+  Hub Service: Хаб Сервис
+  Silkway Accelerator: Силкуэй Акселератор
+  Silkway: Силкуэй
+  Google for Startups: Гугл фор стартапс
+  Google Cloud: Гугл Клауд
+  Tech Orda: Тек Орда
+  Startup Orda: Стартап Орда
+  Tech Incubator: Тек Инкубатор
+  AI'preneurs: эй-ай-прэнёрс
+  GamePreneurs: гейм-прэнёрс
+  Digital Bridge: Диджитал Бридж
+  HackAlem: Хак Алем
+  Social Coins: Сошал Коинс
+  Digital Nomad: Диджитал Номад
+  Expat Centre: Экспат Центр
+  One Stop Shop: Уан Стоп Шоп
+  Event Office: Ивент Офис
+  QazCoders: Казкодерс
+  Skillbox: Скиллбокс
+  No Code: ноу-код
+  Low Code: лоу-код
+  Freelance School: Фриланс Скул
+  peer-to-peer: пир-ту-пир
+  Event Hall: Ивент Холл
+  Lecture Hall: Лекчер Холл
+  Media Hall: Медиа Холл
+  GameDev Center: Геймдев Центр
+  GameDev: геймдев
+  Face ID: фейс ай-ди
+  Global coffee: Глобал кофи
+  Mega Silk Way: Мега Силк Уэй
+  LRT: эл-ар-ти
+  Tarlan: Тарлан
+  Quantum Tech School: Квантум Тек Скул
+  TUMO: Тумо
+  Tomorrow School: Тумороу Скул
+  Qazaq AI Research University: Қазақ Эй-Ай Ресёрч Юниверсити
+  Astana IT University: Астана Ай-Ти Юниверсити
+  Terricon Valley: Террикон Вэлли
+  Zoom: Зум

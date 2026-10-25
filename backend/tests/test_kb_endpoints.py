@@ -93,9 +93,9 @@ def test_broken_yaml_seed_keeps_previous_version(client, knowledge_dir, db):
     assert body["found"] is True
 
 
-def test_startup_seeds_empty_db_from_yaml_once(client, db):
+def test_startup_seeds_empty_db_from_yaml_once(client, knowledge_dir, db):
     repo = KnowledgeRepo(db)
-    assert len(repo.load_active().facts) == 13
+    assert len(repo.load_active().facts) == len(YamlKnowledgeSource(knowledge_dir).load().facts)
     assert client.app.state.knowledge.source.from_db is True
     assert [r.source for r in repo.sync_log()] == ["yaml"]
 

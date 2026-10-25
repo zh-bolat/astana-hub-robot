@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.db import FeedbackRepo, QuestionLogRepo, make_engine
 from app.db.migrate import alembic_config, current_revision, head_revision, upgrade_head
 from app.db.models import Base
+from app.knowledge.source import YamlKnowledgeSource
 from app.llm.fake import FakeProvider
 from app.main import create_app
 from tests.conftest import AUTH, ask_body, logged, temp_database
@@ -255,7 +256,8 @@ def test_cli_db_and_kb_commands(monkeypatch, capsys, knowledge_dir):
         assert "skipped: version=" in capsys.readouterr().out
         assert main(["kb", "status"]) == 0
         out = capsys.readouterr().out
-        assert "facts=13" in out and "skipped" in out
+        n_facts = len(YamlKnowledgeSource(knowledge_dir).load().facts)
+        assert f"facts={n_facts}" in out and "skipped" in out
         monkeypatch.setenv("KNOWLEDGE_SHEET_ID", "")
         assert main(["kb", "sync"]) == 2  # таблица не задана
 

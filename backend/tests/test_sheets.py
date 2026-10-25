@@ -20,6 +20,7 @@ from app.knowledge.source import KnowledgeStore, YamlKnowledgeSource, build_kb
 from app.knowledge.sync import KnowledgeSyncer
 
 TEMPLATE = BACKEND_DIR / "knowledge" / "sheet_template"
+N_FACTS = len(YamlKnowledgeSource(BACKEND_DIR / "knowledge").load().facts)
 
 
 def _templates() -> tuple[str, str, str]:
@@ -110,7 +111,7 @@ def _statuses(db) -> list[str]:
 def test_sync_writes_db_and_keeps_last_good_version_on_errors(db, tmp_path):
     syncer = _syncer(db, tmp_path)
     store = KnowledgeStore(syncer.source, reload_interval_s=0)
-    assert len(store.get().facts) == 13  # пока не синхронизировано — YAML (БД пуста)
+    assert len(store.get().facts) == N_FACTS  # пока не синхронизировано — YAML (БД пуста)
 
     assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
     assert [f.id for f in store.get().facts] == ["gym"]
@@ -133,21 +134,21 @@ def test_sync_deactivates_rows_missing_from_sheet(db, tmp_path):
     syncer = _syncer(db, tmp_path)
     facts, _, _ = _templates()
     assert asyncio.run(syncer.sync_sheet(_client(_handler(facts)))) is True
-    assert len(syncer.source.load().facts) == 13
+    assert len(syncer.source.load().facts) == N_FACTS
 
     assert asyncio.run(syncer.sync_sheet(_client(_handler(GYM)))) is True
     with db.connect() as conn:
         active = dict(conn.execute(text("SELECT id, is_active FROM facts")).all())
-    assert len(active) == 14 and active["gym"] is True
+    assert len(active) == N_FACTS + 1 and active["gym"] is True
     assert sum(active.values()) == 1  # остальные выключены, но не удалены
     last = KnowledgeRepo(db).sync_log(1)[0]
     assert last.status == "ok"
-    assert last.counts["facts"] == {"inserted": 1, "updated": 0, "deactivated": 13}
+    assert last.counts["facts"] == {"inserted": 1, "updated": 0, "deactivated": N_FACTS}
     assert last.version == syncer.source.load().version
 
     # строка вернулась в таблицу — снова активна
     assert asyncio.run(syncer.sync_sheet(_client(_handler(facts)))) is True
-    assert len(syncer.source.load().facts) == 13
+    assert len(syncer.source.load().facts) == N_FACTS
 
 
 def test_wrong_tab_name_gviz_returns_first_tab_is_rejected(db, tmp_path):
@@ -240,7 +241,7 @@ def test_startup_does_not_wait_for_google_and_syncs_in_background(settings, monk
         assert time.perf_counter() - t0 < 0.4  # старт без ожидания таблицы
         # таблица задана → автосида из YAML нет; пустая БД → запасной YAML до первого синка
         assert KnowledgeRepo(c.app.state.engine).is_empty()
-        assert len(c.app.state.store.get().facts) == 13
+        assert len(c.app.state.store.get().facts) == N_FACTS
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and len(c.app.state.store.get().facts) != 1:
             time.sleep(0.05)
@@ -286,4 +287,4 @@ def test_startup_falls_back_to_yaml_when_db_is_down_and_no_snapshot(settings):
         update={"database_url": "postgresql+psycopg://u:p@127.0.0.1:1/none", "db_timeout_s": 1}
     )
     app = create_app(s, FakeProvider(), FakeProvider())
-    assert len(app.state.store.get().facts) == 13
+    assert len(app.state.store.get().facts) == N_FACTS
