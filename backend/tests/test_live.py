@@ -160,17 +160,44 @@ class Fakes:
         self.segmented_delay = segmented_delay
         self.stt_provider: ScriptSttProvider | None = None
         self.tts: list[FakeTTS] = []
+        self.voices: list[str] = []  # switch_tts: голос (язык) каждой смены
+        self.synth: list[tuple[str, str]] = []  # synth_pcm: (текст, язык) — прогрев и кеш шаблонов
+        self.warmed: list[str] = []
+
+    async def synth_pcm(self, text: str, lang: str) -> bytes:
+        self.synth.append((text, lang))
+        return b"\x02\x00" * 24_000  # 1 с
+
+    async def warmup(self, lang: str) -> None:
+        self.warmed.append(lang)
+
+    def switch_tts(self, lang: str) -> None:
+        self.voices.append(lang)
+        return None  # один FakeTTS на все языки: кадр переключения не нужен
+
+    @staticmethod
+    def tts_text(text: str, lang: str) -> str:
+        return f"[cheerfully] {text}" if lang == "kk" else text  # как тег v3 у настоящих сервисов
 
     def __call__(self, settings: Settings, lang: str) -> LiveServices:
         tts = FakeTTS()
         self.tts.append(tts)
+        extras = {
+            "switch_tts": self.switch_tts,
+            "synth_pcm": self.synth_pcm,
+            "tts_signature": lambda code: f"fake-{code}",
+            "warmup": self.warmup,
+            "tts_text": self.tts_text,
+        }
         if self.segmented_delay is not None:
             self.stt_provider = ScriptSttProvider(self.script, self.segmented_delay)
             stt = SegmentedProviderSTT(self.stt_provider, lang, sample_rate=16_000, timeout_s=3.0)
             return LiveServices(
-                vad=FakeVAD(), stt=stt, tts=tts, provider="fake", stt_segmented=True
+                vad=FakeVAD(), stt=stt, tts=tts, provider="fake", stt_segmented=True, **extras
             )
-        return LiveServices(vad=FakeVAD(), stt=FakeSTT(self.script), tts=tts, provider="fake")
+        return LiveServices(
+            vad=FakeVAD(), stt=FakeSTT(self.script), tts=tts, provider="fake", **extras
+        )
 
 
 # ---------- сервер и клиент ----------
@@ -347,7 +374,7 @@ def live_rows(app) -> list[tuple[str, int | None, dict, bool]]:
 # ---------- полный ход ----------
 def test_full_turn_audio_to_answer(live_server):
     model = FakeModel(say("[happy] Кафе на первом этаже. Проводить вас?"))
-    url, app, fakes = live_server(model, script=["Где здесь кафе?"])
+    url, app, fakes = live_server(model, script=["Где здесь кафе?"], live_fast_places=False)
 
     async def scenario() -> None:
         async with session(url) as c:
@@ -492,7 +519,9 @@ def test_barge_in_stops_audio_and_remembers_only_said(live_server):
 def test_segmented_stt_full_turn_waits_for_slow_text(live_server):
     """Текст отрезка приходит через 0,8 с после паузы (дольше прежних 0,5 с ожидания) — реплика не теряется."""
     model = FakeModel(say("Лифт справа."))
-    url, app, fakes = live_server(model, script=["Где лифт?"], segmented_delay=0.8)
+    url, app, fakes = live_server(
+        model, script=["Где лифт?"], segmented_delay=0.8, live_fast_places=False
+    )
 
     async def scenario() -> None:
         async with session(url) as c:
@@ -595,7 +624,7 @@ def test_guide_to_after_playback_done(live_server):
     model = FakeModel(
         call("guide_to", {"place_id": "place:cafe"}), say("[excited] Провожаю вас в кафе.")
     )
-    url, _, _ = live_server(model, script=["Проводи в кафе"])
+    url, _, _ = live_server(model, script=["Проводи в кафе"], live_fast_places=False)
 
     async def scenario() -> None:
         async with session(url) as c:
@@ -622,7 +651,7 @@ def test_guide_to_after_playback_done(live_server):
 
 def test_where_is_action_is_sent_with_answer(live_server):
     model = FakeModel(call("where_is", {"place_id": "place:cafe"}), say("[happy] Кафе справа."))
-    url, _, _ = live_server(model, script=["Где кафе?"])
+    url, _, _ = live_server(model, script=["Где кафе?"], live_fast_places=False)
 
     async def scenario() -> None:
         async with session(url) as c:
@@ -635,6 +664,251 @@ def test_where_is_action_is_sent_with_answer(live_server):
             assert action["turn_id"] == c.events("turn_start")[0]["turn_id"]
 
     run(scenario())
+
+
+# ---------- быстрый путь: места без модели ----------
+async def _turn(c: LiveClient, n: int, seconds: float = 0.5) -> tuple[dict, dict]:
+    """Посетитель говорит n-ю реплику → (turn_start, turn_end) n-го хода; робот отчитывается playback_done."""
+    c.speak(seconds)
+    end = await c.wait("turn_end", count=n)
+    start = c.events("turn_start")[n - 1]
+    await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+    await c.wait("listening", count=n + 1)
+    return start, end
+
+
+@pytest.mark.parametrize(
+    ("question", "lang", "kind", "place", "spoken"),
+    [
+        ("Где здесь кафе?", "ru", "where_is", "cafe", "Проводить вас?"),
+        ("Подскажите, где находится туалет?", "ru", "where_is", "restroom", "Проводить вас?"),
+        ("Проводите меня до лифта", "ru", "guide_to", "lift", "до лифта!"),
+        ("Дәретхана қайда?", "kk", "where_is", "restroom", "Апарып салайын ба?"),
+        ("Мені кафеге апарыңызшы", "kk", "guide_to", "cafe", "кафеге"),
+        ("Where is the elevator?", "en", "where_is", "lift", "Want me to take you there?"),
+        ("Take me to the lecture hall, please", "en", "guide_to", "lecture_hall", "lecture hall"),
+    ],
+)
+def test_fast_place_path_answers_without_model(live_server, question, lang, kind, place, spoken):
+    model = FakeModel(say("не должна вызываться"))
+    url, app, _fakes = live_server(model, script=[question])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            end = await c.wait("turn_end")
+            start = c.events("turn_start")[0]
+            assert end["lang"] == lang and end["found"]
+            assert c.events("user_final")[0]["lang"] == lang
+            if kind == "guide_to":
+                await asyncio.sleep(0.2)
+                assert not c.events("action")  # проводить — после playback_done
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)  # ход закрыт: память и журнал записаны
+            action = await c.wait("action")
+            assert action == {
+                "type": "action",
+                "type_": kind,
+                "place_id": place,
+                "turn_id": start["turn_id"],
+            }
+            phrases = [p["text"] for p in c.events("phrase")]
+            assert spoken in " ".join(phrases)
+            assert any(isinstance(i, int) for i in c.items)  # звук шаблонной фразы
+
+    run(scenario())
+    assert model.requests == []  # без модели
+    rows = messages_of(app)
+    assert rows[0] == ("visitor", question, None)
+    assert rows[-1][0] == "assistant" and spoken in rows[-1][1]
+    with app.state.engine.connect() as conn:
+        log = conn.execute(text("SELECT endpoint, category, found FROM question_log")).one()
+    assert tuple(log) == ("live", "kb", True)
+
+
+def test_fast_place_offer_then_yes_guides_and_keeps_context(live_server):
+    """«Где кафе?» (шаблон) → «Да» (без модели — guide_to) → следующий вопрос агенту — с историей."""
+    model = FakeModel(say("[happy] С восьми утра."))
+    url, _app, _ = live_server(
+        model, script=["Где кафе?", "Да, проводите", "А во сколько оно открывается?"]
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await _turn(c, 1)
+            start, _ = await _turn(c, 2)
+            action = await c.wait("action", count=2)
+            assert action["type_"] == "guide_to" and action["place_id"] == "cafe"
+            assert action["turn_id"] == start["turn_id"]
+            await _turn(c, 3)
+
+    run(scenario())
+    assert len(model.requests) == 1  # только третья реплика
+    history = json.dumps(model.requests[0]["messages"], ensure_ascii=False)
+    assert "Где кафе?" in history and "Проводить вас?" in history and "Да, проводите" in history
+
+
+def test_doubtful_place_question_goes_to_agent(live_server):
+    model = FakeModel(say("[happy] Кафе справа, кофе от тысячи тенге."))
+    url, _, _ = live_server(model, script=["Где кафе и сколько стоит кофе?"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await c.wait("ready")
+            c.speak(0.5)
+            await c.wait("turn_end")
+
+    run(scenario())
+    assert len(model.requests) == 1
+
+
+def test_template_phrase_audio_comes_from_cache_second_time(live_server, monkeypatch):
+    """Шаблонная фраза: первый раз — синтез + фоновое заполнение кеша, второй — звук из кеша без TTS."""
+    from app.agent import fastpath
+
+    monkeypatch.setattr(fastpath._RNG, "choice", lambda seq: seq[0])
+    url, _, fakes = live_server(
+        FakeModel(), script=["Проводите меня до лифта", "Проводите меня до лифта"]
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await _turn(c, 1)
+            for _ in range(100):  # кеш заполняется в фоне
+                if fakes.synth and any(t.startswith("Пойдёмте") for t, _ in fakes.synth):
+                    break
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.2)
+            await _turn(c, 2)
+            phrases = [p["text"] for p in c.events("phrase")]
+            assert phrases == ["Пойдёмте, провожу до лифта!"] * 2
+            assert sum(i for i in c.items if isinstance(i, int)) >= 24_000 * 2  # звук из кеша дошёл
+
+    run(scenario())
+    tts = fakes.tts[0].texts
+    assert tts.count("Пойдёмте, провожу до лифта!") == 1  # второй раз — без синтеза
+    assert ("Пойдёмте, провожу до лифта!", "ru") in fakes.synth
+
+
+def test_voice_follows_each_phrase_and_v3_tag_only_in_tts(live_server):
+    """Ход начался как русский, ответ — по-казахски: голос kk, тег подачи только в запросе синтеза."""
+    model = FakeModel(say("[happy] Кафе бірінші қабатта. Кофе мен тоқаш бар."))
+    url, app, fakes = live_server(model, script=["Расскажи про кафе"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            phrases = [p["text"] for p in c.events("phrase")]
+            assert phrases == ["Кафе бірінші қабатта.", "Кофе мен тоқаш бар."]
+            assert not any("cheerfully" in p for p in phrases)
+
+    run(scenario())
+    assert fakes.voices[-1] == "kk"  # казахский текст — голос kk, не ru/flash
+    assert fakes.tts[0].texts == [
+        "[cheerfully] Кафе бірінші қабатта.",
+        "[cheerfully] Кофе мен тоқаш бар.",
+    ]
+    rows = messages_of(app)
+    assert rows[1] == ("assistant", "Кафе бірінші қабатта. Кофе мен тоқаш бар.", None)
+    with app.state.engine.connect() as conn:
+        answer = conn.execute(text("SELECT answer FROM question_log")).scalar_one()
+    assert "cheerfully" not in answer
+
+
+def test_tts_text_is_normalized_but_subtitle_is_not(live_server):
+    model = FakeModel(say("[happy] Хм… Ну, кафе работает с 9:00 до 18:00."))
+    url, _, fakes = live_server(model, script=["Расскажи про кафе"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("turn_end")
+            # «Хм…» отдельной фразой не звучит и не показывается; остальное в субтитре — как написала модель
+            assert [p["text"] for p in c.events("phrase")] == ["Ну, кафе работает с 9:00 до 18:00."]
+
+    run(scenario())
+    assert fakes.tts[0].texts == ["Кафе работает с девяти до восемнадцати."]
+
+
+def test_session_warms_up_voices(live_server):
+    url, _, fakes = live_server(FakeModel())
+
+    async def scenario() -> None:
+        async with session(url, lang="kk") as c:
+            await c.wait("listening")
+            for _ in range(50):
+                if len(fakes.warmed) >= 3:
+                    break
+                await asyncio.sleep(0.02)
+
+    run(scenario())
+    assert fakes.warmed[:3] == ["kk", "ru", "en"]  # язык сессии — первым
+
+
+def test_warmup_is_throttled_per_voice():
+    from app.live import services
+
+    calls: list[tuple[str, str]] = []
+    now = [1000.0]
+
+    async def synth(text: str, lang: str) -> bytes:
+        calls.append((text, lang))
+        return b""
+
+    services._WARMED.clear()
+    warm = services.make_warmup(
+        synth,
+        {"ru": "v-ru", "kk": "v-kk", "en": "v-en"},
+        {"ru": "f", "kk": "v3", "en": "f"},
+        600,
+        lambda: now[0],
+    )
+
+    async def check() -> None:
+        await warm("kk")
+        await warm("kk")
+        now[0] += 601
+        await warm("kk")
+        await warm("ru")
+
+    asyncio.run(check())
+    services._WARMED.clear()
+    assert calls == [("Сәлем", "kk"), ("Сәлем", "kk"), ("Привет", "ru")]
+
+
+def test_segmented_stt_skips_silent_and_short_segments():
+    provider = ScriptSttProvider(["Где кафе?"], delay=0.0)
+    stt = SegmentedProviderSTT(provider, None, sample_rate=16_000, timeout_s=1.0, silence_peak=500)
+
+    async def texts(audio: bytes) -> list[TranscriptionFrame]:
+        return [f async for f in stt.run_stt(audio)]
+
+    quiet = b"\x10\x00" * 16_000  # 1 с, пик 16
+    short = LOUD[: 16_000 * 2 // 10]  # 0,1 с
+    loud = LOUD * 25  # 1 с
+    assert [f.text for f in asyncio.run(texts(quiet))] == [""]
+    assert [f.text for f in asyncio.run(texts(short))] == [""]
+    assert provider.calls == [] and stt.skipped == 2  # тишина в STT не ушла
+    [frame] = asyncio.run(texts(loud))
+    assert frame.text == "Где кафе?" and len(provider.calls) == 1
+
+
+def test_segmented_stt_unknown_language_is_left_to_session():
+    class Kyrgyz(ScriptSttProvider):
+        async def stt(self, pcm, sample_rate, lang):
+            return SttResult(text="Кафе кайда?", lang="ru", confidence=None, detected="ky")
+
+    stt = SegmentedProviderSTT(Kyrgyz([], 0.0), None, sample_rate=16_000, timeout_s=1.0)
+
+    async def run_once() -> TranscriptionFrame:
+        [frame] = [f async for f in stt.run_stt(LOUD * 25)]
+        return frame
+
+    frame = asyncio.run(run_once())
+    assert frame.text == "Кафе кайда?" and frame.language is None
 
 
 def test_look_answer_is_spoken_in_live_session(live_server):
@@ -824,7 +1098,7 @@ def test_agent_live_turn_defers_memory_until_commit(make_client):
 
     async def check() -> None:
         live = LiveTurn()
-        req = ChatRequest(question="Где кафе?", lang="ru", session_id=SESSION)
+        req = ChatRequest(question="Расскажи про кафе", lang="ru", session_id=SESSION)
         events = [e async for e in chat.chat_stream(req, "req_live", live=live)]
         assert [d["text"] for k, d in events if k == "phrase"] == [
             "Кафе на первом этаже.",
@@ -837,7 +1111,7 @@ def test_agent_live_turn_defers_memory_until_commit(make_client):
 
     asyncio.run(check())
     assert messages(client) == [
-        ("visitor", "Где кафе?", None),
+        ("visitor", "Расскажи про кафе", None),
         ("assistant", "Кафе на первом этаже.", None),
     ]
 

@@ -14,10 +14,19 @@ smart-turn v3 решает, договорил ли посетитель (STT п
 LIVE_TURN_MAX_SILENCE_S (без smart-turn — LIVE_TURN_SILENCE_S). Затем user_final и ход агента.
 
 Ответ. Тот же агент, что у /v1/chat (ChatService: промпт, тулы, память, эмоции, фильтры, шум → ignored без
-вызова модели), но фразы приходят по мере генерации (LiveTurn). Каждая фраза — событие phrase и TTSSpeakFrame;
-события хода идут обычными кадрами и встают в очередь за звуком (TTS придерживает не-системные кадры за
-своими аудио-контекстами), поэтому порядок у клиента: turn_start → emotion → phrase → звук → … → turn_end.
-guide_to придерживается до playback_done этого хода; where_is и look уходят сразу.
+вызова модели), но фразы приходят по мере генерации (LiveTurn). Явный запрос места («где кафе?», «проводите
+до лифта», «да» на «Проводить вас?») ChatService отвечает шаблоном без модели (app/agent/fastpath.py).
+Каждая фраза — событие phrase и TTSSpeakFrame; события хода идут обычными кадрами и встают в очередь за звуком
+(TTS придерживает не-системные кадры за своими аудио-контекстами), поэтому порядок у клиента: turn_start →
+emotion → phrase → звук → … → turn_end. guide_to придерживается до playback_done этого хода; where_is и look
+уходят сразу. Все action несут turn_id своего хода.
+
+Голос. Язык выбирается по каждой фразе ответа (app/lang.py tts_lang): казахский текст — всегда голос kk и
+eleven_v3. Текст для синтеза нормализуется (app/tts_text.py: многоточия, скобки, междометия, числа словами,
+произношение), длинная фраза режется по запятым (kk — мельче, первая — особенно), субтитр остаётся целым.
+Звук шаблонных фраз — из кеша (app/live/tts_cache.py).
+
+Язык реплики — по тексту и языку от STT (app/lang.py utterance_lang); язык не из ru/kk/en — язык сессии.
 
 Перебивание. Речь посетителя, пока ход робота не закончен (модель думает или звук ещё играет), — кандидат.
 Перебиванием он становится, когда речь длится ≥ LIVE_BARGE_IN_MIN_MS (без AEC — LIVE_ECHO_MIN_MS) и
@@ -38,6 +47,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pipecat.audio.turn.base_turn_analyzer import BaseTurnAnalyzer, EndOfTurnState
 from pipecat.frames.frames import (
@@ -48,6 +58,7 @@ from pipecat.frames.frames import (
     InputTransportMessageFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
+    OutputAudioRawFrame,
     OutputTransportMessageFrame,
     OutputTransportMessageUrgentFrame,
     StartFrame,
@@ -60,14 +71,16 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from app.agent.service import ChatService, LiveTurn
 from app.config import Settings
-from app.lang import Lang, normalize_lang, resolve_lang
+from app.lang import Lang, normalize_lang, stt_lang_code, tts_lang, utterance_lang
 from app.live.playout import EchoGate, Playout
-from app.live.protocol import error_event, event, new_turn_id
+from app.live.protocol import AUDIO_OUT_RATE, error_event, event, new_turn_id
+from app.live.tts_cache import PhraseAudioCache
 from app.logging_setup import logger, new_request_id
 from app.metrics import LatencyRecorder
 from app.noise import is_noise
 from app.schemas import ChatRequest
 from app.text import split_phrases
+from app.tts_text import is_filler_only, normalize_for_tts
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 MAX_QUESTION_CHARS = 500
@@ -84,6 +97,27 @@ def is_echo(heard: str, spoken: list[str]) -> bool:
         return False
     vocab = {w for phrase in spoken for w in _words(phrase)}
     return sum(w in vocab for w in words) / len(words) >= 0.7
+
+
+_CLAUSE = re.compile(r"(?<=[,;:])\s+|\s+(?=[—–]\s)")
+
+
+def tts_chunks(text: str, max_chars: int, min_chars: int = 12) -> list[str]:
+    """Фраза для синтеза — кусками не длиннее max_chars по запятым / «—» (короче кусок — раньше звук).
+    Без удобного места разреза фраза остаётся целой; кусок короче min_chars прилипает к соседнему."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    parts = [p.strip() for p in _CLAUSE.split(text) if p.strip()]
+    out: list[str] = []
+    for part in parts:
+        if out and (len(out[-1]) < min_chars or len(out[-1]) + 1 + len(part) <= max_chars):
+            out[-1] = f"{out[-1]} {part}"
+        else:
+            out.append(part)
+    if len(out) > 1 and len(out[-1]) < min_chars:
+        tail = out.pop()
+        out[-1] = f"{out[-1]} {tail}"
+    return out
 
 
 def cut_words(phrase: str, fraction: float) -> str:
@@ -140,6 +174,10 @@ class LiveConversation(FrameProcessor):
         set_stt_lang: Callable[[Lang], Awaitable[None]] | None = None,
         provider: str = "pipecat",
         stt_segmented: bool = False,
+        phrase_cache: PhraseAudioCache | None = None,
+        warmup: Callable[[Lang], Awaitable[None]] | None = None,
+        pronunciations: Path | None = None,
+        tts_text: Callable[[str, Lang], str] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -158,6 +196,10 @@ class LiveConversation(FrameProcessor):
         self.provider = provider
         # STT по отрезкам (LIVE_STT_MODE=segmented): текст — один финал на каждую паузу VAD, без промежуточного
         self.stt_segmented = stt_segmented
+        self.phrase_cache = phrase_cache
+        self.warmup = warmup
+        self.pronunciations = pronunciations
+        self.tts_text = tts_text  # тег подачи v3 и т. п. — только в запрос синтеза
         self.stats = LiveStats()
         self._tts_lang: Lang | None = None
 
@@ -167,6 +209,7 @@ class LiveConversation(FrameProcessor):
         self._speech_end: float | None = None
         self._user_open = False
         self._finals: list[str] = []
+        self._stt_lang: Lang | None = None  # язык, который вернул STT для этой реплики (ru/kk/en)
         self._partial = ""  # промежуточный текст текущего сегмента (ещё без финала)
         self._final_at: float | None = None  # perf_counter последнего финала
         self._final_event = asyncio.Event()
@@ -236,7 +279,7 @@ class LiveConversation(FrameProcessor):
         elif isinstance(frame, InterimTranscriptionFrame):
             await self._on_partial(frame.text)
         elif isinstance(frame, TranscriptionFrame):
-            await self._on_final(frame.text)
+            await self._on_final(frame.text, stt_lang_code(getattr(frame, "language", None)))
         elif isinstance(frame, InputTransportMessageFrame):
             await self._on_client(frame.message)
         else:
@@ -269,6 +312,7 @@ class LiveConversation(FrameProcessor):
         if not self._user_open:
             self._user_open = True
             self._finals, self._partial, self._final_at = [], "", None
+            self._stt_lang = None
             await self.send_now(event("user_speaking"))
 
     async def _on_vad_stop(self, stop_secs: float) -> None:
@@ -315,7 +359,7 @@ class LiveConversation(FrameProcessor):
         elif self._user_open:
             await self.send_now(event("user_partial", text=self._heard_text()))
 
-    async def _on_final(self, text: str) -> None:
+    async def _on_final(self, text: str, lang: Lang | None = None) -> None:
         text = text.strip()
         self._partial = ""
         if self.stt_segmented:
@@ -323,6 +367,8 @@ class LiveConversation(FrameProcessor):
         if text:
             self._finals.append(text)
             self._final_at = time.perf_counter()
+            if lang is not None:
+                self._stt_lang = lang
         self._final_event.set()
         if self._barge_start is not None:
             await self._maybe_barge()
@@ -394,6 +440,7 @@ class LiveConversation(FrameProcessor):
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._final_event.wait(), deadline - time.monotonic())
         text = self._heard_text()
+        stt_lang = self._stt_lang
         stt_final_ms = (
             max(0, int((self._final_at - _perf_at(speech_end)) * 1000))
             if self._final_at is not None
@@ -401,21 +448,32 @@ class LiveConversation(FrameProcessor):
         )
         self._user_open = False
         self._finals, self._partial, self._final_at = [], "", None
+        self._stt_lang = None
         self._eot_task = None
         if not text:
             await self.send_now(event("listening"))
             return
-        await self._complete_turn(text, speech_end, stt_final_ms)
+        await self._complete_turn(text, speech_end, stt_final_ms, stt_lang)
 
-    async def _complete_turn(self, text: str, speech_end: float, stt_final_ms: int | None) -> None:
+    async def _complete_turn(
+        self,
+        text: str,
+        speech_end: float,
+        stt_final_ms: int | None,
+        stt_lang: Lang | None = None,
+    ) -> None:
         text = text[:MAX_QUESTION_CHARS]
-        await self.send_now(event("user_final", text=text, lang=self.lang))
+        # язык реплики: по тексту и языку от STT; STT вернул не ru/kk/en или ничего — язык сессии
+        lang = utterance_lang(text, stt_lang, self.lang)
+        await self.send_now(event("user_final", text=text, lang=lang))
         if not is_noise(text):
             await self.send_now(event("thinking"))
+            if lang != self._tts_lang:
+                self.warm(lang)  # другой язык, чем звучал: голос мог остыть
         req = ChatRequest(
-            question=text, lang=self.lang, session_id=self.session_id, place_id=self.place_id
+            question=text, lang=lang, session_id=self.session_id, place_id=self.place_id
         )
-        turn = self._new_turn(resolve_lang(self.lang, None, text), live=LiveTurn())
+        turn = self._new_turn(lang, live=LiveTurn())
         turn.eot_at = time.perf_counter()
         turn.speech_end_at = _perf_at(speech_end)
         turn.task = self._spawn(self._run_agent(turn, req, stt_final_ms), "live_agent")
@@ -427,21 +485,53 @@ class LiveConversation(FrameProcessor):
         return turn
 
     # ---------- ответ ----------
+    def warm(self, lang: Lang) -> None:
+        """Прогреть голос языка в фоне (сам прогрев не чаще раза в интервал на процесс)."""
+        if self.warmup is not None and not self._closed:
+            self._spawn(self.warmup(lang), "live_tts_warmup")
+
     async def _start_turn(self, turn: _BotTurn) -> None:
         if turn.started:
             return
         turn.started = True
-        if self.switch_tts is not None and turn.lang != self._tts_lang:
-            frame = self.switch_tts(turn.lang)
-            if frame is not None:
-                await self.push_frame(frame)
-            self._tts_lang = turn.lang
         await self._send_queued(event("turn_start", turn_id=turn.turn_id))
 
-    async def _speak(self, turn: _BotTurn, phrase: str) -> None:
+    async def _use_voice(self, lang: Lang) -> None:
+        """Голос и модель TTS под язык фразы (kk — eleven_v3, ru/en — flash)."""
+        if self.switch_tts is None or lang == self._tts_lang:
+            return
+        frame = self.switch_tts(lang)
+        if frame is not None:
+            await self.push_frame(frame)
+        self._tts_lang = lang
+
+    def _chunk_limit(self, lang: Lang, first: bool) -> int:
+        s = self.settings
+        if lang == "kk":
+            return s.live_tts_first_chunk_chars_kk if first else s.live_tts_chunk_chars_kk
+        return s.live_tts_chunk_chars
+
+    async def _speak(self, turn: _BotTurn, phrase: str, cache: bool = False) -> None:
+        if is_filler_only(phrase):  # «Хм…» отдельной фразой — ни звука, ни субтитра
+            return
+        first = not turn.phrases
         turn.phrases.append(phrase)
+        lang = tts_lang(phrase, turn.lang)
+        spoken = normalize_for_tts(phrase, lang, self.pronunciations)
+        await self._use_voice(lang)
         await self._send_queued(event("phrase", text=phrase))
-        await self.push_frame(TTSSpeakFrame(text=phrase))
+        store = self.phrase_cache if cache and self.settings.live_tts_phrase_cache else None
+        audio = store.get(spoken, lang) if store is not None else None
+        if audio is not None:  # шаблонная фраза уже звучала — звук сразу, без синтеза
+            await self.push_frame(
+                OutputAudioRawFrame(audio=audio, sample_rate=AUDIO_OUT_RATE, num_channels=1)
+            )
+            return
+        for chunk in tts_chunks(spoken, self._chunk_limit(lang, first)):
+            text = self.tts_text(chunk, lang) if self.tts_text is not None else chunk
+            await self.push_frame(TTSSpeakFrame(text=text))
+        if store is not None:
+            store.fill_later(spoken, lang)
 
     async def _run_agent(self, turn: _BotTurn, req: ChatRequest, stt_final_ms: int | None) -> None:
         error: str | None = None
@@ -464,7 +554,7 @@ class LiveConversation(FrameProcessor):
                         await self._send_queued(event("emotion", name=data["name"]))
                     elif kind == "phrase":
                         await self._start_turn(turn)
-                        await self._speak(turn, data["text"])
+                        await self._speak(turn, data["text"], cache=bool(data.get("cache")))
                     elif kind == "action":
                         await self._start_turn(turn)
                         if data["type"] == "guide_to":
