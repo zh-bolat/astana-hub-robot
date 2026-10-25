@@ -183,7 +183,7 @@ data: {"request_id": "req_01J…", "lang": "ru", "found": true, "sources": ["pla
 |---|---|
 | `{"type": "ready", "audio_format": "pcm_s16le_24000"}` | формат звука ответа (PCM 16-bit LE mono; частота — в имени) |
 | `{"type": "listening"}` / `{"type": "user_speaking"}` | лицо: слушает / человек говорит |
-| `{"type": "user_partial", "text": "…"}` / `{"type": "user_final", "text": "…", "lang": "ru"}` | субтитр «что слышу» |
+| `{"type": "user_partial", "text": "…"}` / `{"type": "user_final", "text": "…", "lang": "ru"}` | субтитр «что слышу»; `user_partial` может не приходить вовсе (распознавание по отрезкам, `LIVE_STT_MODE=segmented` — по умолчанию): тогда сразу `user_final` |
 | `{"type": "ignored"}` | реплика — шум; робот ничего не делает |
 | `{"type": "thinking"}` | лицо «думаю» |
 | `{"type": "turn_start", "turn_id": "trn_…"}` | начало ответа |

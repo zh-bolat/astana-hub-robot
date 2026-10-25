@@ -16,7 +16,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -25,17 +26,28 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
-from pipecat.frames.frames import Frame, ManuallySwitchServiceFrame, STTUpdateSettingsFrame
+from pipecat.frames.frames import (
+    Frame,
+    ManuallySwitchServiceFrame,
+    STTUpdateSettingsFrame,
+    TranscriptionFrame,
+)
 from pipecat.pipeline.service_switcher import ServiceSwitcher, ServiceSwitcherStrategyManual
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService, ElevenLabsTTSService
+from pipecat.services.settings import STTSettings
+from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.transcriptions.language import Language
+from pipecat.utils.time import time_now_iso8601
 
 from app.config import Settings
 from app.lang import LANGS, Lang
 from app.live.protocol import AUDIO_IN_RATE, AUDIO_OUT_RATE
+from app.logging_setup import logger
+from app.speech.base import SpeechError, SttProvider
 from app.speech.elevenlabs import VoiceSettings
+from app.speech.factory import build_stt_provider
 
 
 @dataclass
@@ -50,6 +62,49 @@ class LiveServices:
     set_stt_lang: Callable[[Lang], Awaitable[None]] | None = None
     provider: str = "pipecat"
     aclose: Callable[[], Awaitable[None]] | None = None
+    # STT по отрезкам: финальный текст приходит после паузы VAD, промежуточного нет
+    stt_segmented: bool = False
+
+
+class SegmentedProviderSTT(SegmentedSTTService):
+    """Отрезок речи (от начала до паузы VAD) целиком → наш SttProvider (OpenRouter / Gemini) → один финал.
+
+    Звук копится только пока VAD слышит речь, поэтому тишина и простой микрофона ничего не стоят.
+    На каждый отрезок — ровно один TranscriptionFrame (пустой, если речи не разобрали или STT упал):
+    LiveConversation считает отрезки и ждёт текст каждого.
+    """
+
+    def __init__(
+        self, provider: SttProvider, lang: Lang | None, *, sample_rate: int, timeout_s: float
+    ) -> None:
+        super().__init__(
+            sample_rate=sample_rate,
+            ttfs_p99_latency=timeout_s,
+            settings=STTSettings(model=getattr(provider, "name", None), language=None),
+        )
+        self._provider = provider
+        self.lang = lang
+        self._timeout_s = timeout_s
+
+    @property
+    def wants_wav_segments(self) -> bool:
+        return False  # SttProvider.stt принимает PCM и сам заворачивает в WAV
+
+    def can_generate_metrics(self) -> bool:
+        return False
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        text, lang = "", None
+        try:
+            res = await asyncio.wait_for(
+                self._provider.stt(audio, self.sample_rate, self.lang), self._timeout_s
+            )
+            text, lang = res.text.strip(), res.lang
+        except (SpeechError, TimeoutError) as exc:
+            logger.warning("live_segment_stt_failed", extra={"error": type(exc).__name__})
+        yield TranscriptionFrame(
+            text, "", time_now_iso8601(), language=Language(lang) if lang else None
+        )
 
 
 LiveServicesFactory = Callable[[Settings, Lang], LiveServices]
@@ -80,14 +135,26 @@ def build_live_services(settings: Settings, lang: Lang) -> LiveServices:
     assert settings.elevenlabs_api_key is not None
     key = settings.elevenlabs_api_key.get_secret_value()
     hint = settings.live_stt_language_hint
-    stt = ElevenLabsRealtimeSTTService(
-        api_key=key,
-        sample_rate=AUDIO_IN_RATE,
-        settings=ElevenLabsRealtimeSTTService.Settings(
-            model=settings.elevenlabs_realtime_model,
-            language=Language(lang) if hint else None,
-        ),
-    )
+    segmented = settings.live_stt_mode == "segmented"
+    stt_provider: SttProvider | None = None
+    stt: FrameProcessor
+    if segmented:
+        stt_provider = build_stt_provider(settings)
+        stt = SegmentedProviderSTT(
+            stt_provider,
+            lang if hint else None,
+            sample_rate=AUDIO_IN_RATE,
+            timeout_s=settings.live_stt_segment_timeout_s,
+        )
+    else:
+        stt = ElevenLabsRealtimeSTTService(
+            api_key=key,
+            sample_rate=AUDIO_IN_RATE,
+            settings=ElevenLabsRealtimeSTTService.Settings(
+                model=settings.elevenlabs_realtime_model,
+                language=Language(lang) if hint else None,
+            ),
+        )
     voice = voice_settings(settings)
     voices = {
         "ru": settings.elevenlabs_voice_ru,
@@ -128,9 +195,18 @@ def build_live_services(settings: Settings, lang: Lang) -> LiveServices:
         return ManuallySwitchServiceFrame(service=tts_by_lang[code])
 
     async def set_stt_lang(code: Lang) -> None:
+        if isinstance(stt, SegmentedProviderSTT):
+            stt.lang = code
+            return
         await stt.queue_frame(
             STTUpdateSettingsFrame(delta=ElevenLabsRealtimeSTTService.Settings(language=code))
         )
+
+    async def aclose() -> None:
+        await http.close()
+        client = getattr(stt_provider, "client", None)
+        if client is not None and hasattr(client, "aclose"):
+            await client.aclose()
 
     turn_analyzer = None
     if settings.live_smart_turn:
@@ -145,6 +221,8 @@ def build_live_services(settings: Settings, lang: Lang) -> LiveServices:
         turn_analyzer=turn_analyzer,
         switch_tts=switch_tts,
         set_stt_lang=set_stt_lang,
-        provider=f"pipecat:elevenlabs:{settings.live_tts_model}",
-        aclose=http.close,
+        provider=f"pipecat:elevenlabs:{settings.live_tts_model}"
+        + (f"+stt:{stt_provider.name}" if stt_provider is not None else ""),
+        aclose=aclose,
+        stt_segmented=segmented,
     )

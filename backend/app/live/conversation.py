@@ -2,12 +2,15 @@
 
 Стоит в пайплайне после STT и перед TTS (app/live/session.py):
 
-    transport.input → EchoGate → VAD (Silero) → STT (ElevenLabs realtime) → LiveConversation
+    transport.input → EchoGate → VAD (Silero) → STT (по отрезкам: STT_PROVIDER; или ElevenLabs realtime)
+        → LiveConversation
         → TTS (ElevenLabs) → transport.output → PlayoutTracker
 
 Реплика посетителя. VAD сообщает начало/паузу речи (VADUserStarted/StoppedSpeakingFrame), STT — промежуточный
 и финальный текст (Interim/TranscriptionFrame; финал — на каждую паузу VAD, ручной commit). На паузе VAD
-smart-turn v3 решает, договорил ли посетитель: да — конец реплики сразу; нет — ждём тишину до
+smart-turn v3 решает, договорил ли посетитель (STT по отрезкам, LIVE_STT_MODE=segmented: промежуточного
+текста нет, на каждую паузу VAD — один финал отрезка; конец реплики ждёт текст всех отрезков, перебивание
+решается по тексту отрезка): да — конец реплики сразу; нет — ждём тишину до
 LIVE_TURN_MAX_SILENCE_S (без smart-turn — LIVE_TURN_SILENCE_S). Затем user_final и ход агента.
 
 Ответ. Тот же агент, что у /v1/chat (ChatService: промпт, тулы, память, эмоции, фильтры, шум → ignored без
@@ -136,6 +139,7 @@ class LiveConversation(FrameProcessor):
         switch_tts: Callable[[Lang], Frame | None] | None = None,
         set_stt_lang: Callable[[Lang], Awaitable[None]] | None = None,
         provider: str = "pipecat",
+        stt_segmented: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -152,6 +156,8 @@ class LiveConversation(FrameProcessor):
         self.switch_tts = switch_tts
         self.set_stt_lang = set_stt_lang
         self.provider = provider
+        # STT по отрезкам (LIVE_STT_MODE=segmented): текст — один финал на каждую паузу VAD, без промежуточного
+        self.stt_segmented = stt_segmented
         self.stats = LiveStats()
         self._tts_lang: Lang | None = None
 
@@ -164,6 +170,7 @@ class LiveConversation(FrameProcessor):
         self._partial = ""  # промежуточный текст текущего сегмента (ещё без финала)
         self._final_at: float | None = None  # perf_counter последнего финала
         self._final_event = asyncio.Event()
+        self._segments_pending = 0  # segmented: отрезки ушли в STT, финал ещё не пришёл
         self._eot_task: asyncio.Task | None = None
         # кандидат в перебивание (речь во время ответа робота)
         self._barge_start: float | None = None
@@ -267,18 +274,36 @@ class LiveConversation(FrameProcessor):
     async def _on_vad_stop(self, stop_secs: float) -> None:
         self._vad_speaking = False
         self._speech_end = time.monotonic() - stop_secs
-        if (
-            self._barge_start is not None
-        ):  # кандидат не дотянул до перебивания: «угу» во время ответа
-            self._barge_start = None
-            await self._cancel(self._barge_timer)
-            self._finals, self._partial = [], ""
-            if self.turn_analyzer is not None:
-                self.turn_analyzer.clear()
+        if self.stt_segmented:
+            self._segments_pending += 1  # STT выше по пайплайну уже поставил отрезок в очередь
+        if self._barge_start is not None:
+            long_enough = self._speech_end - self._barge_start >= self._barge_min_s()
+            if self.stt_segmented and long_enough and self.settings.live_barge_in_require_text:
+                # текст отрезка придёт после паузы — перебивание решаем по нему (_on_final), не дольше таймаута
+                await self._cancel(self._barge_timer)
+                self._barge_timer = self._spawn(
+                    self._drop_barge_after(self.settings.live_stt_segment_timeout_s), "live_barge"
+                )
+                return
+            await self._drop_barge()  # кандидат не дотянул до перебивания: «угу» во время ответа
             return
         if self._user_open:
             await self._cancel(self._eot_task)
             self._eot_task = self._spawn(self._end_of_turn(self._speech_end), "live_eot")
+
+    async def _drop_barge(self) -> None:
+        self._barge_start = None
+        await self._cancel(self._barge_timer)
+        self._barge_timer = None
+        self._finals, self._partial = [], ""
+        if self.turn_analyzer is not None:
+            self.turn_analyzer.clear()
+
+    async def _drop_barge_after(self, delay: float) -> None:
+        await asyncio.sleep(delay)
+        if self._barge_start is not None and not self._vad_speaking:
+            self._barge_timer = None  # это мы и есть — не отменять себя
+            await self._drop_barge()
 
     def _heard_text(self) -> str:
         return " ".join([*self._finals, self._partial]).strip()
@@ -293,12 +318,16 @@ class LiveConversation(FrameProcessor):
     async def _on_final(self, text: str) -> None:
         text = text.strip()
         self._partial = ""
+        if self.stt_segmented:
+            self._segments_pending = max(0, self._segments_pending - 1)
         if text:
             self._finals.append(text)
             self._final_at = time.perf_counter()
         self._final_event.set()
         if self._barge_start is not None:
             await self._maybe_barge()
+            if self.stt_segmented and self._barge_start is not None and not self._vad_speaking:
+                await self._drop_barge()  # текст отрезка — шум, эхо или пусто: не перебивание
         elif self._user_open and text:
             await self.send_now(event("user_partial", text=self._heard_text()))
 
@@ -346,11 +375,21 @@ class LiveConversation(FrameProcessor):
             await asyncio.sleep(max(0.0, speech_end + silence - time.monotonic()))
             if self.turn_analyzer is not None:
                 self.turn_analyzer.clear()
-        # финальный текст последнего сегмента: ждём, пока есть промежуточный без финала
-        deadline = speech_end + self.settings.live_stt_final_timeout_s
-        if not self._finals and not self._partial:
-            deadline = min(deadline, time.monotonic() + 0.5)  # могла быть речь без текста
-        while (self._partial or not self._finals) and time.monotonic() < deadline:
+        if self.stt_segmented:
+            # текст каждого отрезка приходит целиком после паузы: ждём все отрезки этой реплики
+            deadline = speech_end + self.settings.live_stt_segment_timeout_s
+        else:
+            # финальный текст последнего сегмента: ждём, пока есть промежуточный без финала
+            deadline = speech_end + self.settings.live_stt_final_timeout_s
+            if not self._finals and not self._partial:
+                deadline = min(deadline, time.monotonic() + 0.5)  # могла быть речь без текста
+
+        def waiting() -> bool:
+            if self.stt_segmented:
+                return self._segments_pending > 0
+            return bool(self._partial or not self._finals)
+
+        while waiting() and time.monotonic() < deadline:
             self._final_event.clear()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._final_event.wait(), deadline - time.monotonic())

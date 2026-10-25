@@ -181,6 +181,12 @@ class Settings(BaseSettings):
     live_turn_max_silence_s: float = 1.2
     # После конца реплики ждём финальный текст STT не дольше (потом — последний промежуточный)
     live_stt_final_timeout_s: float = 1.5
+    # Распознавание live: segmented — отрезки речи по VAD целиком в STT_PROVIDER (OpenRouter / Gemini): платим
+    # только за речь, тишина бесплатна, но без промежуточного текста; elevenlabs — потоковый Scribe Realtime
+    # (промежуточный текст, быстрее на ~0,3–0,5 с, но платится каждая секунда открытого микрофона).
+    live_stt_mode: Literal["segmented", "elevenlabs"] = "segmented"
+    # segmented: ждём текст отрезка не дольше (от конца речи), затем отрезок считается пустым
+    live_stt_segment_timeout_s: float = 4.0
     # Передавать STT язык экрана (точнее, особенно для kk); false — автоопределение языка
     live_stt_language_hint: bool = True
     # Перебивание: речь посетителя во время ответа не короче, мс, и текст не шум (app/noise.py)

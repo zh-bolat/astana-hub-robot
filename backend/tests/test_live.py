@@ -47,10 +47,11 @@ from app.config import Settings
 from app.live.conversation import cut_words, is_echo
 from app.live.playout import EchoGate, Playout, rms
 from app.live.protocol import AUDIO_FORMAT, LiveSerializer
-from app.live.services import LiveServices, build_live_services
+from app.live.services import LiveServices, SegmentedProviderSTT, build_live_services
 from app.llm.fake import FakeProvider
 from app.main import create_app
 from app.schemas import ChatRequest
+from app.speech.base import SttResult
 from tests.conftest import AUTH, JPEG, SESSION, TOKEN
 from tests.test_chat import FakeModel, call, messages, say
 
@@ -136,14 +137,39 @@ class FakeTTS(TTSService):
             )
 
 
-class Fakes:
-    def __init__(self, script: list[str]) -> None:
+class ScriptSttProvider:
+    """SttProvider для STT по отрезкам: на каждый отрезок — следующая фраза сценария через `delay` с."""
+
+    name = "script"
+
+    def __init__(self, script: list[str], delay: float) -> None:
         self.script = script
+        self.delay = delay
+        self.calls: list[tuple[int, str | None]] = []  # (байт PCM, язык)
+
+    async def stt(self, pcm: bytes, sample_rate: int, lang):
+        self.calls.append((len(pcm), lang))
+        await asyncio.sleep(self.delay)
+        text = self.script.pop(0) if self.script else ""
+        return SttResult(text=text, lang=lang or "ru", confidence=None)
+
+
+class Fakes:
+    def __init__(self, script: list[str], segmented_delay: float | None = None) -> None:
+        self.script = script
+        self.segmented_delay = segmented_delay
+        self.stt_provider: ScriptSttProvider | None = None
         self.tts: list[FakeTTS] = []
 
     def __call__(self, settings: Settings, lang: str) -> LiveServices:
         tts = FakeTTS()
         self.tts.append(tts)
+        if self.segmented_delay is not None:
+            self.stt_provider = ScriptSttProvider(self.script, self.segmented_delay)
+            stt = SegmentedProviderSTT(self.stt_provider, lang, sample_rate=16_000, timeout_s=3.0)
+            return LiveServices(
+                vad=FakeVAD(), stt=stt, tts=tts, provider="fake", stt_segmented=True
+            )
         return LiveServices(vad=FakeVAD(), stt=FakeSTT(self.script), tts=tts, provider="fake")
 
 
@@ -158,8 +184,13 @@ def _free_port() -> int:
 def live_server(settings):
     servers = []
 
-    def _start(model: FakeModel | None = None, script: list[str] | None = None, **overrides):
-        fakes = Fakes(script if script is not None else [])
+    def _start(
+        model: FakeModel | None = None,
+        script: list[str] | None = None,
+        segmented_delay: float | None = None,
+        **overrides,
+    ):
+        fakes = Fakes(script if script is not None else [], segmented_delay)
         s = settings.model_copy(
             update={
                 "live_enabled": True,
@@ -457,6 +488,77 @@ def test_barge_in_stops_audio_and_remembers_only_said(live_server):
     assert 100 <= ms < 2000
 
 
+# ---------- STT по отрезкам (LIVE_STT_MODE=segmented) ----------
+def test_segmented_stt_full_turn_waits_for_slow_text(live_server):
+    """Текст отрезка приходит через 0,8 с после паузы (дольше прежних 0,5 с ожидания) — реплика не теряется."""
+    model = FakeModel(say("Лифт справа."))
+    url, app, fakes = live_server(model, script=["Где лифт?"], segmented_delay=0.8)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.6)
+            final = await c.wait("user_final")
+            assert final["text"] == "Где лифт?"
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            kinds = [k for k in c.kinds() if k in ("user_speaking", "user_final", "turn_start")]
+            assert kinds == ["user_speaking", "user_final", "turn_start"], c.kinds()
+
+    run(scenario())
+    assert fakes.tts[0].texts == ["Лифт справа."]
+    assert fakes.stt_provider is not None
+    (pcm_bytes, lang), *_ = fakes.stt_provider.calls
+    assert lang == "ru"
+    # в STT ушла только речь (~0,6 с) с паузой и хвостом тишины — не весь поток микрофона
+    assert 16_000 * 2 * 0.4 < pcm_bytes < 16_000 * 2 * 1.6
+    stages = {stage: ms for stage, ms, _, _ in live_rows(app)}
+    assert stages.get("live_stt_final_ms") is not None
+
+
+def test_segmented_stt_barge_in_by_segment_text(live_server):
+    model = FakeModel(say(LONG), say("Туалет слева."))
+    url, app, _ = live_server(
+        model, script=["Расскажи про кафе", "Стоп, а где туалет?"], segmented_delay=0.3
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            start = await c.wait("turn_start")
+            await c.wait("phrase")
+            await asyncio.sleep(0.4)
+            c.speak(0.5)
+            interrupted = await c.wait("interrupted")
+            assert interrupted["turn_id"] == start["turn_id"]
+            final = await c.wait("user_final", count=2)
+            assert final["text"] == "Стоп, а где туалет?"
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+
+    run(scenario())
+    rows = messages_of(app)
+    assert rows[2] == ("visitor", "Стоп, а где туалет?", None)
+
+
+def test_segmented_stt_noise_during_answer_does_not_interrupt(live_server):
+    model = FakeModel(say(LONG))
+    url, _, _ = live_server(model, script=["Расскажи про кафе", "угу"], segmented_delay=0.3)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("phrase")
+            await asyncio.sleep(0.3)
+            c.speak(0.5)  # «угу»: текст отрезка — шум, перебиванием не считается
+            await c.wait("turn_end", timeout=12)
+            assert not c.events("interrupted")
+            assert len(c.events("user_final")) == 1
+
+    run(scenario())
+
+
 def test_short_noise_during_answer_does_not_interrupt(live_server):
     model = FakeModel(say(LONG))
     url, _, _ = live_server(model, script=["Расскажи про кафе", "угу"])
@@ -734,6 +836,9 @@ def test_real_services_build_without_network(settings):
     async def check() -> None:
         services = build_live_services(s, "kk")
         assert services.turn_analyzer is not None
+        assert services.stt_segmented and isinstance(services.stt, SegmentedProviderSTT)
+        await services.set_stt_lang("ru")
+        assert services.stt.lang == "ru"
         assert isinstance(services.switch_tts("ru"), ManuallySwitchServiceFrame)
         assert services.provider.startswith("pipecat:elevenlabs")
         await services.aclose()

@@ -301,6 +301,11 @@ transport.input (LiveSerializer: PCM16 16 кГц + JSON-команды)
   → transport.output (PCM16 24 кГц `pcm_s16le_24000` + JSON) → PlayoutTracker (часы воспроизведения)
 ```
 
+- **Распознавание** (`LIVE_STT_MODE`): `segmented` (по умолчанию) — звук копится, только пока VAD слышит речь, и
+  отрезок целиком уходит в `STT_PROVIDER` (OpenRouter / Gemini): тишина и простой микрофона бесплатны, текст —
+  один `user_final` без `user_partial`, на ~0,3–0,5 с позже. `elevenlabs` — потоковый Scribe Realtime с
+  промежуточным текстом, но платится каждая секунда открытого микрофона (бесплатные 10 000 кредитов ElevenLabs
+  ушли за ~45 минут сессий). Перебивание в `segmented` решается по тексту отрезка (не шум, не эхо).
 - **Конец реплики**: пауза VAD 0,2 с → smart-turn v3.2 (локальная ONNX-модель из пакета pipecat, CPU) решает,
   договорил ли посетитель; «договорил» — ход сразу, «нет» — ждём тишину до `LIVE_TURN_MAX_SILENCE_S` (1,2 с).
   `LIVE_SMART_TURN=false` — конец реплики после `LIVE_TURN_SILENCE_S` (0,5 с) тишины.

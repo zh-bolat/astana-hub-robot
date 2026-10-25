@@ -157,6 +157,7 @@ class LiveSession:
             switch_tts=services.switch_tts,
             set_stt_lang=services.set_stt_lang,
             provider=services.provider,
+            stt_segmented=services.stt_segmented,
         )
         self.conversation = conv
         pipeline = Pipeline(
