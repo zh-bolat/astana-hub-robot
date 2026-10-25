@@ -12,6 +12,7 @@ dependencies = [
     "openai>=3.31.0",
     "openai-agents>=0.24.0",
     "pgvector>=0.5.1",
+    "pipecat-ai[websocket]>=1.14.0,<2",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.0",
