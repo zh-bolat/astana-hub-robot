@@ -21,10 +21,15 @@ from dataclasses import dataclass
 
 import aiohttp
 from pipecat.audio.turn.base_turn_analyzer import BaseTurnAnalyzer
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.frames.frames import Frame, ManuallySwitchServiceFrame, STTUpdateSettingsFrame
 from pipecat.pipeline.service_switcher import ServiceSwitcher, ServiceSwitcherStrategyManual
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService
+from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService, ElevenLabsTTSService
 from pipecat.transcriptions.language import Language
 
 from app.config import Settings
@@ -71,11 +76,6 @@ def voice_settings(settings: Settings) -> VoiceSettings:
 
 def build_live_services(settings: Settings, lang: Lang) -> LiveServices:
     """Настоящие сервисы: Silero + smart-turn + ElevenLabs (нужен ELEVENLABS_API_KEY)."""
-    from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-    from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService
-    from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService, ElevenLabsTTSService
 
     assert settings.elevenlabs_api_key is not None
     key = settings.elevenlabs_api_key.get_secret_value()
