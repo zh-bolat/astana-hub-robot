@@ -53,7 +53,7 @@ class PhraseCacheTest {
     }
 
     @Test
-    fun `cached units cover all phrase keys, fixed way phrases and fillers in every language`() {
+    fun `cached units cover all phrase keys and fixed way phrases in every language`() {
         Lang.entries.forEach { lang ->
             val units = CachedPhrases.units(phrases, lang)
             PhraseKey.entries.forEach { assertTrue(phrases.get(it, lang) in units) }

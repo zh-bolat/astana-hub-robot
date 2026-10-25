@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kz.astanahub.robot.backend.Answer
@@ -155,7 +157,7 @@ class MainViewModelTest {
     }
 
     @Test
-    fun `rate limit says one moment and retries once`() = runTest(dispatcher) {
+    fun `rate limit - waits silently with a thinking face and retries once`() = runTest(dispatcher) {
         coEvery { backend.ask(any(), any()) } returnsMany listOf(
             failure(ErrorKind.RATE_LIMITED, retryAfter = 2),
             answer("Готово."),
@@ -163,9 +165,11 @@ class MainViewModelTest {
         val vm = createVm()
 
         vm.submit("Вопрос")
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(Phase.THINKING, vm.state.value.phase)
         advanceUntilIdle()
 
-        assertEquals(listOf(listOf("ONE_MOMENT:ru"), listOf("Готово.")), voice.spoken)
+        assertEquals(listOf(listOf("Готово.")), voice.spoken)
         assertEquals("Готово.", vm.state.value.answer)
         coVerify(exactly = 2) { backend.ask(any(), any()) }
     }

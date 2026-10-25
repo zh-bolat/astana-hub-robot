@@ -217,8 +217,6 @@ class MainViewModel(
     @Volatile private var placeHint: String? = null
     private var placeJob: Job? = null
 
-    private var fillerIndex = 0
-
     /** Слова названий мест (`/v1/places`): место одним словом — не шум. */
     @Volatile private var placeWords: Set<String> = emptySet()
 
@@ -1091,21 +1089,7 @@ class MainViewModel(
             if (phrase && t.firstPhraseMs == null) t.firstPhraseMs = ms
         }
 
-        // Первая фраза агента не пришла за fillerMillis — короткое «хм…» из кеша голоса (раз за ход, только если
-        // ответа ещё нет). Уже звучащее «хм…» не обрываем: первая фраза встанет в очередь сразу за ним.
-        var responded = false
-        var fillerStarted = false
-        val filler: Job? = if (question != null && showThinking) launch {
-            delay(chatTimeouts.fillerMillis)
-            if (responded || spoken.isNotEmpty()) return@launch
-            fillerStarted = true
-            val key = PhraseKey.FILLERS[fillerIndex++ % PhraseKey.FILLERS.size]
-            voice.speakCached(phrases.get(key, lang), lang)
-        } else null
-        fun onResponse() {
-            responded = true
-            if (!fillerStarted) filler?.cancel()
-        }
+        // Пока первая фраза агента не пришла — только лицо «думаю» (THINKING), никаких «хм…» голосом.
 
         val handler = object : TurnHandler {
             override fun onEmotion(name: String) {
@@ -1115,13 +1099,11 @@ class MainViewModel(
 
             override fun onPhrase(text: String) {
                 markEvent(phrase = true)
-                onResponse()
                 PhraseSplitter.normalize(listOf(text)).forEach { enqueue(TurnStep.Say(it, lang)) }
             }
 
             override fun onAction(action: ChatAction) {
                 markEvent(phrase = false)
-                onResponse()
                 Timber.i("agent action %s place=%s", action.type, action.placeId)
                 when (action.type) {
                     ChatAction.WHERE_IS -> enqueue(TurnStep.Run { agentWhereIs(action, lang, say) })
@@ -1148,7 +1130,6 @@ class MainViewModel(
         } finally {
             streaming = false
             steps.close()
-            if (!fillerStarted) filler?.cancel()
         }
         if (outcome is TurnOutcome.Fallback) {
             speaker.cancel()
@@ -1777,7 +1758,8 @@ class MainViewModel(
         retry: suspend () -> ApiResult<Answer>,
     ): ApiResult<Answer> {
         val seconds = (first as ApiResult.Failure).error.retryAfterSeconds ?: 1
-        voice.speak(listOf(phrases.get(PhraseKey.ONE_MOMENT, _state.value.lang)), _state.value.lang)
+        // Ждём повтор молча: лицо «думаю» (без «секунду…» голосом).
+        setBusy(Phase.THINKING)
         delay(seconds.coerceIn(1, MAX_RETRY_AFTER_SECONDS) * 1000)
         return retry()
     }

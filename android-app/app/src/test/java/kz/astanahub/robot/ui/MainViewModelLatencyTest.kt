@@ -156,39 +156,17 @@ class MainViewModelLatencyTest {
     }
 
     @Test
-    fun `filler plays from cache when the first phrase is late`() = runTest(dispatcher) {
+    fun `late first phrase - only the thinking face, no filler words`() = runTest(dispatcher) {
         agentReplies(firstPhraseAfter = 3_000)
-        vm()
+        val vm = vm()
         voice.asr.emit(Transcript("Расскажи про хаб подробно", isFinal = true))
-        advanceTimeBy(1_199); runCurrent()
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(Phase.THINKING, vm.state.value.phase)
         assertTrue(voice.cachedSpoken.isEmpty())
-        advanceTimeBy(2); runCurrent()
-        assertEquals(1, voice.cachedSpoken.size)
-        assertEquals("FILLER_HM:ru", voice.cachedSpoken.single().first)
-        advanceUntilIdle()
-        assertEquals(1, voice.cachedSpoken.size) // не чаще раза за ход
-        assertEquals(listOf("Ответ агента."), voice.spoken)
-    }
-
-    @Test
-    fun `no filler when the answer comes in time`() = runTest(dispatcher) {
-        agentReplies(firstPhraseAfter = 1_000)
-        vm()
-        voice.asr.emit(Transcript("Что такое Astana Hub?", isFinal = true))
+        assertTrue(voice.spoken.isEmpty())
         advanceUntilIdle()
         assertTrue(voice.cachedSpoken.isEmpty())
         assertEquals(listOf("Ответ агента."), voice.spoken)
-    }
-
-    @Test
-    fun `fillers rotate between turns`() = runTest(dispatcher) {
-        agentReplies(firstPhraseAfter = 2_000)
-        vm()
-        voice.asr.emit(Transcript("Первый вопрос про хаб", isFinal = true))
-        advanceUntilIdle()
-        voice.asr.emit(Transcript("Второй вопрос про хаб", isFinal = true))
-        advanceUntilIdle()
-        assertEquals(listOf(PhraseKey.FILLER_HM, PhraseKey.FILLER_SO).map { "${it.name}:ru" }, voice.cachedSpoken.map { it.first })
     }
 
     @Test

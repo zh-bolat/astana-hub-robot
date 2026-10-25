@@ -27,13 +27,9 @@
     <!-- Фразы робота без сервера (docs/api-contract.md, «Ошибки») -->
     <string name="phrase_no_connection">Извините, сейчас нет связи с сервером. Спросите, где что находится, — это я подскажу и без интернета.</string>
     <string name="phrase_not_heard">Извините, я не расслышал. Повторите, пожалуйста.</string>
-    <string name="phrase_one_moment">Секунду…</string>
     <string name="phrase_camera_unavailable">Извините, камера сейчас недоступна.</string>
     <string name="phrase_cant_speak">Извините, я сейчас не могу говорить. Ответ — на экране.</string>
     <string name="phrase_looking">Сейчас посмотрю.</string>
-    <string name="phrase_filler_hm">Хм…</string>
-    <string name="phrase_filler_so">Так…</string>
-    <string name="phrase_filler_now">Сейчас…</string>
     <string name="mic_off_badge">Микрофон выключен: нет разрешения</string>
     <string name="tech_pause_title" translatable="false">Техническая пауза · Техникалық үзіліс · Technical pause</string>
     <string name="tech_pause_hint" translatable="false">Робот скоро снова будет готов помочь.\nРобот жақында қайта көмектесуге дайын болады.\nThe robot will be back shortly.</string>

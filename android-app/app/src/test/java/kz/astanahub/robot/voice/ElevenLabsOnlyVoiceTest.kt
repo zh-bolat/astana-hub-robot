@@ -198,9 +198,9 @@ class ElevenLabsOnlyVoiceTest {
     }
 
     @Test
-    fun `filler from cache plays only if cached and raises the speech guard`() = runTest(StandardTestDispatcher()) {
+    fun `cached phrase plays only if cached and raises the speech guard`() = runTest(StandardTestDispatcher()) {
         ttsWorks()
-        val hm = phrases.get(PhraseKey.FILLER_HM, Lang.RU)
+        val hm = phrases.get(PhraseKey.CANT_SPEAK, Lang.RU)
         val clips = FakeClipPlayer(this, millisPerChar = 50)
         val r = setup(clips)
         assertFalse(r.speakCached(hm, Lang.RU)) // кеша нет — тишина, без сети

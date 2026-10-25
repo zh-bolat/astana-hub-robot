@@ -19,8 +19,8 @@ import timber.log.Timber
 /** Какие фразы робот озвучивает сам и держит в кеше голоса ElevenLabs. */
 object CachedPhrases {
     /** Порядок — по важности: «нет связи» и «не могу говорить» нужнее всего без сети. */
-    private val KEY_ORDER = listOf(PhraseKey.NO_CONNECTION, PhraseKey.CANT_SPEAK) + PhraseKey.FILLERS +
-        PhraseKey.entries.filter { it != PhraseKey.NO_CONNECTION && it != PhraseKey.CANT_SPEAK && it !in PhraseKey.FILLERS }
+    private val KEY_ORDER = listOf(PhraseKey.NO_CONNECTION, PhraseKey.CANT_SPEAK) +
+        PhraseKey.entries.filter { it != PhraseKey.NO_CONNECTION && it != PhraseKey.CANT_SPEAK }
 
     fun texts(phrases: Phrases, lang: Lang): List<String> =
         KEY_ORDER.map { phrases.get(it, lang) } + WayPhrases.fixed(lang)

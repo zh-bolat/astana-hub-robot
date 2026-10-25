@@ -7,7 +7,6 @@ package kz.astanahub.robot.core
 enum class PhraseKey {
     NO_CONNECTION,
     NOT_HEARD,
-    ONE_MOMENT,
     CAMERA_UNAVAILABLE,
     /** Приветствие подошедшему, если агент не ответил за 2 с или нет связи. */
     GREETING,
@@ -15,15 +14,7 @@ enum class PhraseKey {
     CANT_SPEAK,
     /** «Сейчас посмотрю» — перед снимком камеры. */
     LOOKING,
-    /** Короткие «хм…/так…/сейчас…», пока агент готовит первую фразу (только из кеша). */
-    FILLER_HM,
-    FILLER_SO,
-    FILLER_NOW,
-    ;
-
-    companion object {
-        val FILLERS = listOf(FILLER_HM, FILLER_SO, FILLER_NOW)
-    }
+    // Заполнителей («хм…», «так…», «секунду…») нет: пока робот ждёт ответ, только лицо «думаю».
 }
 
 fun interface Phrases {
