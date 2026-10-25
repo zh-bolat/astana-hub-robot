@@ -93,6 +93,23 @@ class SearchHit:
     score: float
 
 
+Key = tuple[str, str, int]  # source_type, source_id, chunk_no — фрагмент без языка
+
+
+def rrf(lists: list[list[Key]], k: int = RRF_K) -> list[tuple[Key, float]]:
+    """Reciprocal Rank Fusion: score = Σ 1 / (k + место). Строки одного фрагмента на разных языках —
+    один кандидат с лучшим местом в каждом списке. По убыванию score (при равенстве — порядок появления)."""
+    scores: dict[Key, float] = {}
+    for ranked in lists:
+        seen: set[Key] = set()
+        for key in ranked:
+            if key in seen:
+                continue
+            seen.add(key)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + len(seen))
+    return sorted(scores.items(), key=lambda kv: -kv[1])
+
+
 def _lang_order(lang: str) -> list[str]:
     return list(dict.fromkeys([lang, "ru", "en", "kk"]))
 
@@ -140,7 +157,7 @@ class KbSearch:
 
     def _search_db(self, query: str, vec: list[float] | None, lang: str, k: int) -> list[SearchHit]:
         terms = query_terms(query)
-        lists: list[list[tuple[str, str, int]]] = []
+        lists: list[list[Key]] = []
         with self.engine.connect() as conn:
             if vec is not None:
                 rows = conn.execute(
@@ -175,18 +192,7 @@ class KbSearch:
                     {"q": tsquery(terms), "n": self.candidates},
                 )
                 lists.append([tuple(r) for r in rows])
-            # RRF; строки одного фрагмента на разных языках — один кандидат (лучший ранг в каждом списке)
-            scores: dict[tuple[str, str, int], float] = {}
-            for ranked in lists:
-                seen: set[tuple[str, str, int]] = set()
-                rank = 0
-                for key in ranked:
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    rank += 1
-                    scores[key] = scores.get(key, 0.0) + 1.0 / (self.rrf_k + rank)
-            top = sorted(scores.items(), key=lambda kv: -kv[1])[:k]
+            top = rrf(lists, self.rrf_k)[:k]
             if not top:
                 return []
             variants = conn.execute(
@@ -203,7 +209,7 @@ class KbSearch:
                 {"keys": [key for key, _ in top]},
             ).all()
         order = _lang_order(lang)
-        best: dict[tuple[str, str, int], object] = {}
+        best: dict[Key, object] = {}
         for row in variants:
             key = (row.source_type, row.source_id, row.chunk_no)
             rlang = row.lang.strip()

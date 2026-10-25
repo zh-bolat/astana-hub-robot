@@ -231,7 +231,7 @@ def create_app(
     kb_search: KbSearch | None = None
     indexer: KbIndexer | None = None
     if (
-        knowledge_source is None
+        syncer is not None  # база из Postgres (не подменена)
         and settings.retrieval_mode == "hybrid"
         and (embedder is not None or settings.resolved_retrieval_mode() == "hybrid")
     ):

@@ -26,7 +26,6 @@ STOP_TOOLS = ["look", "no_answer"]
 SEARCH_RESULTS = 3
 SEARCH_BUDGET_CHARS = 2500  # текст всех фрагментов в ответе инструмента
 SEARCH_MAX_CALLS = 2  # повторный поиск в том же ходе — один раз (защита от циклов)
-_SEARCH_WEIGHTS = (3, 2, 1)  # доля бюджета: первому фрагменту больше
 
 
 @dataclass
@@ -135,13 +134,12 @@ def no_answer(wrapper: RunContextWrapper[ChatContext]) -> str:
 
 
 def search_texts(hits: list[SearchHit], query: str, budget: int = SEARCH_BUDGET_CHARS) -> list[str]:
-    """Текст каждого фрагмента для модели: всё вместе ≤ budget (первому — большая доля, недобор — дальше)."""
-    weights = [_SEARCH_WEIGHTS[i] if i < len(_SEARCH_WEIGHTS) else 1 for i in range(len(hits))]
+    """Текст каждого фрагмента для модели: всё вместе ≤ budget, поровну (первый по RRF не обязательно
+    содержит ответ); короткий фрагмент отдаёт недобор следующим. Длинный — выдержка по словам вопроса."""
     out: list[str] = []
     left = budget
     for i, hit in enumerate(hits):
-        share = left * weights[i] // sum(weights[i:])
-        part = excerpt(hit.content, query, max(share, 200))
+        part = excerpt(hit.content, query, max(left // (len(hits) - i), 200))
         out.append(part)
         left = max(0, left - len(part))
     return out

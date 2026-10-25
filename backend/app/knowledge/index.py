@@ -116,8 +116,10 @@ class KbIndexer:
 
     # ---------- индексация ----------
     def index(self, force: bool = False) -> IndexReport:
-        lock = self.engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        # Блокировка сессии на отдельном соединении (без транзакции), работа — в своих транзакциях
+        lock = self.engine.connect()
         try:
+            lock.execution_options(isolation_level="AUTOCOMMIT")
             got = lock.execute(
                 text("SELECT pg_try_advisory_lock(:k)"), {"k": KB_INDEX_LOCK_KEY}
             ).scalar()
@@ -127,7 +129,10 @@ class KbIndexer:
             try:
                 return self._index(force)
             finally:
-                lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": KB_INDEX_LOCK_KEY})
+                try:
+                    lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": KB_INDEX_LOCK_KEY})
+                except Exception:
+                    lock.invalidate()  # соединение закроется, блокировка снимется вместе с сессией
         finally:
             lock.close()
 
