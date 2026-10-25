@@ -57,6 +57,7 @@ from app.lang import Lang, resolve_lang, script_of
 from app.log_writer import BackgroundLogWriter
 from app.logging_setup import logger
 from app.metrics import NULL_RECORDER, LatencyRecorder, elapsed_ms
+from app.noise import is_noise, needs_history
 from app.prompts import REFUSALS, wrap_visitor
 from app.safety import BLOCKED_ANSWERS, blocked_reason, kb_corpus, limit_phrases
 from app.schemas import AnswerResponse, ChatAction, ChatRequest, ChatResponse
@@ -92,6 +93,7 @@ class _ChatState:
     started: float = 0.0
     first_token_ms: int | None = None
     first_phrase_ms: int | None = None
+    ignored: bool = False  # v1.2: реплика — шум, модель не вызывалась
     fallback: bool = False  # агент не ответил — ответ дал /v1/ask или готовое приветствие
     error: str | None = None
 
@@ -361,6 +363,17 @@ class ChatService:
                     err = data["error"]
                     raise ApiError(_ERROR_STATUS.get(err["code"], 500), err["code"], err["message"])
                 elif event == "done":
+                    if data.get("ignored"):
+                        return ChatResponse(
+                            request_id=data["request_id"],
+                            answer="",
+                            phrases=[],
+                            lang=data["lang"],
+                            found=False,
+                            sources=[],
+                            actions=[],
+                            ignored=True,
+                        )
                     return ChatResponse(
                         request_id=data["request_id"],
                         answer=" ".join(phrases),
@@ -408,6 +421,17 @@ class ChatService:
 
     def _record(self, req: ChatRequest, request_id: str, st: _ChatState, interrupted: bool) -> None:
         """Тайминги хода → latency_events (фоном; без текстов)."""
+        if st.ignored:  # шум: только счётчик
+            self.metrics.record(
+                "chat",
+                {"ignored": elapsed_ms(st.started)},
+                lang=st.lang,
+                provider="local:noise",
+                request_id=request_id,
+                session_id=req.session_id,
+                extra={"category": "ignored"},
+            )
+            return
         self.metrics.record(
             "chat",
             {
@@ -495,9 +519,40 @@ class ChatService:
             out.append(phrase)
         return out
 
+    async def _last_agent(self, session_id: str) -> str | None:
+        """Последняя реплика робота в разговоре (для «да/нет» — ответ ли это на вопрос)."""
+        for item in reversed(await self._history(session_id)):
+            if item["role"] == "assistant":
+                return item["content"]
+        return None
+
+    async def _is_noise(self, req: ChatRequest) -> bool:
+        """v1.2: шум распознавания до вызова модели («Ну…», «(смеётся)», «М-м-м»)."""
+        if not is_noise(req.question):
+            return False
+        if needs_history(req.question):
+            return is_noise(req.question, await self._last_agent(req.session_id))
+        return True
+
     async def _chat_stream(
         self, req: ChatRequest, request_id: str, st: _ChatState, started: float
     ) -> AsyncIterator[tuple[str, dict]]:
+        if not st.greeting and await self._is_noise(req):
+            # без модели, журнала вопросов и памяти: робот молчит и слушает дальше
+            st.ignored, st.category, st.provider, st.logged = True, "ignored", "local:noise", True
+            logger.info("chat_ignored_noise", extra={"session_id": req.session_id})
+            yield (
+                "done",
+                {
+                    "request_id": request_id,
+                    "lang": st.lang,
+                    "found": False,
+                    "sources": [],
+                    "actions": [],
+                    "ignored": True,
+                },
+            )
+            return
         quick = None if st.greeting else self.answers._quick(req, request_id)
         if quick is not None:
             st.lang, st.category, st.provider = quick.lang, "small_talk", "local:smalltalk"

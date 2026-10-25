@@ -115,6 +115,8 @@ class ChatResponse(AnswerResponse):
     actions: list[ChatAction] = Field(default_factory=list)
     # v1.1: эмоция ответа для лица робота (в SSE — событие emotion перед первой phrase)
     emotion: Emotion = "neutral"
+    # v1.2: реплика — шум распознавания; модель не вызывалась, робот молчит и слушает дальше
+    ignored: bool = False
 
 
 class ErrorDetail(BaseModel):

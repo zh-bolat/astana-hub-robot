@@ -646,3 +646,91 @@ def test_injection_eval_chat_mode_fake():
     report = run(EVAL_DIR / "injection.yaml", sleep_s=0, force_fake=True, endpoint="chat")
     assert report["endpoint"] == "chat"
     assert report["failed"] == 0 and report["errors"] == 0
+
+
+# --- v1.2: шум распознавания ---
+
+
+def test_noise_is_ignored_without_model_log_or_memory(make_client):
+    from tests.test_latency import rows
+
+    model = FakeModel(say("Не должна отвечать."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Ну... м-м-м (смеётся)", lang="ru", with_emotion=True)
+
+    assert evs == [
+        (
+            "done",
+            {
+                "request_id": evs[0][1]["request_id"],
+                "lang": "ru",
+                "found": False,
+                "sources": [],
+                "actions": [],
+                "ignored": True,
+            },
+        )
+    ]
+    assert model.requests == []
+    assert logged(client) == []
+    assert messages(client) == []
+    assert [(r.stage, r.provider) for r in rows(client, "chat")] == [("ignored", "local:noise")]
+
+
+def test_noise_json_mode(make_client):
+    model = FakeModel()
+    client = chat_client(make_client, model)
+
+    r = client.post("/v1/chat", json=ask_body("Эээ, ну", lang="ru"), headers=AUTH)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ignored"] is True
+    assert body["answer"] == "" and body["phrases"] == [] and body["actions"] == []
+    assert body["found"] is False
+    assert model.requests == []
+
+
+def test_noise_ignored_when_chat_off(client):
+    r = client.post("/v1/chat", json=ask_body("(музыка)"), headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["ignored"] is True and r.json()["phrases"] == []
+    assert logged(client) == []
+
+
+def test_regular_answer_is_not_ignored(make_client):
+    client = chat_client(make_client, FakeModel(say("Кафе на первом этаже.")))
+    r = client.post("/v1/chat", json=ask_body("Где кафе?", lang="ru"), headers=AUTH)
+    assert r.json()["ignored"] is False
+
+
+def test_yes_after_robot_question_reaches_model(make_client):
+    model = FakeModel(call("guide_to", {"place_id": "place:cafe"}), say("Провожаю."))
+    client = chat_client(make_client, model)
+    client.post(
+        f"/v1/sessions/{SESSION}/messages",
+        json={
+            "kind": "where_is",
+            "question": "Где кафе?",
+            "answer": "Кафе на первом этаже. Проводить вас?",
+            "lang": "ru",
+        },
+        headers=AUTH,
+    )
+    assert client.app.state.log_writer.wait_idle(5)
+
+    evs = events(client, "Да", lang="ru")
+
+    assert evs[-1][1].get("ignored") is not True
+    assert model.requests  # «да» — ответ на вопрос робота
+
+
+def test_yes_without_robot_question_is_noise(make_client):
+    model = FakeModel()
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Да, я.", lang="ru")
+
+    assert evs[-1][1]["ignored"] is True
+    assert model.requests == []
