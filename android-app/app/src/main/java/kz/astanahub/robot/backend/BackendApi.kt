@@ -43,6 +43,12 @@ interface BackendApi {
     fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession? = null
 
     /**
+     * Live STT в принципе есть: тогда робот слушает микрофон сам и открывает WS только на речь
+     * (порог громкости и минимальная длительность). false — фраза пишется целиком и уходит в `/v1/stt`.
+     */
+    val supportsLiveStt: Boolean get() = false
+
+    /**
      * `POST /v1/chat` (SSE). Поток заканчивается [ChatEvent.Done] или [ChatEvent.Error];
      * отмена сборщика обрывает соединение (посетитель перебил). Действие `look` клиент выполняет сам
      * через [look] (`POST /v1/look`), отдельного эндпоинта для кадра нет.

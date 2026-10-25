@@ -9,6 +9,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runInterruptible
 import kz.astanahub.robot.audio.GrowingAudio
 import kz.astanahub.robot.audio.LiveEndpointer
+import kz.astanahub.robot.audio.LiveVadEvent
+import kotlinx.coroutines.CompletableDeferred
+import kz.astanahub.robot.core.NoiseStats
 import kz.astanahub.robot.backend.TtsStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -112,6 +115,8 @@ class ServerVoiceGateway(
     private val muted = combine(ownSpeaking, externalSpeech) { own, ext -> own || ext }
     private fun isMuted() = ownSpeaking.value || externalSpeech.value
     @Volatile private var stopRequested = false
+    /** Робот спит и рядом никого: постоянное прослушивание на паузе (голос не будит, запросы STT не тратятся). */
+    private val paused = MutableStateFlow(false)
 
     private var listenJob: Job? = null
     @Volatile private var continuous = false
@@ -144,11 +149,18 @@ class ServerVoiceGateway(
         listenJob?.cancel()
         listenJob = if (enabled) scope.launch {
             while (isActive && continuous) {
+                paused.first { !it }
                 muted.first { !it }
                 if (!listenUtterance()) delay(ERROR_BACKOFF_MS)
             }
         } else null
         Timber.i("server ASR continuous=%s", enabled)
+    }
+
+    /** Пауза постоянного прослушивания (сон без человека рядом); кнопка микрофона работает и на паузе. */
+    override fun setListeningPaused(paused: Boolean) {
+        if (this.paused.value != paused) Timber.i("server ASR paused=%s", paused)
+        this.paused.value = paused
     }
 
     fun stopListening() {
@@ -166,9 +178,8 @@ class ServerVoiceGateway(
             _sttEvents.tryEmit(SttEvent("", null, null, 0, 0, BackendError(ErrorKind.UNKNOWN, message = "нет разрешения RECORD_AUDIO")))
             return false
         }
-        if (SystemClock.elapsedRealtime() >= liveDisabledUntil) {
-            val session = backend.openLiveStt(sttLangHint, sttSessionId)
-            if (session != null) listenLive(session)?.let { return it }
+        if (backend.supportsLiveStt && SystemClock.elapsedRealtime() >= liveDisabledUntil) {
+            listenLive()?.let { return it }
         }
         _activity.value = VoiceActivity.LISTENING
         val vad = vadConfig()
@@ -230,37 +241,111 @@ class ServerVoiceGateway(
         }
     }
 
+    /** Чем закончилось ожидание речи перед открытием live STT. */
+    private sealed interface Gate {
+        data class Opened(val session: LiveSttSession) : Gate
+        /** Речи (≥ минимальной длительности) не было: ничего не отправляли. */
+        data object NoSpeech : Gate
+        /** Робот заговорил / прослушивание приостановлено. */
+        data object Muted : Gate
+        /** Сервер без live STT. */
+        data object Unavailable : Gate
+        data class MicError(val message: String) : Gate
+    }
+
     /**
-     * Live STT: звук уходит на сервер, пока посетитель говорит; промежуточный текст — на экран.
+     * Live STT: микрофон слушаем сами; WebSocket открывается, только когда [LiveEndpointer] увидел речь —
+     * энергия выше адаптивного порога [VadConfig.startMillis] подряд (короткие и тихие звуки запроса не делают,
+     * `end` по ним не шлём). Затем пре-ролл и звук по ходу речи уходят на сервер, промежуточный текст — на экран.
      * @return null — live недоступен (старый сервер, нет сети до ответа `ready`): записать фразу по-старому.
+     * ПРОВЕРИТЬ НА РОБОТЕ: порог старта на микрофонном массиве Nova и пропадают ли пустые распознавания.
      */
-    private suspend fun listenLive(session: LiveSttSession): Boolean? = coroutineScope {
+    private suspend fun listenLive(): Boolean? = coroutineScope {
         _activity.value = VoiceActivity.LISTENING
-        val opened = SystemClock.elapsedRealtime()
-        var audioBytes = 0L
-        var ready = false
         val vad = vadConfig()
-        // Свой VAD по тем же кускам: тишина vad.endSilenceMillis после речи -> `end`, не ждём серверный (~0,8 с).
+        // Свой VAD по тем же кускам: старт речи открывает WS, тишина vad.endSilenceMillis после речи -> `end`.
         // ПРОВЕРИТЬ НА РОБОТЕ: не обрывает ли 0,5 с паузы посреди фразы (тогда поднять порог в диагностике).
         val endpointer = LiveEndpointer(vad)
+        val gate = CompletableDeferred<Gate>()
+        val preRoll = ArrayDeque<ByteArray>()
+        val preRollChunks = (vad.preRollMillis + vad.startMillis) / LIVE_CHUNK_MS + 1
+        var session: LiveSttSession? = null
+        var opened = 0L
+        var audioBytes = 0L
+        var shortSounds = 0
+        var ready = false
+
         // робот заговорил — запись прекращаем, иначе распознаем собственную речь
-        val muteWatcher = launch { muted.first { it }; session.cancel() }
+        val muteWatcher = launch {
+            muted.first { it }
+            gate.complete(Gate.Muted)
+            session?.cancel()
+        }
         val mic = launch {
-            val error = recorder.stream(vad.sampleRate, onLevel = { _micLevel.value = it }) { chunk ->
+            val error = recorder.stream(vad.sampleRate, LIVE_CHUNK_MS, onLevel = { _micLevel.value = it }) { chunk ->
+                val event = endpointer.feed(chunk)
+                if (endpointer.shortSounds > shortSounds) {
+                    shortSounds = endpointer.shortSounds
+                    NoiseStats.shortSoundCancelled(endpointer.lastShortSoundMillis)
+                }
+                val s = session
+                if (s == null) {
+                    if (gate.isCompleted) return@stream
+                    preRoll.addLast(chunk)
+                    while (preRoll.size > preRollChunks) preRoll.removeFirst()
+                    if (endpointer.started) {
+                        val newSession = backend.openLiveStt(sttLangHint, sttSessionId)
+                        if (newSession == null) {
+                            gate.complete(Gate.Unavailable)
+                            return@stream
+                        }
+                        session = newSession
+                        opened = SystemClock.elapsedRealtime()
+                        Timber.d("live STT: speech started, opening WS")
+                        for (c in preRoll) {
+                            audioBytes += c.size
+                            newSession.sendPcm(c)
+                        }
+                        preRoll.clear()
+                        if (!gate.complete(Gate.Opened(newSession))) newSession.cancel()
+                        if (event == LiveVadEvent.SPEECH_ENDED) {
+                            newSession.end()
+                            _utteranceEnded.tryEmit(Unit)
+                        }
+                    } else if (event == LiveVadEvent.NO_SPEECH) {
+                        gate.complete(Gate.NoSpeech)
+                    }
+                    return@stream
+                }
                 audioBytes += chunk.size
-                session.sendPcm(chunk)
-                if (endpointer.accept(chunk)) {
-                    session.end()
+                s.sendPcm(chunk)
+                if (event == LiveVadEvent.SPEECH_ENDED) {
+                    s.end()
                     _utteranceEnded.tryEmit(Unit)
                 }
             }
             if (error != null) {
                 Timber.w("recorder: %s", error)
-                session.cancel()
+                gate.complete(Gate.MicError(error))
+                session?.cancel()
+            } else {
+                gate.complete(Gate.NoSpeech)
             }
         }
         try {
-            for (event in session.events) {
+            val live = when (val g = gate.await()) {
+                Gate.NoSpeech, Gate.Muted -> return@coroutineScope true
+                Gate.Unavailable -> {
+                    liveDisabledUntil = SystemClock.elapsedRealtime() + LIVE_RETRY_AFTER_MS
+                    return@coroutineScope null
+                }
+                is Gate.MicError -> {
+                    _sttEvents.tryEmit(SttEvent("", null, null, 0, 0, BackendError(ErrorKind.UNKNOWN, message = g.message)))
+                    return@coroutineScope false
+                }
+                is Gate.Opened -> g.session
+            }
+            for (event in live.events) {
                 when (event) {
                     is LiveSttEvent.Ready -> {
                         ready = true
@@ -299,7 +384,7 @@ class ServerVoiceGateway(
         } finally {
             muteWatcher.cancel()
             mic.cancel()
-            session.cancel()
+            session?.cancel()
             _micLevel.value = 0f
             if (_activity.value == VoiceActivity.LISTENING) _activity.value = VoiceActivity.IDLE
         }
@@ -562,5 +647,7 @@ class ServerVoiceGateway(
         const val PTT_WAIT_FOR_SILENCE_MS = 2_000L
         /** Live не открылся — минуту пишем фразы по-старому (/v1/stt), потом пробуем снова. */
         const val LIVE_RETRY_AFTER_MS = 60_000L
+        /** Кусок звука live STT (как в контракте: ~100 мс PCM16). */
+        const val LIVE_CHUNK_MS = 100
     }
 }

@@ -45,6 +45,10 @@ import kz.astanahub.robot.core.PhraseKey
 import kz.astanahub.robot.core.PhraseSplitter
 import kz.astanahub.robot.core.Phrases
 import kz.astanahub.robot.core.UtteranceFilter
+import kz.astanahub.robot.core.NoiseContext
+import kz.astanahub.robot.core.NoiseStats
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kz.astanahub.robot.places.OfflineQuickButtons
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.places.WayPhrases
@@ -201,6 +205,15 @@ class MainViewModel(
 
     private var fillerIndex = 0
 
+    /** Слова названий мест (`/v1/places`): место одним словом — не шум. */
+    @Volatile private var placeWords: Set<String> = emptySet()
+
+    /** Когда последний раз менялся текст ответа робота (вопрос робота «свежий» [ROBOT_QUESTION_WINDOW_MILLIS]). */
+    private var answerChangedAt = Long.MIN_VALUE / 2
+
+    /** Последний промежуточный текст посетителя (по нему решаем, «думать» ли лицу по концу речи). */
+    private var lastPartial: String? = null
+
     /** Тайминги одного хода: все отметки — мс от [origin] (конец речи по VAD или нажатие кнопки). */
     private class TurnClock(val origin: Long, val sttFinalMs: Long?, var lang: Lang?) {
         var mode: String = TurnMetrics.MODE_AGENT
@@ -229,10 +242,42 @@ class MainViewModel(
         viewModelScope.launch { voice.speechEvents.collect(::onSpeechEvent) }
         voice.setLanguage(_state.value.lang) // подсказка языка серверному STT — с первой фразы
         loadQuickQuestions()
-        wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
+        refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        viewModelScope.launch {
+            _state.map { it.answer }.distinctUntilChanged().collect { answerChangedAt = clock() }
+        }
+        // Спим и рядом никого (есть PersonApi): постоянное прослушивание на паузе — голос не будит.
+        viewModelScope.launch {
+            _state.map { it.mode == ScreenMode.SLEEP }.distinctUntilChanged().collect { asleep ->
+                voice.setListeningPaused(asleep && presence != null && !visitorPresent)
+            }
+        }
         restartIdleTimer()
     }
+
+    private fun refreshPlaces() {
+        val wf = wayFinder ?: return
+        viewModelScope.launch {
+            wf.refreshPlaces()
+            placeWords = runCatching { wf.placeWords() }.getOrDefault(emptySet())
+        }
+    }
+
+    /**
+     * Голос не будит: робот спит, а PersonApi рядом никого не видит (разговоры вдалеке, > 3 м).
+     * Без PersonApi ([presence] = null) будят касание и голос, как раньше.
+     */
+    private fun voiceIgnoredAsleep(): Boolean =
+        presence != null && _state.value.mode == ScreenMode.SLEEP && !visitorPresent
+
+    /** Робот только что задал вопрос: тогда «да / нет / иә / жоқ» — ответ, а не шум. */
+    private fun robotAskedQuestion(): Boolean {
+        val answer = _state.value.answer?.trimEnd()?.trimEnd('"', '»', ')', ' ') ?: return false
+        return answer.endsWith('?') && clock() - answerChangedAt <= ROBOT_QUESTION_WINDOW_MILLIS
+    }
+
+    private fun noiseContext() = NoiseContext(robotAskedQuestion(), placeWords)
 
     /** Робот занят: думает, смотрит, говорит или ведёт — посторонние реплики фильтруем. */
     private fun busyForVoice(): Boolean =
@@ -244,7 +289,10 @@ class MainViewModel(
      * таймингов и заранее уточняем ближайшую точку карты для запроса к агенту.
      */
     private fun onUtteranceEnded() {
+        if (voiceIgnoredAsleep()) return
         utteranceEndAt = clock()
+        // Промежуточный текст — шум («ну…», «(смеётся)»): лицо не «думает».
+        if (lastPartial?.let { UtteranceFilter.isNoise(it, noiseContext()) } == true) return
         refreshPlaceHint()
         if (busyForVoice() || requestJob?.isActive == true) return
         thinkingEarly = true
@@ -279,13 +327,22 @@ class MainViewModel(
      */
     private fun onTranscript(t: Transcript) {
         val busyNow = busyForVoice()
+        if (voiceIgnoredAsleep()) {
+            if (t.isFinal && t.text.isNotBlank()) NoiseStats.ignoredAsleep()
+            lastPartial = null
+            return
+        }
         if (!t.isFinal) {
+            lastPartial = t.text.ifBlank { null }?.takeIf { it != "…" }
             if (busyNow) return
+            // Шум не будит экран и не показывается: подпись появится, когда фраза станет осмысленной.
+            if (lastPartial?.let { UtteranceFilter.isNoise(it, noiseContext()) } == true) return
             wake()
             if (_state.value.partialQuestion == null) refreshPlaceHint()
             _state.update { it.copy(partialQuestion = t.text.ifBlank { null }) }
             return
         }
+        lastPartial = null
         val text = t.text.trim()
         if (text.isEmpty()) {
             clearThinkingEarly(resetPhase = true)
@@ -302,6 +359,15 @@ class MainViewModel(
         }
         if (busyNow && !UtteranceFilter.isSubstantial(text)) {
             Timber.i("utterance ignored in %s (len=%d)", _state.value.phase, text.length)
+            NoiseStats.utteranceFiltered("busy_" + _state.value.phase.name.lowercase())
+            return
+        }
+        // Шум вместо реплики — во всех фазах, и в покое: на сервер не отправляем, лицо без реакции.
+        UtteranceFilter.noiseReason(text, noiseContext())?.let { reason ->
+            NoiseStats.utteranceFiltered(reason.name.lowercase())
+            clearThinkingEarly(resetPhase = true)
+            utteranceEndAt = null
+            if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
             return
         }
         // Разговор голосом — лицом к лицу: из меню возвращаемся к лицу (agent).
@@ -330,7 +396,7 @@ class MainViewModel(
     fun refreshFromServer() {
         chatUnsupported = false
         loadQuickQuestions()
-        wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
+        refreshPlaces()
     }
 
     /** Касание экрана / голос: убрать заставку и перезапустить таймер бездействия. */
@@ -412,7 +478,7 @@ class MainViewModel(
             voice.setLanguage(Lang.RU)
             loadQuickQuestions()
         }
-        wayFinder?.let { wf -> viewModelScope.launch { wf.refreshPlaces() } }
+        refreshPlaces()
     }
 
     fun selectLanguage(lang: Lang) {
@@ -980,7 +1046,24 @@ class MainViewModel(
         look?.takeIf { outcome !is TurnOutcome.Fallback }?.let { agentLookResult(it, lang, say) }
         if (showThinking) setBusy(null)
         when (outcome) {
-            is TurnOutcome.Completed -> {
+            is TurnOutcome.Completed -> if (outcome.done.ignored) {
+                // v1.2: сервер счёл реплику шумом — молчим, лицо без реакции, запасного пути нет.
+                clockForTurn?.requestId = outcome.done.requestId
+                NoiseStats.utteranceFiltered("server_ignored")
+                emotionJob?.cancel()
+                _state.update {
+                    it.copy(question = null, partialQuestion = null, answer = null, subtitle = null, emotion = Emotion.NEUTRAL)
+                }
+                val prev = history.removeLastOrNull()
+                if (prev != null && _state.value.screen == Screen.ANSWER) {
+                    _state.update {
+                        it.copy(
+                            screen = prev.screen, faqPage = prev.faqPage, question = prev.question,
+                            answer = prev.answer, guideTarget = prev.guideTarget,
+                        )
+                    }
+                }
+            } else {
                 clockForTurn?.requestId = outcome.done.requestId
                 _state.update { it.copy(offline = false) }
                 val doneLang = outcome.done.lang
@@ -994,7 +1077,7 @@ class MainViewModel(
             is TurnOutcome.Broken -> Timber.w("agent turn broken after reply: %s", outcome.reason)
             is TurnOutcome.Fallback -> Unit
         }
-        if (outcome !is TurnOutcome.Fallback) {
+        if (outcome !is TurnOutcome.Fallback && !(outcome is TurnOutcome.Completed && outcome.done.ignored)) {
             relaxEmotion()
             // Согласие посетителя агент уже получил; едем после последней фразы ответа.
             guide?.let { agentGuide(it, lang, announce = spoken.isEmpty(), say) }
@@ -1318,6 +1401,9 @@ class MainViewModel(
 
         /** «Думаю» по концу речи держим не дольше, если финальный текст так и не пришёл. */
         const val EARLY_THINKING_MAX_MILLIS = 8_000L
+
+        /** Вопрос робота («Проводить вас?») ждёт ответа «да / нет» столько после последней фразы ответа. */
+        const val ROBOT_QUESTION_WINDOW_MILLIS = 30_000L
 
         /** Конец речи по VAD относится к финальному тексту, если тот пришёл не позже. */
         private const val UTTERANCE_END_FRESH_MILLIS = 15_000L

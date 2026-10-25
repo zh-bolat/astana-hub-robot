@@ -48,6 +48,7 @@ class SwitchableBackendApi(
     override suspend fun ttsStream(text: String, lang: Lang) = delegate.ttsStream(text, lang)
     override suspend fun postTurnMetrics(metrics: TurnMetrics) = delegate.postTurnMetrics(metrics)
     override fun openLiveStt(lang: Lang?, sessionId: String) = delegate.openLiveStt(lang, sessionId)
+    override val supportsLiveStt: Boolean get() = delegate.supportsLiveStt
     override fun chat(request: ChatRequest) = delegate.chat(request)
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage) =
         delegate.postLocalMessage(sessionId, message)

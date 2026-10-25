@@ -64,17 +64,41 @@ object ChatEventDecoder {
             "emotion" -> obj?.str("name")?.takeIf { it.isNotBlank() }?.let { ChatEvent.Emotion(it) }
             "phrase" -> obj?.str("text")?.takeIf { it.isNotBlank() }?.let { ChatEvent.Phrase(it) }
             "action" -> obj?.action()?.let { ChatEvent.Action(it) }
-            "done" -> ChatEvent.Done(
-                requestId = obj?.str("request_id"),
-                lang = Lang.fromCode(obj?.str("lang")),
-                found = (obj?.get("found") as? JsonPrimitive)?.booleanOrNull ?: true,
-                sources = (obj?.get("sources") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
-                actions = (obj?.get("actions") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.action() }.orEmpty(),
-            )
+            "done" -> done(obj)
             "error" -> ChatEvent.Error(errorOf(obj))
             else -> null
         }
     }
+
+    private fun done(obj: JsonObject?) = ChatEvent.Done(
+        requestId = obj?.str("request_id"),
+        lang = Lang.fromCode(obj?.str("lang")),
+        found = obj?.bool("found") ?: true,
+        sources = (obj?.get("sources") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+        actions = (obj?.get("actions") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.action() }.orEmpty(),
+        ignored = obj?.bool("ignored") ?: false,
+    )
+
+    /**
+     * JSON-режим `/v1/chat` (сервер ответил `application/json` вместо потока): `{answer, phrases?, actions, …, ignored}`
+     * → те же события, что и в SSE: фразы, действия, `done`. Ошибка `{"error": …}` → [ChatEvent.Error].
+     */
+    fun decodeJsonBody(body: String): List<ChatEvent> {
+        val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            ?: return listOf(ChatEvent.Error(BackendError(ErrorKind.UNKNOWN, message = "bad chat json")))
+        if (obj["error"] is JsonObject) return listOf(ChatEvent.Error(errorOf(obj)))
+        val done = done(obj)
+        if (done.ignored) return listOf(done)
+        val events = mutableListOf<ChatEvent>()
+        obj.str("emotion")?.takeIf { it.isNotBlank() }?.let { events += ChatEvent.Emotion(it) }
+        val phrases = (obj["phrases"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }
+        (phrases?.takeIf { it.isNotEmpty() } ?: listOfNotNull(obj.str("answer")?.takeIf { it.isNotBlank() }))
+            .forEach { events += ChatEvent.Phrase(it) }
+        events += done
+        return events
+    }
+
+    private fun JsonObject.bool(key: String): Boolean? = (get(key) as? JsonPrimitive)?.booleanOrNull
 
     /** `{type, place_id}`; без `type` — не действие. */
     private fun JsonObject.action(): ChatAction? {

@@ -161,6 +161,8 @@ class RetrofitBackendApi(
     override fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession =
         OkHttpLiveSttSession(client, baseUrl, token, lang, sessionId)
 
+    override val supportsLiveStt: Boolean get() = true
+
     private val chatClient by lazy { OkHttpChatClient(baseUrl, token, client) }
 
     override fun chat(request: ChatRequest): Flow<ChatEvent> = chatClient.chat(request)

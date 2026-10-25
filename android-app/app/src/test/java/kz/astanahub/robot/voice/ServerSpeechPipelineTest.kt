@@ -32,7 +32,7 @@ import org.junit.Test
 class ServerSpeechPipelineTest {
 
     private val recorder = mockk<MicRecorder>(relaxed = true)
-    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null }
+    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null; every { supportsLiveStt } returns false }
 
     /** (текст запроса /v1/tts, время начала синтеза). */
     private val synthStarts = mutableListOf<Pair<String, Long>>()

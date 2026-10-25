@@ -24,7 +24,7 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class StreamingTtsTest {
 
-    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null }
+    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null; every { supportsLiveStt } returns false }
 
     /** Отдаёт первые [breakAfter] байт, потом обрыв соединения. */
     private class BrokenStream(private val bytes: ByteArray, private val breakAfter: Int) : TtsStream {
