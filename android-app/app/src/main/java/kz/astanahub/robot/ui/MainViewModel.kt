@@ -15,7 +15,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -70,6 +72,7 @@ import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.live.LiveSession
 import kz.astanahub.robot.live.LiveSessionFactory
 import kz.astanahub.robot.live.LiveSignal
+import kz.astanahub.robot.ui.face.FaceCue
 import timber.log.Timber
 
 /** Индикатор на экране. */
@@ -164,6 +167,21 @@ class MainViewModel(
 
     private val _state = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = _state.asStateFlow()
+
+    private val _faceCues = MutableSharedFlow<FaceCue>(extraBufferCapacity = 16)
+
+    /**
+     * Короткие реакции лица на события: ошибка, «не понял», приветствие, итог поездки
+     * (docs/ui-redesign/INTEGRATION.md). Состояние лица в остальном следует из [state].
+     */
+    val faceCues: SharedFlow<FaceCue> = _faceCues
+
+    private fun cue(c: FaceCue) {
+        _faceCues.tryEmit(c)
+    }
+
+    /** Реакция лица на ошибку сервера: «не расслышал» (400) — растерянность, остальное — огорчение. */
+    private fun troubleCue(error: BackendError) = cue(if (phraseFor(error) == PhraseKey.NOT_HEARD) FaceCue.CONFUSED else FaceCue.ERROR)
 
     private var requestJob: Job? = null
     private var quickJob: Job? = null
@@ -474,6 +492,7 @@ class MainViewModel(
         if (busyForVoice() || requestJob?.isActive == true) return
         lastNoConnectionPhrase = now
         val lang = _state.value.lang
+        cue(FaceCue.ERROR)
         requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
     }
 
@@ -727,6 +746,7 @@ class MainViewModel(
         setBusy(null)
         if (place == null) {
             val text = WayPhrases.unknownPlace(_state.value.lang)
+            cue(FaceCue.CONFUSED)
             postLocal(LocalMessage.KIND_GUIDE_TO, question, text, null, found = false)
             say(text, offline = _state.value.offline)
             return
@@ -814,6 +834,7 @@ class MainViewModel(
                 setBusy(null)
             }
             NavJournal.log("поездка к ${place.id}: итог ${describe(result)}")
+            cue(tripCue(result))
             startSpeech.join()
             obstacleSpeech?.join()
             val text = when (result) {
@@ -918,6 +939,11 @@ class MainViewModel(
         setBusy(null)
     }
 
+    /** Отладка на эмуляторе (adb broadcast, docs/ui-redesign/DESIGN.md): уснуть сейчас, не дожидаясь таймера. */
+    fun sleepNow() {
+        if (_state.value.mode != ScreenMode.SLEEP) goIdle()
+    }
+
     /** Кнопка «Что это?». */
     fun lookAround() = submitButton(LOOK_DEFAULT_QUESTION.getValue(_state.value.lang))
 
@@ -929,6 +955,7 @@ class MainViewModel(
         live?.interrupt()
         liveGuides.clear()
         if (stopNavigationOnly()) {
+            cue(FaceCue.TRIP_CANCELLED)
             viewModelScope.launch { say(WayPhrases.guideCancelled(_state.value.lang), offline = _state.value.offline) }
         }
         setBusy(null)
@@ -960,6 +987,7 @@ class MainViewModel(
                 }
                 wake()
                 showEmotion(MoodRules.visitorArrived)
+                cue(FaceCue.GREET)
                 // Приложение не на экране — не здороваемся (микрофон и голос выключены, говорить «из фона» нельзя).
                 if (event.greet && !busyNow() && inForeground()) {
                     // Живой режим: здоровается агент на сервере (`visitor_arrived`); live не открылся — как раньше.
@@ -1170,6 +1198,8 @@ class MainViewModel(
             streaming = false
             steps.close()
         }
+        // В базе ответа нет (вежливый отказ) — лицо растерянное, пока робот это говорит.
+        if (outcome is TurnOutcome.Completed && !outcome.done.ignored && !outcome.done.found) cue(FaceCue.CONFUSED)
         if (outcome is TurnOutcome.Fallback) {
             speaker.cancel()
             look?.cancel()
@@ -1241,6 +1271,7 @@ class MainViewModel(
         if (place == null) {
             Timber.w("agent guide_to: unknown place %s", action.placeId)
             NavJournal.log("agent guide_to place=${action.placeId}: точки нет в кеше мест робота — не едем")
+            cue(FaceCue.CONFUSED)
             say(WayPhrases.unknownPlace(lang), lang)
             return
         }
@@ -1257,7 +1288,10 @@ class MainViewModel(
         val result = look.await()
         setBusy(null)
         when (result) {
-            null -> say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang), lang)
+            null -> {
+                cue(FaceCue.ERROR)
+                say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang), lang)
+            }
             is ApiResult.Success -> {
                 val answerLang = result.value.lang ?: lang
                 PhraseSplitter.normalize(result.value.phrases.ifEmpty { listOf(result.value.text) }).forEach { say(it, answerLang) }
@@ -1265,6 +1299,7 @@ class MainViewModel(
             is ApiResult.Failure -> {
                 Timber.w("agent look: %s", result.error)
                 showEmotion(MoodRules.trouble)
+                troubleCue(result.error)
                 if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), lang), lang)
             }
@@ -1425,6 +1460,7 @@ class MainViewModel(
             }
             is LiveSignal.Action -> onLiveAction(signal)
             is LiveSignal.TurnEnd -> {
+                if (signal.found == false) cue(FaceCue.CONFUSED)
                 val doneLang = signal.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1677,11 +1713,15 @@ class MainViewModel(
             val result = lookRequest(question)
             val startsBefore = liveTurnStarts
             val text = when (result) {
-                null -> phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang)
+                null -> {
+                    cue(FaceCue.ERROR)
+                    phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang)
+                }
                 is ApiResult.Success -> result.value.text
                 is ApiResult.Failure -> {
                     Timber.w("live look: %s", result.error)
                     showEmotion(MoodRules.trouble)
+                    troubleCue(result.error)
                     phrases.get(phraseFor(result.error), lang)
                 }
             }
@@ -1797,6 +1837,7 @@ class MainViewModel(
         val result = lookRequest(question) { setBusy(Phase.THINKING) }
         if (result == null) {
             setBusy(null)
+            cue(FaceCue.ERROR)
             say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, _state.value.lang), offline = false)
             return
         }
@@ -1847,11 +1888,13 @@ class MainViewModel(
                 }
                 _state.update { it.copy(answer = answer.text, subtitle = null, offline = false) }
                 if (!quickFromServer) loadQuickQuestions()
+                if (!answer.found) cue(FaceCue.CONFUSED)
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
             is ApiResult.Failure -> {
                 Timber.w("backend error: %s", result.error)
                 showEmotion(MoodRules.trouble)
+                troubleCue(result.error)
                 if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), _state.value.lang), offline = result.error.isConnectivity())
             }
@@ -2001,6 +2044,14 @@ class MainViewModel(
 
         /** Live: `guide_to` ждёт `playback_done` своего хода не дольше (потерялся — едем, если звук не играет). */
         const val LIVE_GUIDE_WAIT_MAX_MILLIS = 30_000L
+
+        /** Итог поездки → реакция лица. */
+        internal fun tripCue(r: NavigationResult): FaceCue = when (r) {
+            NavigationResult.Arrived, NavigationResult.AlreadyThere -> FaceCue.ARRIVED
+            NavigationResult.Cancelled -> FaceCue.TRIP_CANCELLED
+            NavigationResult.UnknownPlace -> FaceCue.CONFUSED
+            NavigationResult.NotLocalized, is NavigationResult.Failed -> FaceCue.TRIP_FAILED
+        }
 
         internal fun describe(r: NavigationResult): String = when (r) {
             NavigationResult.Arrived -> "приехали (Arrived)"
