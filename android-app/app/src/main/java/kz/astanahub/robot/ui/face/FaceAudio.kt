@@ -61,15 +61,19 @@ class FaceAudioEnvelope(
     var noise: Float = 0f
         private set
 
-    fun step(input: Float, dt: Float): Float {
+    /** [speech] — VAD слышит речь: шумовой фон не поднимается (долгий монолог не «съедает» реакцию на голос). */
+    fun step(input: Float, dt: Float, speech: Boolean = false): Float {
         if (dt <= 0f) return value
         val x = if (input > 0f) input else 0f
         val tau = if (x > level) attackSec else releaseSec
         level += (x - level) * (1f - exp(-dt / tau))
         var bottom = floor
         if (trackNoise) {
-            val noiseTau = if (level < noise) NOISE_FALL_SEC else NOISE_RISE_SEC
-            noise += (level - noise) * (1f - exp(-dt / noiseTau))
+            val falling = level < noise
+            if (falling || !speech) {
+                val noiseTau = if (falling) NOISE_FALL_SEC else NOISE_RISE_SEC
+                noise += (level - noise) * (1f - exp(-dt / noiseTau))
+            }
             bottom = max(floor, noise * NOISE_MARGIN)
         }
         // Пик догоняет громкость плавно (τ [PEAK_ATTACK_SEC]) и медленно спадает: один громкий кадр не перестраивает шкалу.

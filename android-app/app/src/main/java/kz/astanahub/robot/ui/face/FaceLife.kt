@@ -113,6 +113,14 @@ class FaceLife(private val random: Random) {
         blink = blinkCurve((nowMs - blinkStart).toFloat())
     }
 
+    /** Моргнуть сейчас (рефлекс на тап), если глаза открыты и не моргали только что. @return моргнул. */
+    fun forceBlink(nowMs: Long): Boolean {
+        if (!blinksAllowed(mood) || nowMs - blinkStart < BLINK_MS + 60) return false
+        startBlink(nowMs)
+        if (nextBlinkAt - nowMs < 1_200L) nextBlinkAt = nowMs + 1_200L + random.nextLong(1_500L)
+        return true
+    }
+
     private fun startBlink(nowMs: Long) {
         blinkStart = nowMs
         blinkCount++

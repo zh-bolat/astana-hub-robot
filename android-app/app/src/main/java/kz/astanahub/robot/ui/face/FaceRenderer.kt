@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PathMeasure
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import kotlin.math.PI
 import kotlin.math.atan2
@@ -56,6 +57,14 @@ class FaceRenderer {
         )
     }
 
+    /** Кольцо удержания (вход в админку): тонкий белый штрих вокруг пальца. */
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val ringRect = RectF()
+
     private val path = Path()
     private val lidPath = Path()
     private val decorPath = Path()
@@ -104,6 +113,25 @@ class FaceRenderer {
         drawMouth(canvas, glow)
         drawDecor(canvas, pose)
         canvas.restore()
+        drawHoldRing(canvas, pose, width, height, u)
+    }
+
+    /** Кольцо удержания у пальца, в координатах экрана: дорожка и заполнение по часовой от 12 часов. */
+    private fun drawHoldRing(canvas: Canvas, pose: FacePose, width: Float, height: Float, u: Float) {
+        val a = pose.holdAlpha
+        if (a <= 0.01f) return
+        val cx = width * 0.5f * (1f + pose.touchX)
+        val cy = height * 0.5f * (1f + pose.touchY)
+        val r = RING_RADIUS * u * (0.9f + 0.1f * a)
+        ringRect.set(cx - r, cy - r, cx + r, cy + r)
+        ringPaint.strokeWidth = RING_STROKE * u
+        ringPaint.alpha = (255 * 0.2f * a).toInt()
+        canvas.drawOval(ringRect, ringPaint)
+        val sweep = 360f * pose.holdProgress
+        if (sweep > 0.5f) {
+            ringPaint.alpha = (255 * a).toInt().coerceIn(0, 255)
+            canvas.drawArc(ringRect, -90f, sweep, false, ringPaint)
+        }
     }
 
     private fun drawEye(canvas: Canvas, e: FaceGeometry.Eye, glow: Float) {
@@ -271,6 +299,8 @@ class FaceRenderer {
         private const val BLUSH_STROKE = 9f
         private const val SWEAT_STROKE = 9f
         private const val Z_STROKE = 9f
+        private const val RING_RADIUS = 56f
+        private const val RING_STROKE = 7f
 
         /**
          * «Линза»: углы (lx, ly), (rx, ry), вершины (ax, top) и (ax, bottom), четверти эллипса между ними.

@@ -32,6 +32,15 @@ object FaceAllocationCheck {
             for (i in 0 until FRAMES) {
                 if (i % 600 == 0) engine.inputs.activity = activities[(i / 600) % activities.size]
                 if (i == 2_500) engine.cue(FaceCue.ERROR)
+                // Жесты M2: касание (взгляд на палец), удержание (кольцо), поглаживание, рефлекс на тап.
+                val inputs = engine.inputs
+                inputs.touching = i % 900 in 100..400
+                inputs.touchX = 0.5f
+                inputs.touchY = -0.3f
+                inputs.holdStartMs = if (i % 900 == 150) now / 1_000_000 else if (i % 900 == 400) -1L else inputs.holdStartMs
+                inputs.petting = i % 1_300 in 700..900
+                inputs.strokeVx = if (inputs.petting) 900f else 0f
+                if (i % 450 == 0) engine.reflex()
                 audio.mic = if (i % 120 < 60) 0.08f else 0f
                 now += 16_666_667L
                 engine.update(now)

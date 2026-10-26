@@ -39,8 +39,20 @@ class FaceInputs {
     /** Посетитель говорит: на экране его промежуточный текст (ASR partial / live user_partial). */
     var userSpeaking: Boolean = false
 
-    /** Идёт поглаживание (жест — M2). */
+    /** Идёт поглаживание (жест [FaceGestureRecognizer]). */
     var petting: Boolean = false
+
+    /** Палец на лице: координаты от центра экрана, −1..1 (лицо смотрит на палец). */
+    var touching: Boolean = false
+    var touchX: Float = 0f
+    var touchY: Float = 0f
+
+    /** Удержание для входа в админку: время касания (uptime, мс); −1 — нет. */
+    var holdStartMs: Long = -1L
+
+    /** Скорость пальца при поглаживании, px/с — голова льнёт к руке. */
+    var strokeVx: Float = 0f
+    var strokeVy: Float = 0f
 }
 
 /**

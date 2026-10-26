@@ -28,6 +28,12 @@ class FacePose {
     var mood: FaceMood = FaceMood.IDLE
     var emotion: FaceEmotion = FaceEmotion.NEUTRAL
 
+    /** Кольцо удержания: прогресс 0..1 и проявление 0..1; где палец (−1..1 от центра экрана). */
+    var holdProgress: Float = 0f
+    var holdAlpha: Float = 0f
+    var touchX: Float = 0f
+    var touchY: Float = 0f
+
     operator fun get(p: Int): Float = v[p]
 }
 
@@ -93,6 +99,51 @@ class FaceEngine(
     /** Реакция на событие (время — последнего кадра). */
     fun cue(c: FaceCue) = director.cue(c, nowMs)
 
+    /** Что сделал рефлекс на тап (тесты, отладка). */
+    enum class Reflex { NONE, BLINK, STARTLE }
+
+    private var lastTapMs = Long.MIN_VALUE / 2
+    private var lastStartleMs = Long.MIN_VALUE / 2
+
+    /**
+     * Тап в тишине: рефлекторно моргнуть или слегка вздрогнуть (глаза распахнулись, брови вверх). Без спама:
+     * тапы чаще [TAP_REFLEX_MIN_MS] — ничего, вздрогнуть — не чаще раза в [STARTLE_MIN_MS], иначе моргнуть.
+     */
+    fun reflex(): Reflex {
+        val now = nowMs
+        if (now - lastTapMs < TAP_REFLEX_MIN_MS) {
+            lastTapMs = now
+            return Reflex.NONE
+        }
+        lastTapMs = now
+        val mood = director.mood
+        if (mood == FaceMood.SLEEP || mood == FaceMood.YAWN || mood == FaceMood.PETTED) return Reflex.NONE
+        if (now - lastStartleMs >= STARTLE_MIN_MS && reflexRandom.nextFloat() < STARTLE_CHANCE) {
+            lastStartleMs = now
+            if (!reducedMotion) {
+                kick(P.POP, 1.6f)
+                kick(P.SQUASH, -0.8f)
+                springs.impulse(P.BROW_L, 420f)
+                springs.impulse(P.BROW_R, 420f)
+            }
+            life.forceBlink(now)
+            return Reflex.STARTLE
+        }
+        return if (life.forceBlink(now)) Reflex.BLINK else Reflex.NONE
+    }
+
+    /** Удержание выдержано (вход в админку): кольцо вспыхивает и гаснет, лицо «кивает». */
+    fun holdDone() {
+        holdFlash = 1f
+        if (!reducedMotion) kick(P.POP, 0.8f)
+    }
+
+    private val reflexRandom = Random(seed * 13 + 5)
+    private var holdAlpha = 0f
+    private var holdAlphaVelocity = 0f
+    private val holdStep = SpringStep()
+    private var holdFlash = 0f
+
     /** Кадр: [nowNanos] — время vsync (Choreographer) или тестовые часы. */
     fun update(nowNanos: Long) {
         val first = lastNanos == Long.MIN_VALUE
@@ -102,9 +153,10 @@ class FaceEngine(
 
         // Звук → огибающие.
         val mic = audio.micLevel()
-        micEnv.step(mic, dt)
+        val voice = audio.voiceActive()
+        micEnv.step(mic, dt, speech = voice)
         // «Слушает» — по VAD (не по громкости: шум зала), громкость — только сила реакции.
-        director.update(inputs, audio.voiceActive(), nowMs)
+        director.update(inputs, voice, nowMs)
         val mood = director.mood
         if (director.moodChanged || first) onMoodEnter(mood, first)
         if (director.emotionChanged && !first) onEmotionEnter(director.emotion)
@@ -130,8 +182,28 @@ class FaceEngine(
             life.onMood(lifeMood, nowMs)
         }
         life.update(nowMs, dt, springs.value[P.BREATH_RATE], reducedMotion)
-        t[P.GAZE_X] = (t[P.GAZE_X] + life.gazeOffsetX).coerceIn(-1f, 1f)
-        t[P.GAZE_Y] = (t[P.GAZE_Y] + life.gazeOffsetY).coerceIn(-1f, 1f)
+        val eyesOpen = mood != FaceMood.SLEEP && mood != FaceMood.YAWN && mood != FaceMood.PETTED
+        if (inputs.touching && eyesOpen) {
+            // Отклик на касание: глаза сразу на палец (саккада), голова — за ними.
+            t[P.GAZE_X] = (inputs.touchX * TOUCH_GAZE_X).coerceIn(-1f, 1f)
+            t[P.GAZE_Y] = (inputs.touchY * TOUCH_GAZE_Y).coerceIn(-1f, 1f)
+        } else {
+            t[P.GAZE_X] = (t[P.GAZE_X] + life.gazeOffsetX).coerceIn(-1f, 1f)
+            t[P.GAZE_Y] = (t[P.GAZE_Y] + life.gazeOffsetY).coerceIn(-1f, 1f)
+        }
+        // Удержание: лицо сосредотачивается по мере заполнения кольца (прищур, брови к переносице).
+        val hold = holdProgress()
+        if (hold > 0f) {
+            t[P.LID_L] += 0.14f * hold
+            t[P.LID_R] += 0.14f * hold
+            t[P.BROW_TILT_L] -= 7f * hold
+            t[P.BROW_TILT_R] -= 7f * hold
+        }
+        // Поглаживание: голова льнёт к руке — наклон за пальцем по горизонтали, кивок по вертикали.
+        if (mood == FaceMood.PETTED && !reducedMotion) {
+            t[P.HEAD_TILT] += (inputs.strokeVx * STROKE_TILT).coerceIn(-7f, 7f)
+            t[P.HEAD_Y] += (inputs.strokeVy * STROKE_NOD).coerceIn(-10f, 10f)
+        }
         t[P.HEAD_FOLLOW_X] = t[P.GAZE_X]
         t[P.HEAD_FOLLOW_Y] = t[P.GAZE_Y]
         // У «тела» цель всегда покой: движется только от толчков.
@@ -145,7 +217,26 @@ class FaceEngine(
         SpringMath.step(talkOpen, talkOpenVelocity, talkTarget, TALK_SPRING, dt, talkStep)
         talkOpen = talkStep.value
         talkOpenVelocity = talkStep.velocity
+        // Кольцо удержания проявляется пружиной (как «материализация»), вспышка в конце гаснет.
+        val showRing = if (inputs.holdStartMs >= 0 && nowMs - inputs.holdStartMs >= FaceGestureRecognizer.HOLD_SHOW_MS) 1f else 0f
+        SpringMath.step(holdAlpha, holdAlphaVelocity, maxOf(showRing, holdFlash), FaceSprings.DECOR, dt, holdStep)
+        holdAlpha = holdStep.value.coerceIn(0f, 1f)
+        holdAlphaVelocity = holdStep.velocity
+        holdFlash = (holdFlash - dt / HOLD_FLASH_SEC).coerceAtLeast(0f)
+        pose.holdProgress = if (holdFlash > 0f) 1f else hold
+        pose.holdAlpha = holdAlpha
+        pose.touchX = inputs.touchX
+        pose.touchY = inputs.touchY
         compose(dt)
+    }
+
+    /** Заполнение кольца удержания 0..1 (от времени касания; первые [FaceGestureRecognizer.HOLD_SHOW_MS] — 0). */
+    private fun holdProgress(): Float {
+        val start = inputs.holdStartMs
+        if (start < 0) return 0f
+        val shown = (nowMs - start - FaceGestureRecognizer.HOLD_SHOW_MS).toFloat()
+        val span = (FaceGestureRecognizer.HOLD_MS - FaceGestureRecognizer.HOLD_SHOW_MS).toFloat()
+        return (shown / span).coerceIn(0f, 1f)
     }
 
     private fun compose(dt: Float) {
@@ -313,6 +404,20 @@ class FaceEngine(
 
         private const val MAX_KICKS = 4
         private const val TALK_SLOW_SEC = 0.25f
+
+        /** Тапы чаще — без рефлекса; вздрогнуть — не чаще; доля тапов со «вздрогнуть» (остальные — моргнуть). */
+        const val TAP_REFLEX_MIN_MS = 350L
+        const val STARTLE_MIN_MS = 3_000L
+        private const val STARTLE_CHANCE = 0.4f
+
+        /** Взгляд на палец: доля от положения пальца. */
+        private const val TOUCH_GAZE_X = 0.9f
+        private const val TOUCH_GAZE_Y = 0.8f
+
+        /** Поглаживание: ° наклона на px/с горизонтали и ед. кивка на px/с вертикали. */
+        private const val STROKE_TILT = 0.004f
+        private const val STROKE_NOD = 0.008f
+        private const val HOLD_FLASH_SEC = 0.35f
         private const val TWO_PI = (2.0 * Math.PI).toFloat()
 
         /** Покачивание «?» (рад/с), сползание капли (раз/с), период «z» (с). */

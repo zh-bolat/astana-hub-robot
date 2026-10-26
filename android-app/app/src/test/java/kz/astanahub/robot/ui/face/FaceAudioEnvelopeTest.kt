@@ -70,6 +70,19 @@ class FaceAudioEnvelopeTest {
     }
 
     @Test
+    fun `long monologue keeps its strength - noise estimate frozen while vad hears speech`() {
+        val env = FaceAudioEnvelope.mic()
+        env.feed(0.02f, 3_000)
+        // 20 с ровной речи посетителя (VAD: говорит).
+        var v = 0f
+        repeat(60 * 20) { v = env.step(0.08f, dt, speech = true) }
+        assertTrue("reaction after 20 s of speech: $v", v > 0.8f)
+        // Без VAD тот же ровный звук — это гул: фон догоняет, реакция уходит.
+        repeat(60 * 30) { v = env.step(0.08f, dt, speech = false) }
+        assertTrue("steady sound without vad fades: $v", v < 0.2f)
+    }
+
+    @Test
     fun `zero dt changes nothing`() {
         val env = FaceAudioEnvelope.playback()
         env.feed(0.2f, 100)

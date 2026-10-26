@@ -337,6 +337,90 @@ class FaceEngineTest {
     }
 
     @Test
+    fun `tap reflex blinks or startles, never spams`() {
+        val e = engine()
+        e.frames(120)
+        val first = e.reflex()
+        // Тап сразу следом — без реакции.
+        e.frames(5)
+        assertEquals(FaceEngine.Reflex.NONE, e.reflex())
+        // Серия частых тапов (по 400 мс) за 6 с: вздрогнуть — не чаще раза в 3 с, остальное — моргания.
+        var startles = if (first == FaceEngine.Reflex.STARTLE) 1 else 0
+        var blinks = if (first == FaceEngine.Reflex.BLINK) 1 else 0
+        repeat(15) {
+            e.frames(24)
+            when (e.reflex()) {
+                FaceEngine.Reflex.STARTLE -> startles++
+                FaceEngine.Reflex.BLINK -> blinks++
+                FaceEngine.Reflex.NONE -> Unit
+            }
+        }
+        assertTrue("startles in ~6 s: $startles", startles <= 3)
+        assertTrue("reacts: blinks=$blinks startles=$startles", blinks + startles >= 8)
+    }
+
+    @Test
+    fun `no tap reflex while asleep or petted`() {
+        val e = engine()
+        e.director.forcedMood = FaceMood.SLEEP
+        e.frames(30)
+        assertEquals(FaceEngine.Reflex.NONE, e.reflex())
+    }
+
+    @Test
+    fun `eyes go to the finger at once on touch`() {
+        val e = engine()
+        e.frames(60)
+        e.inputs.touching = true
+        e.inputs.touchX = 0.8f
+        e.inputs.touchY = -0.5f
+        e.frames(15) // 250 мс — саккада 0.16 с
+        assertTrue("gaze ${e.pose[P.GAZE_X]}", e.pose[P.GAZE_X] > 0.6f)
+        assertTrue(e.pose[P.GAZE_Y] < -0.3f)
+        e.inputs.touching = false
+    }
+
+    @Test
+    fun `petting closes the eyes happily and the head leans with the hand`() {
+        val e = engine()
+        e.frames(30)
+        e.inputs.petting = true
+        e.inputs.strokeVx = 1_200f
+        e.frames(60)
+        assertEquals(FaceMood.PETTED, e.director.mood)
+        assertTrue(e.pose[P.OPEN_L] < 0.1f)
+        assertTrue("leans: ${e.springValue(P.HEAD_TILT)}", e.springValue(P.HEAD_TILT) > Expressions.mood(FaceMood.PETTED)[P.HEAD_TILT] + 2f)
+        e.inputs.petting = false
+        e.inputs.strokeVx = 0f
+        // Отпустили — ещё немного довольный (хвост), потом обычное лицо.
+        e.frames(20)
+        assertEquals(FaceMood.PETTED, e.director.mood)
+        e.frames(60)
+        assertEquals(FaceMood.IDLE, e.director.mood)
+    }
+
+    @Test
+    fun `hold ring appears after 400 ms and fills by 3 s`() {
+        val e = engine()
+        e.frames(30)
+        val startMs = now / 1_000_000
+        e.inputs.touching = true
+        e.inputs.holdStartMs = startMs
+        e.frames(12) // 200 мс
+        assertEquals(0f, e.pose.holdProgress, 0f)
+        assertTrue(e.pose.holdAlpha < 0.05f)
+        e.frames(60) // ~1.2 с
+        assertTrue(e.pose.holdAlpha > 0.8f)
+        assertTrue(e.pose.holdProgress in 0.2f..0.5f)
+        e.frames(110) // > 3 с
+        assertEquals(1f, e.pose.holdProgress, 1e-3f)
+        // Сорвался — кольцо гаснет.
+        e.inputs.holdStartMs = -1L
+        e.frames(60)
+        assertTrue(e.pose.holdAlpha < 0.05f)
+    }
+
+    @Test
     fun `random inputs and frame times never produce NaN`() {
         val rnd = Random(3)
         val audio = FakeAudio()
