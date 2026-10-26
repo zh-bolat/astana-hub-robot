@@ -1318,6 +1318,13 @@
             "type": "array",
             "title": "Sources"
           },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
           "actions": {
             "items": {
               "$ref": "#/components/schemas/ChatAction"
@@ -1354,6 +1361,46 @@
           "sources"
         ],
         "title": "ChatResponse"
+      },
+      "Citation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "document",
+              "fact",
+              "place"
+            ],
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "title"
+        ],
+        "title": "Citation",
+        "description": "v1.3: фрагмент, который нашёл поиск агента и отдал модели в этом ответе (для показа человеку)."
       },
       "ErrorDetail": {
         "properties": {

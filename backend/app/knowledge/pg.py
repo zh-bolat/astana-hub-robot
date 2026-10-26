@@ -3,6 +3,8 @@
 Запись (`KnowledgeRepo.apply`):
 - одна транзакция под advisory-lock: upsert facts/places/quick_questions, исчезнувшие строки —
   `is_active=false` (строки с source='admin' синк не трогает), запись в `kb_sync`;
+- документы (папка KNOWLEDGE_DIR/documents, только при сиде из YAML) — в той же транзакции, upsert по slug,
+  исчезнувшие из папки — `is_active=false`; синк таблицы их не передаёт и не трогает;
 - ничего не изменилось → `kb_sync.status='skipped'`, иначе `ok` и `version` — хеш содержимого
   активной базы после записи (тот же, что `KnowledgeBase.version` при чтении);
 - ошибка → откат и отдельная строка `kb_sync.status='error'`.
@@ -27,7 +29,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
-from app.db.models import EventRow, FactRow, KbSyncRow, PlaceRow, QuickQuestionRow
+from app.db.models import DocumentRow, EventRow, FactRow, KbSyncRow, PlaceRow, QuickQuestionRow
+from app.knowledge.documents import Document, document_values
 from app.knowledge.models import (
     Event,
     Fact,
@@ -155,6 +158,9 @@ class SyncResult:
     status: str  # ok | skipped
     version: str
     counts: dict[str, dict[str, int]] = field(default_factory=dict)
+    skipped: list[str] = field(
+        default_factory=list
+    )  # пропущенные файлы документов: «файл: причина»
 
     @property
     def changed(self) -> bool:
@@ -227,10 +233,12 @@ class KnowledgeRepo:
         source: str,
         *,
         replace_events: bool = False,
+        documents: list[Document] | None = None,
         started_at: datetime | None = None,
     ) -> SyncResult:
         """Записывает базу из источника `source` (sheet | yaml). Мероприятия — только если
-        `replace_events` (в таблице и YAML их пока нет: синк их не трогает)."""
+        `replace_events` (в таблице и YAML их пока нет: синк их не трогает); документы — только если
+        переданы `documents` (сид из YAML; пустой список — все документы этого источника выключаются)."""
         started_at = started_at or datetime.now(UTC)
         kb = canonical_kb(kb)  # проверка уникальности id и map_name
         try:
@@ -254,6 +262,8 @@ class KnowledgeRepo:
                     counts["events"] = self._upsert(
                         conn, EventRow.__table__, [event_values(e) for e in kb.events], source
                     )
+                if documents is not None:
+                    counts["documents"] = self._upsert_documents(conn, documents, source)
                 changed = any(
                     c["inserted"] or c["updated"] or c["deactivated"] for c in counts.values()
                 )
@@ -338,6 +348,44 @@ class KnowledgeRepo:
                 else:
                     updated += 1
         return {"inserted": inserted, "updated": updated, "deactivated": deactivated or 0}
+
+    @staticmethod
+    def _upsert_documents(
+        conn: Connection, documents: list[Document], source: str
+    ) -> dict[str, int]:
+        """Документы по slug; выключаются только документы того же источника (папка не трогает Drive/admin)."""
+        _check_unique_slugs(documents)
+        table = DocumentRow.__table__
+        slugs = [d.slug for d in documents]
+        deactivated = conn.execute(
+            update(table)
+            .where(table.c.is_active, table.c.source == source, table.c.slug.not_in(slugs))
+            .values(is_active=False, updated_at=func.now())
+        ).rowcount
+        inserted = updated = 0
+        if documents:
+            rows = [{**document_values(d), "source": source} for d in documents]
+            cols = [c for c in rows[0] if c != "slug"]
+            stmt = insert(table).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[table.c.slug],
+                set_={**{c: stmt.excluded[c] for c in cols}, "updated_at": func.now()},
+                where=or_(*[table.c[c].is_distinct_from(stmt.excluded[c]) for c in cols]),
+            ).returning(text("(xmax = 0) AS inserted"))
+            for (is_insert,) in conn.execute(stmt):
+                if is_insert:
+                    inserted += 1
+                else:
+                    updated += 1
+        return {"inserted": inserted, "updated": updated, "deactivated": deactivated or 0}
+
+
+def _check_unique_slugs(documents: list[Document]) -> None:
+    seen: set[str] = set()
+    for d in documents:
+        if d.slug in seen:
+            raise ValueError(f"duplicate document slug: {d.slug}")
+        seen.add(d.slug)
 
 
 def _orig(exc: BaseException) -> str:

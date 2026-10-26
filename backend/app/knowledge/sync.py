@@ -1,6 +1,7 @@
 """Синхронизация базы знаний в Postgres и обновление кеша сервера.
 
-- `seed_yaml` — YAML → БД (разработка; автосид при старте, если БД пуста и таблица не задана);
+- `seed_yaml` — YAML и документы (KNOWLEDGE_DIR/documents) → БД (разработка; автосид при старте, если БД
+  пуста и таблица не задана);
 - `KnowledgeSyncer.sync_sheet` — Google-таблица → БД (фоном раз в KNOWLEDGE_SYNC_INTERVAL_S);
 - `KnowledgeSyncer.run_refresh` — фоном раз в KNOWLEDGE_RELOAD_INTERVAL_S сверяет kb_sync.version
   и перечитывает базу в память (новые данные подхватываются без перезапуска; так же видны синки,
@@ -15,6 +16,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from app.knowledge.documents import load_documents
 from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo, SyncResult
 from app.knowledge.sheets import SheetError, SheetFetcher
 from app.knowledge.source import YamlKnowledgeSource
@@ -22,13 +24,18 @@ from app.logging_setup import logger
 
 
 def seed_yaml(repo: KnowledgeRepo, yaml_source: YamlKnowledgeSource) -> SyncResult:
+    """YAML + документы KNOWLEDGE_DIR/documents/*.md → БД (файлы документов с ошибкой пропускаются,
+    причины — в SyncResult.skipped)."""
     started = datetime.now(UTC)
     try:
         kb = yaml_source.load()
+        docs = load_documents(yaml_source.directory)
     except Exception as exc:
         repo.record_error("yaml", exc, started)
         raise
-    return repo.apply(kb, "yaml", started_at=started)
+    result = repo.apply(kb, "yaml", documents=docs.documents, started_at=started)
+    result.skipped = docs.errors
+    return result
 
 
 def seed_yaml_if_empty(repo: KnowledgeRepo, yaml_source: YamlKnowledgeSource) -> bool:

@@ -30,9 +30,10 @@ uv run uvicorn app.main:app --reload --port 8000
 ```bash
 uv run python -m app.cli db upgrade      # миграции Alembic до head (то же: uv run alembic upgrade head)
 uv run python -m app.cli db current      # текущая ревизия (код 1 — схема не на head)
-uv run python -m app.cli kb seed-yaml    # YAML → Postgres (разработка)
+uv run python -m app.cli kb seed-yaml    # YAML и documents/*.md → Postgres (разработка)
 uv run python -m app.cli kb sync         # Google-таблица → Postgres
-uv run python -m app.cli kb status       # активная база и журнал синхронизаций (kb_sync)
+uv run python -m app.cli kb index        # фрагменты для поиска + эмбеддинги (только изменённые; --force — все)
+uv run python -m app.cli kb status       # активная база, фрагменты поиска, журнал синхронизаций (kb_sync)
 uv run python -m app.cli db import-sqlite /data/questions.db   # перенос старого лога вопросов из SQLite
 ```
 
@@ -218,6 +219,9 @@ Eval использует провайдер из `.env`: без ключа — 
   остались от агента на LiteLLM; `litellm` больше не нужен.
 - Injection: `uv run python -m eval.run_injection --chat` — набор через `/v1/chat` (провал — в т.ч. любое `action`);
   `--chat --fake` — без сети (`CHAT_PROVIDER=off`); в тестах — прогон с моделью-«попугаем».
+- **Поиск по базе (v1.3, `search_kb`)** — см. «Поиск по документам (RAG)» ниже: найденное попадает в `sources`,
+  `citations` (`done`, JSON, live `turn_end`) и в корпус выходного фильтра (ссылка или название из найденного
+  документа — не выдумка модели).
 
 ## Голос через сервер (/v1/stt, /v1/tts)
 
@@ -418,6 +422,43 @@ EOF
 YAML — ошибка команды (`kb_sync.status=error`), база в БД не меняется. Проверка YAML без БД:
 `uv run python -m app.cli check-kb`.
 
+### Поиск по документам (RAG)
+
+Факты и места по-прежнему целиком лежат в промпте агента. За подробностями (программы, правила, цены, льготы,
+резидентство, визы, пространства, мероприятия) агент сам вызывает инструмент `search_kb(query)`: гибридный поиск по
+`kb_chunks` — по смыслу (эмбеддинги `google/gemini-embedding-2` через OpenRouter) и по словам (полнотекст, BM25),
+слияние RRF. Модель получает до 3 фрагментов (≤ ~2500 символов), отвечает только по ним и вызывает `no_answer`, если
+подходящего нет (вопрос попадает в журнал «без ответа»). Подробности — `docs/db-schema.md`, раздел 2.
+
+- **Документы** — `knowledge/documents/<slug>.md` (slug — `[a-z0-9_]+`), markdown с шапкой:
+  ```
+  ---
+  title: Hub Space — коворкинг и офисы
+  lang: ru
+  source_url: https://astanahub.com/ru/l/hubspace
+  active: true
+  updated: 2026-10-26
+  ---
+  # Hub Space — коворкинг и офисы
+
+  ## Кто может участвовать
+  Текст…
+  ```
+  Разделы по заголовкам `#`/`##`/`###` становятся фрагментами (мелкие склеиваются, крупные режутся с перекрытием).
+  Ссылок в тексте не нужно — источник в `source_url`, его робот не озвучивает. В БД документы попадают через
+  `kb seed-yaml` (и автосид пустой базы); синк Google-таблицы их не трогает; файл с ошибкой пропускается (видно в выводе).
+- **Индексация** — сервер сам, в фоне: при старте и после каждого синка/сида, который что-то поменял (≈5 с), эмбеддит
+  только новые и изменённые фрагменты (сменилась модель — все). Вручную: `kb index` (`--force` — пересчитать всё).
+  Ошибка провайдера — в лог (`kb_index_embeddings_failed`), старые фрагменты остаются, повтор через 1–10 мин.
+- **Ответ** — `sources` с `document:<slug>#<n>`, `citations` `[{id, type, title, url}]` (контракт v1.3); вслух источник
+  не называется. В `latency_events` — `chat/kb_search_ms`, в логе — `kb_search` (id найденного, время, был ли вектор).
+- **Переключатели** — `EMBEDDING_PROVIDER` (`auto`: openrouter при `OPENROUTER_API_KEY`, иначе off; `fake` — тесты),
+  `RETRIEVAL_MODE=off` — инструмента нет, всё как раньше. Эмбеддинг вопроса ждём ≤ `EMBEDDING_QUERY_TIMEOUT_S` (1 с),
+  дальше — только полнотекст.
+- **Eval** — `uv run python -m eval.run_eval --chat --questions eval/rag_questions.yaml --database-url <postgres>`:
+  временная БД на этом сервере (миграции, сид, индексация), вопросы через агента; `expect_source: document:<slug>`
+  засчитывает любой фрагмент документа.
+
 ### Google-таблица (шаг 3.3)
 
 1. Создайте таблицу с тремя вкладками: **Факты**, **Места**, **Кнопки** (имена меняются через
@@ -526,18 +567,20 @@ app/
   prompts.py       промпты и тексты отказов
   lang.py          определение языка ru/kk/en
   text.py          очистка для TTS, разбиение на фразы ≤ 300 символов
-  llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
+  llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py;
+                   эмбеддинги поиска — embeddings.py (OpenRouter, fake)
   speech/          STT/TTS: gemini_stt.py, openrouter.py, streaming.py (live STT), elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
   speech_api.py    эндпоинты /v1/stt, /v1/tts (и ?stream=true), WebSocket /v1/stt/stream
   live/            WS /v1/live на Pipecat: session.py (подключение, пайплайн), conversation.py (ход, перебивание),
                    services.py (Silero, smart-turn, ElevenLabs), playout.py (часы воспроизведения, эхо), protocol.py
   metrics.py       LatencyRecorder: тайминги этапов → latency_events (фоном, без текстов)
   metrics_api.py   POST /v1/metrics/turn, GET /v1/admin/metrics, страница metrics_page.html
-  knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML
+  knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML; поиск: документы
+                   (documents.py), фрагменты (chunks.py), индексация (index.py), гибридный поиск (search.py)
   db/              engine, модели всех таблиц (models.py), репозитории (repos.py), Alembic (migrate.py)
-  cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|status, export-csv, openapi, check-kb
-migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted; 0003 — latency_events)
-knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
-eval/              questions.yaml + run_eval.py (шаг 3.8)
+  cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|index|status, export-csv, openapi, check-kb
+migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted; 0003 — latency_events; 0004 — documents.slug, kb_chunks для поиска)
+knowledge/         база знаний (примеры) + documents/ (длинные документы для поиска) + sheet_template/ (CSV-шаблоны)
+eval/              questions.yaml + run_eval.py (шаг 3.8; --chat — через агента, --database-url — с поиском)
 tests/             pytest
 ```

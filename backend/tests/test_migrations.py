@@ -13,6 +13,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app.db import FeedbackRepo, QuestionLogRepo, make_engine
 from app.db.migrate import alembic_config, current_revision, head_revision, upgrade_head
@@ -91,7 +92,7 @@ def test_upgrade_from_empty_db_is_idempotent_and_matches_models():
     with temp_database() as url:
         upgrade_head(url)
         upgrade_head(url)  # повторно — без ошибок и изменений
-        assert current_revision(url) == head_revision() == "0003_latency_events"
+        assert current_revision(url) == head_revision() == "0004_rag_chunks"
         tables = set(inspect(create_engine(url)).get_table_names())
         assert tables >= EXPECTED_TABLES
         assert _diff(url) == []  # модели и миграции совпадают
@@ -134,6 +135,42 @@ def test_kb_chunks_vector_and_generated_tsv_work(db):
             {"v": vec},
         ).one()
         assert hit[0] == "wifi" and hit[1] == pytest.approx(0, abs=1e-6)
+
+
+def test_rag_schema_0004_keys_defaults_and_tsv_over_title(db):
+    """documents.slug уникален, source='yaml'; фрагмент: chunk_no=0, is_active, уникальный ключ,
+    lang обязателен, полнотекст — по заголовку и тексту."""
+    chunk = (
+        "INSERT INTO kb_chunks (source_type, source_id, lang, chunk_no, title, content, content_hash) "
+        "VALUES ('document', 'orbita', 'ru', 1, 'Зефирный раздел', 'Текст про сад', 'h')"
+    )
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO documents (slug, title, content, content_hash) VALUES ('orbita', 'T', 'c', 'h')"
+            )
+        )
+        assert conn.execute(text("SELECT source, is_active FROM documents")).one() == ("yaml", True)
+        conn.execute(text(chunk))
+        conn.execute(
+            text(
+                "INSERT INTO kb_chunks (source_type, source_id, lang, content, content_hash) "
+                "VALUES ('fact', 'wifi', 'ru', 'Пароль', 'h')"
+            )
+        )
+        rows = conn.execute(
+            text("SELECT source_id, chunk_no, is_active, tsv::text FROM kb_chunks ORDER BY id")
+        ).all()
+    assert [(r[0], r[1], r[2]) for r in rows] == [("orbita", 1, True), ("wifi", 0, True)]
+    assert "'зефирный'" in rows[0][3] and "'сад'" in rows[0][3]
+    for sql in (
+        chunk,  # тот же ключ (source_type, source_id, lang, chunk_no)
+        "INSERT INTO documents (slug, title, content, content_hash) VALUES ('orbita', 'T2', 'c', 'h')",
+        "INSERT INTO kb_chunks (source_type, source_id, content, content_hash) VALUES ('fact', 'x', 'c', 'h')",
+        "INSERT INTO documents (slug, title, content, content_hash, source) VALUES ('x', 'T', 'c', 'h', 'web')",
+    ):
+        with pytest.raises(IntegrityError), db.begin() as conn:
+            conn.execute(text(sql))
 
 
 def test_upgrade_over_old_question_log_keeps_data():
