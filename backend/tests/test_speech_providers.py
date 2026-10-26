@@ -557,4 +557,5 @@ def test_laugh_word_becomes_real_laughter_on_tag_models_and_is_dropped_for_flash
     assert v.tag_text("eleven_v4_turbo", "Хабар бар.") == "[cheerfully] Хабар бар."  # не смех
     assert v.tag_text("eleven_flash_v2_5", "Ха-ха! Кофе я не пью.") == "Кофе я не пью."
     assert v.tag_text("eleven_flash_v2_5", "Ха-ха!") == "Ха-ха!"  # кроме смеха ничего — как есть
+    assert v.tag_text("eleven_v4_turbo", "Haha!") == "[cheerfully] Haha!"  # пусто после тегов — ElevenLabs 400
     assert "laugh=1" in v.signature("eleven_v4_turbo")  # старый кеш аудио со смехом не подхватится

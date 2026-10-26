@@ -93,9 +93,12 @@ class VoiceSettings:
 
 
 def _laughs(text: str, tags: bool) -> str:
-    """Смех-слово → тег смеха (модели с тегами) или ничего (flash); пустой результат — исходный текст."""
+    """Смех-слово → тег смеха (модели с тегами) или ничего (flash); пустой результат — исходный текст.
+    Фраза из одного смеха («Haha!») остаётся словом: ElevenLabs отклоняет текст, где после тегов пусто (400)."""
     if tags:
         out = _CHUCKLE.sub("[chuckles]", _LAUGH.sub("[laughs]", text))
+        if not re.search(r"\w", re.sub(r"\[[^\]]*\]", "", out)):
+            return text
     else:
         out = _CHUCKLE.sub("", _LAUGH.sub("", text))
         out = re.sub(r"^[\s,.!…-]+", "", out)
