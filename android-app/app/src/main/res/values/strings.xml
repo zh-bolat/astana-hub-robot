@@ -56,4 +56,10 @@
     <string name="action_menu">Меню</string>
     <string name="action_face">К роботу</string>
     <string name="face_hint">Скажите вопрос, я слушаю</string>
+    <!-- Экран 2 (M3): чат, подпись-источник, голос. -->
+    <string name="chat_source">Источник: %1$s</string>
+    <string name="chat_sources">Источники: %1$s</string>
+    <string name="action_ask_voice">Спросить голосом</string>
+    <string name="chat_you">Вы</string>
+    <string name="tiles_title">Быстрые вопросы</string>
 </resources>

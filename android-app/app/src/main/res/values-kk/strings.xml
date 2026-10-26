@@ -47,4 +47,9 @@
     <string name="action_menu">Мәзір</string>
     <string name="action_face">Роботқа</string>
     <string name="face_hint">Сұрағыңызды айтыңыз, тыңдап тұрмын</string>
+    <string name="chat_source">Дереккөз: %1$s</string>
+    <string name="chat_sources">Дереккөздер: %1$s</string>
+    <string name="action_ask_voice">Дауыспен сұрау</string>
+    <string name="chat_you">Сіз</string>
+    <string name="tiles_title">Жылдам сұрақтар</string>
 </resources>
