@@ -24,6 +24,7 @@
     <string name="diag_robot" translatable="false">Робот: RobotApi, карта, места</string>
     <string name="diag_dump_places" translatable="false">getPlaceList</string>
     <string name="diag_dump_pose" translatable="false">getPosition</string>
+    <string name="diag_costume" translatable="false">Костюм робота на странице приложения</string>
     <string name="diag_head" translatable="false">Голова: мотор и слежение (RobotApi напрямую)</string>
     <string name="diag_head_nod" translatable="false">Кивок ±15°</string>
     <string name="diag_head_left" translatable="false">Влево 30° (h +30)</string>

@@ -123,6 +123,9 @@ class AppContainer(app: Application) {
     /** Режим разговора: agent (`/v1/chat`), legacy или live (`WS /v1/live`); меняется на экране диагностики. */
     val chatSettings = ChatSettings(app, ChatMode.fromCode(BuildConfig.CHAT_MODE) ?: ChatMode.AGENT)
 
+    /** Костюм робота-компаньона на странице приложения (только вид). */
+    val costume = kz.astanahub.robot.ui.screen.CostumeSettings(app)
+
     /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
     val backendUrlPolicy = BackendUrlPolicy.fromBuildConfig(
         backendUrl = BuildConfig.BACKEND_URL,

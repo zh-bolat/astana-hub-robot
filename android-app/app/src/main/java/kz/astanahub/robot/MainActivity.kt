@@ -199,6 +199,8 @@ class MainActivity : AppCompatActivity() {
         val reduced = !ValueAnimator.areAnimatorsEnabled()
         face = FaceController(container.audioLevels, reducedMotion = reduced)
         two.reducedMotion = reduced
+        // Костюм робота-компаньона (только вид) — выбор в диагностике, применяется сразу.
+        lifecycleScope.launch { container.costume.costume.collect { two.costume = it } }
         two.textInput = !BuildConfig.IS_ROBOT
         two.diagnosticsHold = container.diagnostics.access != DiagAccess.DISABLED
         two.buildLabel = getString(
@@ -434,6 +436,7 @@ class MainActivity : AppCompatActivity() {
         stopped = str(R.string.island_stopped, lang),
         meters = str(R.string.island_meters, lang),
         near = str(R.string.island_near, lang),
+        follow = str(R.string.guide_follow, lang),
     )
 
     private fun texts(lang: Lang) = ScreenTexts(
@@ -456,6 +459,7 @@ class MainActivity : AppCompatActivity() {
         exitNo = str(R.string.exit_no, lang),
         sourceOne = str(R.string.chat_source, lang),
         sourceMany = str(R.string.chat_sources, lang),
+        back = str(R.string.action_back, lang),
     )
 
     private fun statusRes(phase: Phase): Int = when (phase) {
@@ -527,7 +531,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
-        val FONTS = intArrayOf(R.font.inter_regular, R.font.inter_medium, R.font.inter_semibold, R.font.inter_bold)
+        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
         const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L

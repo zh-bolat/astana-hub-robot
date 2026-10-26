@@ -180,12 +180,12 @@ object FaceLayout {
     const val HEIGHT = 790f
 
     /** Центры глаз: ±[EYE_X] от центра, на [EYE_Y] (выше центра — отрицательно). */
-    const val EYE_X = 250f
-    const val EYE_Y = -40f
+    const val EYE_X = 219f
+    const val EYE_Y = 0f
 
     /** Сдвиг глаз при взгляде в край (|gaze| = 1). */
-    const val GAZE_RANGE_X = 95f
-    const val GAZE_RANGE_Y = 70f
+    const val GAZE_RANGE_X = 70f
+    const val GAZE_RANGE_Y = 48f
 
     /** Брови: от верхнего края глаза до средней линии брови. */
     const val BROW_GAP = 64f
@@ -198,7 +198,7 @@ object FaceLayout {
     const val MOUTH_FOLLOW = 0.3f
 
     /** Толщина штрихов (бровь, рот, контур глаза). */
-    const val STROKE = 26f
+    const val STROKE = 34f
 
     /** Перспектива взгляда в сторону: дальний глаз меньше на эту долю. */
     const val PERSPECTIVE = 0.07f

@@ -261,6 +261,8 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         }
 
+        section("Костюм") { bindCostumes() }
+
         section("Голова") { HeadDiagPanel(binding, container, lifecycleScope, lifecycle).bind() }
 
         section("Точки карты и журнал навигации") {
@@ -615,6 +617,28 @@ class DiagnosticsActivity : AppCompatActivity() {
      * Блок настройки экрана: ошибка одного виджета не роняет приложение (на роботе падение = выброс из киоска),
      * а попадает в лог диагностики, чтобы её было видно.
      */
+    /** Костюм робота-компаньона (только вид): кнопки, выбранный — с точкой. */
+    private fun bindCostumes() {
+        val row = binding.costumeRow
+        row.removeAllViews()
+        val current = container.costume.costume.value
+        kz.astanahub.robot.ui.screen.Costume.entries.forEach { c ->
+            val b = MaterialButton(this).apply {
+                text = (if (c == current) "● " else "") + c.label
+                textSize = 20f
+                isAllCaps = false
+                setOnClickListener {
+                    container.costume.set(c)
+                    log("Костюм: ${c.label}")
+                    bindCostumes()
+                }
+            }
+            row.addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = (12 * resources.displayMetrics.density).toInt()
+            })
+        }
+    }
+
     private inline fun section(name: String, block: () -> Unit) {
         try {
             block()

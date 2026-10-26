@@ -235,6 +235,14 @@
                 <Button android:id="@+id/refreshPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_refresh_places" />
             </LinearLayout>
 
+            <!-- Костюм робота-компаньона на странице приложения (только вид). -->
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_costume" />
+
+            <LinearLayout
+                android:id="@+id/costumeRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
             <!-- Голова: мотор и слежение напрямую через RobotApi; ответы SDK — здесь и в журнале навигации. -->
             <TextView android:id="@+id/headLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_head" />
 

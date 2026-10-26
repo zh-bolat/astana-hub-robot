@@ -127,9 +127,9 @@ class TransitionGesture(private val lockedPeek: Float = LOCKED_PEEK) {
 object FaceMorph {
 
     /** Видимое лицо на холсте [FaceLayout] (глаза со взглядом, брови, рот): ширина, высота, центр по y. */
-    const val CONTENT_WIDTH = 840f
-    const val CONTENT_HEIGHT = 480f
-    const val CONTENT_CENTER_Y = 22f
+    const val CONTENT_WIDTH = 875f
+    const val CONTENT_HEIGHT = 437f
+    const val CONTENT_CENTER_Y = 0f
 
     data class Transform(val scale: Float, val translationX: Float, val translationY: Float)
 
