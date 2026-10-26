@@ -361,11 +361,11 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
 .ind .face::after { background: radial-gradient(closest-side, rgba(255,255,255,.95), rgba(255,255,255,0)) !important; opacity: .7; }
 .ind .eye { display: none !important; }
 .ind .scr { position: absolute; left: 50%; top: 50%; width: 200px; height: 100px; margin: -50px 0 0 -100px; color: #1438D8; overflow: visible; filter: drop-shadow(0 2px 4px rgba(20,56,216,.25)); }
-.ind .scr .eyes { transform-box: fill-box; transform-origin: center; }
-.ind .scr .anim { animation: exprIn .22s ease-out; transform-box: view-box; transform-origin: 100px 50px; }
-@keyframes exprIn { from { opacity: .2; transform: scale(.85); } }
-.ind.blink .scr .eyes.bl { animation: sblink .18s ease-in-out 1; }
-@keyframes sblink { 50% { transform: scaleY(.1); } }
+.ind .scr .eyes { transform-box: fill-box; transform-origin: center; translate: var(--lx, 0px) var(--ly, 0px); transition: translate .55s cubic-bezier(.3,.7,.3,1); }
+.ind .scr .anim { animation: exprIn .3s cubic-bezier(.3,1.4,.5,1); transform-box: view-box; transform-origin: 100px 50px; }
+@keyframes exprIn { 0% { opacity: .5; transform: scale(1.04, .08); } 55% { opacity: 1; transform: scale(.98, 1.06); } 100% { transform: none; } }
+.ind.blink .scr .eyes.bl { animation: sblink .22s ease-in-out 1; }
+@keyframes sblink { 0%, 100% { transform: scaleY(1); } 45%, 55% { transform: scale(1.04, .08); } }
 .ind.speak .scr .eyes { animation: bob .45s ease-in-out infinite alternate; }
 @keyframes bob { to { transform: translateY(-3px) scaleY(.92); } }
 .ind.think .scr .dots circle { animation: dotp 1.2s infinite; }
@@ -478,7 +478,7 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
 .ind .scr { color: #3AA8F5 !important; filter: drop-shadow(0 0 6px rgba(58,168,245,.85)) drop-shadow(0 0 18px rgba(40,140,240,.45)) !important; }
 .ind .scr[data-x="love"] { filter: drop-shadow(0 0 6px rgba(255,60,80,.9)) drop-shadow(0 0 18px rgba(255,40,70,.5)) !important; }
 .ind.speak .scr .eyes { animation: talk .32s ease-in-out infinite alternate !important; }
-@keyframes talk { from { transform: scaleY(1); } to { transform: scaleY(.78); } }
+@keyframes talk { 0% { transform: scale(1, 1); } 100% { transform: scale(1.03, .9); } }
 
 /* companion robot on the white pages: white head with a black screen, neck, body, arms */
 .ind.bot { width: 340px !important; height: 390px !important; }
@@ -511,6 +511,105 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
 @keyframes bodyIn { from { opacity: 0; transform: translateY(-50px) scale(.8); } }
 @keyframes armIn { from { opacity: 0; transform: rotate(0deg) scale(.4); } }
 .ind.bot ~ .state-label { margin-top: -8px; }
+
+/* ===== v9: the face page shows only the face; a swipe opens the app ===== */
+.face-layer > .face-top, .face-layer > .face-status, .face-layer > .face-heard, .face-layer > .face-sub, .face-layer > .face-chips, .face-layer > .face-bottom { display: none !important; }
+.face-layer { padding-top: 0 !important; justify-content: center; cursor: grab; touch-action: none; user-select: none; }
+.face-layer.dragging { cursor: grabbing; }
+.ind.face-ind, .ind.idle-ind { width: 1040px !important; height: 520px !important; }
+.ind.face-ind .scr, .ind.idle-ind .scr { width: 1000px !important; height: 500px !important; margin: -250px 0 0 -500px !important; }
+.swipe-bar { position: absolute !important; left: 50%; bottom: 26px; width: 150px; height: 6px; margin-left: -75px; border-radius: 3px; background: rgba(255,255,255,.22); animation: barHint 3.2s ease-in-out infinite; }
+@keyframes barHint { 0%, 70%, 100% { transform: translateY(0); opacity: .22; } 82% { transform: translateY(-8px); opacity: .45; } }
+
+/* ===== robot costumes: classic, galaxy, Kazakh (shapan, takiya, dombra), business ===== */
+.bot-body { overflow: hidden; }
+.bot-body .sk { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+.bot-slot { z-index: 1; }
+.bot-x { display: none; position: absolute; pointer-events: none; }
+.stage.skin-galaxy .sk-galaxy, .stage.skin-kazakh .sk-kazakh, .stage.skin-business .sk-business { display: block; }
+.stage.skin-galaxy .bot-slot, .stage.skin-kazakh .bot-slot, .stage.skin-business .bot-slot { display: none; }
+/* galaxy */
+.stage.skin-galaxy .bot-arm { background: linear-gradient(90deg, #1C1560, #3A2CA8 50%, #1C1560) !important; }
+.stage.skin-galaxy .bot-neck { background: linear-gradient(180deg, #3A2CA8, #1C1560) !important; }
+.stage.skin-galaxy .sk-orbit { display: block; left: -40px; top: 70px; width: 420px; height: 130px; }
+.sk-orbit .orb-ring { position: absolute; inset: 0; border-radius: 50%; border: 3px solid rgba(110,90,255,.75); transform: rotate(-12deg); box-shadow: 0 0 14px rgba(110,90,255,.45), inset 0 0 10px rgba(110,90,255,.3); }
+.sk-orbit .moon { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #FFE3B5, #FF9F43); box-shadow: 0 0 10px rgba(255,170,80,.7); animation: moonOrbit 7s linear infinite; }
+@keyframes moonOrbit {
+  0% { left: 50%; top: 92%; z-index: 3; } 12.5% { left: 86%; top: 74%; } 25% { left: 100%; top: 38%; } 37.5% { left: 86%; top: 6%; z-index: 3; }
+  38% { z-index: -1; } 50% { left: 50%; top: -2%; z-index: -1; } 62.5% { left: 14%; top: 18%; } 75% { left: 0%; top: 54%; z-index: -1; } 76% { z-index: 3; } 87.5% { left: 14%; top: 86%; } 100% { left: 50%; top: 92%; z-index: 3; } }
+.sk-orbit .tw { position: absolute; color: #8FA6FF; font-size: 22px; text-shadow: 0 0 8px rgba(140,160,255,.9); animation: twinkle 2.6s ease-in-out infinite; }
+.sk-orbit .t1 { left: 8%; top: -60%; } .sk-orbit .t2 { left: 92%; top: -40%; font-size: 16px; animation-delay: -1s; } .sk-orbit .t3 { left: 96%; top: 120%; font-size: 14px; animation-delay: -1.8s; }
+.stage.skin-galaxy .face-layer, .stage.skin-galaxy #idleLayer { background:
+  radial-gradient(1.5px 1.5px at 10% 20%, rgba(255,255,255,.8) 50%, transparent 51%), radial-gradient(1px 1px at 26% 72%, rgba(255,255,255,.7) 50%, transparent 51%),
+  radial-gradient(1.5px 1.5px at 58% 12%, rgba(200,215,255,.8) 50%, transparent 51%), radial-gradient(1px 1px at 72% 84%, rgba(255,255,255,.6) 50%, transparent 51%),
+  radial-gradient(2px 2px at 90% 36%, rgba(255,255,255,.8) 50%, transparent 51%), radial-gradient(1px 1px at 40% 40%, rgba(255,255,255,.5) 50%, transparent 51%),
+  radial-gradient(900px 600px at 50% 50%, #0E0B2E 0%, #000 70%) !important; }
+/* Kazakh */
+.stage.skin-kazakh .bot-arm { background: linear-gradient(180deg, #A8264E 0 76%, #E8B54A 76% 88%, #7A1736 88%) !important; }
+.stage.skin-kazakh .sk-hat { display: block; left: 70px; top: -46px; width: 172px; height: 82px; z-index: 3; filter: drop-shadow(0 6px 8px rgba(20,20,60,.25)); }
+.stage.skin-kazakh .sk-dombra { display: block; left: 214px; top: 168px; width: 64px; height: 196px; transform: rotate(-30deg); transform-origin: 50% 60%; filter: drop-shadow(0 6px 10px rgba(60,30,10,.25)); }
+.stage.skin-kazakh .bot-arm.r { z-index: 2; }
+.stage.skin-kazakh .ind.speak .bot-arm.r { animation: strum .5s ease-in-out infinite alternate !important; }
+@keyframes strum { to { transform: rotate(-26deg); } }
+/* business */
+.stage.skin-business .bot-arm { background: linear-gradient(180deg, #2B3A5E 0 80%, #FFFFFF 80% 90%, #2B3A5E 90%) !important; }
+.stage.skin-business .bot-neck { background: linear-gradient(180deg, #F2F4F8, #CDD3DE) !important; }
+.stage.skin-business .sk-headset { display: block; right: -30px; top: 64px; width: 60px; height: 78px; z-index: 3; }
+/* the robot assembles with its outfit */
+.ind.bot.leaving .bot-x { opacity: 0; transition: opacity .18s ease; }
+.ind.bot.assemble .bot-x { animation: partIn .5s .3s ease-out both; }
+.stage.skin-kazakh .ind.bot.assemble .sk-dombra { animation: dombraIn .55s .3s cubic-bezier(.3,1.3,.5,1) both; }
+@keyframes dombraIn { from { opacity: 0; transform: rotate(-60deg) translateY(30px); } }
+/* costume picker under the robot */
+.skins { display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: #fff; border: 1px solid #D6E2F5; }
+.skin-btn { height: 44px; padding: 0 12px 0 6px; border: 0; border-radius: 999px; background: transparent; font: 600 17px var(--font); color: #33405C; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.skin-btn i { width: 30px; height: 30px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.skin-btn[data-k="default"] i { background: radial-gradient(circle at 35% 30%, #fff, #D9DEE7); }
+.skin-btn[data-k="galaxy"] i { background: radial-gradient(circle at 70% 30%, #FFB25E 0 18%, transparent 20%), radial-gradient(circle at 35% 35%, #6A5BE8, #110C3F); }
+.skin-btn[data-k="kazakh"] i { background: linear-gradient(135deg, #A8264E 0 55%, #E8B54A 55% 70%, #5E0F29 70%); }
+.skin-btn[data-k="business"] i { background: linear-gradient(90deg, #2B3A5E 0 38%, #fff 38% 44%, #1E4FFF 44% 56%, #fff 56% 62%, #2B3A5E 62%); }
+.skin-btn[aria-pressed="true"] { background: #EAF1FF; color: #1E4FFF; box-shadow: inset 0 0 0 1.5px #1E4FFF; }
+.left.subs .skins { display: none; }
+
+/* costume swipe: dots + name under the robot; the robot (with any hat) fits inside the page */
+.ind.bot { margin-top: 64px; cursor: grab; }
+.left { gap: 18px !important; justify-content: center; }
+.skin-dots { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.dots4 { display: flex; gap: 10px; }
+.dots4 b { width: 10px; height: 10px; border-radius: 5px; background: #CBD6EA; transition: width .3s cubic-bezier(.3,1.3,.5,1), background-color .3s; cursor: pointer; }
+.dots4 b.on { width: 28px; background: #1E4FFF; }
+.skin-name { font: 600 20px var(--font); color: #5B6475; }
+.left.subs .skin-dots { display: none; }
+/* dombra in the robot's right hand (viewer's left) */
+.stage.skin-kazakh .sk-dombra { left: 54px !important; top: 168px !important; transform: rotate(30deg) !important; }
+.stage.skin-kazakh .bot-arm.l { z-index: 2; }
+.stage.skin-kazakh .bot-arm.r { z-index: auto; }
+.stage.skin-kazakh .ind.speak .bot-arm.r { animation: wave 1.2s ease-in-out infinite !important; }
+.stage.skin-kazakh .ind.speak .bot-arm.l { animation: strumL .5s ease-in-out infinite alternate !important; }
+@keyframes strumL { to { transform: rotate(26deg); } }
+@keyframes dombraIn { from { opacity: 0; transform: rotate(60deg) translateY(30px); } }
+
+/* the robot stands out from the white page: soft blue halo behind, ground shadow, crisper shading */
+.ind.bot::before { content: ""; position: absolute; left: -70px; top: -50px; width: 480px; height: 480px; border-radius: 50%; z-index: -1; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(61,139,255,.30), rgba(110,198,255,.16) 55%, rgba(110,198,255,0)); }
+.ind.bot::after { content: ""; position: absolute; left: 70px; top: 356px; width: 200px; height: 34px; border-radius: 50%; z-index: -1; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(20,40,110,.30), rgba(20,40,110,0)); }
+.bot-shell { background: radial-gradient(circle at 34% 22%, #FFFFFF 0%, #F1F4F9 42%, #D5DCE8 82%, #BCC6D8 100%) !important;
+  box-shadow: inset 0 -12px 20px rgba(20,40,110,.16), inset 0 4px 8px rgba(255,255,255,.95), 0 0 0 1px rgba(30,79,255,.10), 0 18px 34px rgba(20,40,110,.22) !important; }
+.bot-body { background: radial-gradient(circle at 36% 18%, #FFFFFF 0%, #EEF2F8 50%, #CDD5E3 100%) !important;
+  box-shadow: inset 0 -12px 20px rgba(20,40,110,.14), 0 0 0 1px rgba(30,79,255,.08), 0 14px 26px rgba(20,40,110,.18) !important; }
+.bot-arm { background: linear-gradient(90deg, #D3DAE6, #FFFFFF 45%, #CFD7E4) !important; box-shadow: 0 0 0 1px rgba(30,79,255,.08), 0 8px 16px rgba(20,40,110,.14) !important; }
+.ind.bot.leaving::before, .ind.bot.leaving::after { opacity: 0; transition: opacity .18s; }
+
+/* screensaver greeting: one language at a time, ~7 s each, soft fade */
+.saver-line { transition: opacity .6s ease, transform .6s ease; }
+.saver-line.out { opacity: 0 !important; transform: translateY(10px); }
+#saverSub { transition-delay: .12s; }
+
+/* screensaver: eyes exactly in the middle of the screen, greeting at the bottom */
+#idleLayer > .ind.idle-ind { position: absolute !important; left: 50%; top: 50%; margin: -260px 0 0 -520px !important; }
+#idleLayer > #saverHi { position: absolute !important; left: 0; right: 0; bottom: 104px; margin: 0; }
+#idleLayer > #saverSub { position: absolute !important; left: 0; right: 0; bottom: 54px; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .stage *, .stage *::before, .stage *::after { animation: none !important; transition: none !important; } }
 /* boxes lighter than bg */
 .tile, .answer, .row, .exit-card { background: linear-gradient(180deg, #FFFFFF 0%, #FBFDFF 100%) !important; border-color: rgba(60,100,200,.08) !important; border-width: 1px; box-shadow: 0 1px 2px rgba(30,50,110,.05), 0 6px 18px rgba(30,60,140,.08) !important; }
@@ -520,7 +619,7 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
 
 <div class="page">
   <h1>Робот-гид Astana Hub: прототип экрана</h1>
-  <p class="lead">Версия 4: главная страница целиком лицо робота (чёрный экран, голубые глаза, мимика с листа эмоций). Касание открывает белые страницы приложения, а лицо сжимается и собирается в робота слева. Поведение как в main: Робот отвечает с лицом на весь экран, касание лица открывает привычную страницу, а речь продолжается. Выйти из приложения можно только по PIN сотрудника. Нажимайте на экран как на сенсорный, голос и подход посетителя имитирует панель ниже.</p>
+  <p class="lead">Версия 4: главная страница целиком лицо робота (чёрный экран, голубые глаза, мимика с листа эмоций). На странице с лицом только мимика. Свайп по лицу (мышкой: потяните его) сжимает его в робота слева и открывает белые страницы приложения. Поведение как в main: Робот отвечает с лицом на весь экран, свайп по лицу открывает привычную страницу, а речь продолжается. Выйти из приложения можно только по PIN сотрудника. Нажимайте на экран как на сенсорный, голос и подход посетителя имитирует панель ниже.</p>
 
   <div class="frame" id="frame">
     <div class="stage" id="stage">
@@ -544,6 +643,7 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
       <div class="main">
         <aside class="left">
           <div class="ind" id="ind"><div class="ring"></div><div class="ring r2"></div><div class="arc"></div><div class="face"><div class="eye"></div><div class="eye"></div></div><div class="q">?</div><span class="spark s1"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span><span class="spark s2"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span><span class="spark s3"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span></div>
+          <div class="skin-dots" id="skinDots" aria-live="polite"><span class="dots4"><b data-k="default"></b><b data-k="galaxy"></b><b data-k="kazakh"></b><b data-k="business"></b></span><span class="skin-name" id="skinName"></span></div>
           <div class="state-label" id="stateLabel"></div>
           <div class="heard" id="heard"></div>
           <div class="sub" id="sub" hidden aria-live="polite"><p id="subText"></p></div>
@@ -571,14 +671,15 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
         <div class="face-heard" id="faceHeard"></div>
         <p class="face-sub" id="faceSub" aria-live="polite"></p>
         <div class="face-chips" id="faceChips"></div>
+        <div class="swipe-bar" aria-hidden="true"></div>
         <div class="face-bottom"><div id="fb-left"></div><div id="fb-center"></div><div id="fb-right"></div></div>
       </div>
 
       <div class="layer" id="idleLayer" hidden>
         <div class="sky3"></div>
         <div class="ind idle-ind" id="ind2"><div class="ring"></div><div class="ring r2"></div><div class="arc"></div><div class="face"><div class="eye"></div><div class="eye"></div></div><div class="q">?</div><span class="spark s1"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span><span class="spark s2"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span><span class="spark s3"><svg viewBox="0 0 24 24"><path d="M12 0C12.9 7.4 16.6 11.1 24 12C16.6 12.9 12.9 16.6 12 24C11.1 16.6 7.4 12.9 0 12C7.4 11.1 11.1 7.4 12 0Z"/></svg></span></div>
-        <p class="big">Здравствуйте! Сәлеметсіз бе! Hello!</p>
-        <p class="small">Подойдите и спросите · Жақындап, сұраңыз · Come closer and ask</p>
+        <p class="big saver-line" id="saverHi">Здравствуйте!</p>
+        <p class="small saver-line" id="saverSub">Подойдите и спросите</p>
       </div>
 
       <div class="layer guide-layer" id="guideLayer" hidden>
@@ -668,7 +769,7 @@ const T = {
     goTo: 'Иду к: ', follow: 'Следуйте за мной', arrived: 'Мы на месте!', arrivedSub: 'Если нужно что-то ещё, просто спросите.',
     offline: 'Нет связи с сервером. Дорогу подскажу и без интернета.', miss1: 'Не расслышал. Повторите, пожалуйста.', miss2: 'Давайте так: выберите тему на экране.',
     whereAsk: 'Куда вас проводить? Выберите место или назовите его.', snapshot: 'снимок с камеры', page: 'стр.',
-    back: 'Назад', exit: 'Выйти из приложения', exitQ: 'Выйти из приложения?', exitSub: 'Робот перестанет отвечать посетителям.', exitYes: 'Выйти', exitNo: 'Остаться', closedT: 'Приложение закрыто', closedSub: 'На роботе здесь будет обычный экран Android.', reopen: 'Открыть снова',
+    back: 'Назад', exit: 'Выйти из приложения', exitQ: 'Выйти из приложения?', exitSub: 'Робот перестанет отвечать посетителям.', exitYes: 'Выйти', exitNo: 'Остаться', closedT: 'Приложение закрыто', closedSub: 'На роботе здесь будет обычный экран Android.', reopen: 'Открыть снова', skinDefault: 'Обычный', skinGalaxy: 'Космос', skinKazakh: 'Казахский', skinBusiness: 'Деловой',
     pinSub: 'Выйти может только сотрудник. Введите PIN.', pinWrong: 'Неверный PIN. Осталось попыток: ', pinLocked: 'Слишком много попыток. Попробуйте через 5 мин.', erase: 'Стереть',
     menu: 'Меню', faceHint: 'Скажите вопрос, я слушаю', tapHint: 'Коснитесь экрана, чтобы открыть меню', hello: 'Здравствуйте! Я помощник Astana Hub. Спросите меня о хабе или куда пройти.' },
   kk: { greetTitle: 'Сәлеметсіз бе! Қалай көмектесейін?', greetSub: 'Дауыспен сұраңыз немесе тақырып таңдаңыз', hint: 'Сұрағыңызды айтыңыз, мен тыңдап тұрмын',
@@ -679,7 +780,7 @@ const T = {
     goTo: 'Бағытымыз: ', follow: 'Менің артымнан жүріңіз', arrived: 'Келдік!', arrivedSub: 'Тағы бірдеңе керек болса, сұраңыз.',
     offline: 'Серверге қосылым жоқ. Жолды интернетсіз де көрсетемін.', miss1: 'Естімей қалдым. Қайталаңызшы.', miss2: 'Онда экраннан тақырып таңдаңыз.',
     whereAsk: 'Сізді қайда апарайын? Орынды таңдаңыз немесе атаңыз.', snapshot: 'камерадан сурет', page: 'бет',
-    back: 'Артқа', exit: 'Қолданбадан шығу', exitQ: 'Қолданбадан шығу керек пе?', exitSub: 'Робот келушілерге жауап беруді тоқтатады.', exitYes: 'Шығу', exitNo: 'Қалу', closedT: 'Қолданба жабылды', closedSub: 'Роботта мұнда кәдімгі Android экраны болады.', reopen: 'Қайта ашу',
+    back: 'Артқа', exit: 'Қолданбадан шығу', exitQ: 'Қолданбадан шығу керек пе?', exitSub: 'Робот келушілерге жауап беруді тоқтатады.', exitYes: 'Шығу', exitNo: 'Қалу', closedT: 'Қолданба жабылды', closedSub: 'Роботта мұнда кәдімгі Android экраны болады.', reopen: 'Қайта ашу', skinDefault: 'Әдеттегі', skinGalaxy: 'Ғарыш', skinKazakh: 'Қазақша', skinBusiness: 'Іскер',
     pinSub: 'Тек қызметкер ғана шыға алады. PIN енгізіңіз.', pinWrong: 'PIN қате. Қалған әрекет саны: ', pinLocked: 'Әрекет тым көп. 5 мин кейін қайталаңыз.', erase: 'Өшіру',
     menu: 'Мәзір', faceHint: 'Сұрағыңызды айтыңыз, тыңдап тұрмын', tapHint: 'Мәзірді ашу үшін экранды түртіңіз', hello: 'Сәлеметсіз бе! Мен Astana Hub көмекшісімін. Хаб туралы немесе қайда бару керектігін сұраңыз.' },
   en: { greetTitle: 'Hello! How can I help?', greetSub: 'Ask by voice or pick a topic', hint: 'Just say your question, I am listening',
@@ -690,7 +791,7 @@ const T = {
     goTo: 'Heading to: ', follow: 'Follow me', arrived: 'We are here!', arrivedSub: 'If you need anything else, just ask.',
     offline: 'No connection to the server. I can still show you the way.', miss1: 'Sorry, I didn’t catch that. Please say it again.', miss2: 'Let’s try this: pick a topic on the screen.',
     whereAsk: 'Where should I take you? Pick a place or say its name.', snapshot: 'camera snapshot', page: 'page',
-    back: 'Back', exit: 'Exit the app', exitQ: 'Exit the app?', exitSub: 'The robot will stop answering visitors.', exitYes: 'Exit', exitNo: 'Stay', closedT: 'App closed', closedSub: 'On the robot, the regular Android screen appears here.', reopen: 'Open again',
+    back: 'Back', exit: 'Exit the app', exitQ: 'Exit the app?', exitSub: 'The robot will stop answering visitors.', exitYes: 'Exit', exitNo: 'Stay', closedT: 'App closed', closedSub: 'On the robot, the regular Android screen appears here.', reopen: 'Open again', skinDefault: 'Classic', skinGalaxy: 'Galaxy', skinKazakh: 'Kazakh', skinBusiness: 'Business',
     pinSub: 'Only staff can exit. Enter the PIN.', pinWrong: 'Wrong PIN. Attempts left: ', pinLocked: 'Too many attempts. Try again in 5 min.', erase: 'Erase',
     menu: 'Menu', faceHint: 'Just ask, I am listening', tapHint: 'Tap the screen to open the menu', hello: 'Hello! I am the Astana Hub assistant. Ask me about the hub or where to go.' }
 };
@@ -744,10 +845,10 @@ const hl = (x, cy, rx, ry) => `<ellipse cx="${x - rx * 0.36}" cy="${cy - ry * 0.
 const EXPR = {
   neutral: () => g(each(x => `<ellipse cx="${x}" cy="50" rx="18" ry="22" stroke="none"/>${hl(x, 50, 18, 22)}`), 'bl'),
   listen: () => g(each(x => `<ellipse cx="${x}" cy="50" rx="21" ry="26" stroke="none"/>${hl(x, 50, 21, 26)}`), 'bl'),
-  speak: () => g(each(x => `<ellipse cx="${x}" cy="50" rx="18" ry="19" stroke="none"/>${hl(x, 50, 18, 19)}`)),
+  speak: () => g(each(x => `<ellipse cx="${x}" cy="50" rx="18" ry="22" stroke="none"/>${hl(x, 50, 18, 22)}`)),
   think: () => g(each(x => `<rect x="${x - 17}" y="46" width="34" height="9" rx="2" stroke="none"/>`) + `<text x="180" y="34" text-anchor="middle" font-size="26" font-weight="800" font-family="Nunito, sans-serif" stroke="none">?</text>`),
   guide: () => g(each(x => `<ellipse cx="${x + 14}" cy="50" rx="18" ry="22" stroke="none"/>${hl(x + 14, 50, 18, 22)}`), 'bl'),
-  wide: () => g(each(x => `<circle cx="${x}" cy="52" r="19" stroke="none"/>${hl(x, 52, 19, 19)}`) + `<path d="M28 26 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" stroke="none"/>`),
+  wide: () => g(each(x => `<ellipse cx="${x}" cy="50" rx="21" ry="26" stroke="none"/>${hl(x, 50, 21, 26)}`) + `<path d="M28 26 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" stroke="none"/>`),
   happy: () => g(each(x => `<path d="M${x - 15} 58 L${x} 43 L${x + 15} 58" fill="none" stroke-width="8"/>`)),
   blush: () => `<defs><filter id="fz" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter></defs>`
     + `<ellipse cx="32" cy="70" rx="16" ry="8" fill="#FF2D3D" opacity=".7" filter="url(#fz)"/><ellipse cx="168" cy="70" rx="16" ry="8" fill="#FF2D3D" opacity=".7" filter="url(#fz)"/>`
@@ -769,9 +870,9 @@ const EXPR = {
 };
 const EXPR_NAMES = { neutral: 'обычное', listen: 'слушает', speak: 'говорит', think: 'думает', guide: 'ведёт', wide: 'смотрит', happy: '^ ^ радость', blush: 'смущение', love: 'сердечки', sparkle: 'восторг', bored: 'скука', squint: '> < ой', wink: 'подмигивает', confused: '? не понял', dizzy: 'кружится голова', sad: 'плачет', tired: 'устал', angry: 'сердится', yen: '¥ деньги', mask: 'маска', sleep: 'спит' };
 const IND_EXPR = { listen: 'listen', think: 'think', speak: 'speak', guide: 'guide', unclear: 'confused', look: 'wide' };
-let moodExpr = null, moodTimer = null;
+let moodExpr = null, moodTimer = null, idleExpr = 'neutral';
 function exprFor(el) {
-  if (el === ind2) return 'sleep';
+  if (el === ind2) return idleExpr;
   if (moodExpr) return moodExpr;
   const c = (el.className.match(/\b(listen|think|speak|guide|unclear|look)\b/) || [])[1];
   return IND_EXPR[c] || 'neutral';
@@ -786,7 +887,7 @@ function applyExpr() {
 function setMood(x, ms) { moodExpr = x; clearTimeout(moodTimer); applyExpr(); if (ms) moodTimer = setTimeout(() => { moodExpr = null; applyExpr(); }, ms); }
 const MOOD_FACE = { '🤔': 'confused', '👋': 'blush', '🎉': 'sparkle', '☕': 'happy', '🧭': 'happy', '📶': 'wide' };
 ind.className = 'ind bot';
-ind.innerHTML = '<div class="bot-arm l"></div><div class="bot-arm r"></div><div class="bot-neck"></div><div class="bot-body"><div class="bot-slot"></div></div><div class="bot-head"><div class="bot-shell"></div><div class="face"></div></div>';
+ind.innerHTML = '<div class="bot-arm l"></div><div class="bot-neck"></div><div class="bot-body"><div class="bot-slot"></div><svg class="sk sk-galaxy" viewBox="0 0 156 128" preserveAspectRatio="none" aria-hidden="true"><defs><radialGradient id="gxb" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#6A5BE8"/><stop offset=".55" stop-color="#2C1F86"/><stop offset="1" stop-color="#110C3F"/></radialGradient></defs><rect width="156" height="128" fill="url(#gxb)"/><g fill="#fff"><circle cx="22" cy="30" r="1.6"/><circle cx="40" cy="70" r="1.1"/><circle cx="130" cy="26" r="1.4"/><circle cx="118" cy="104" r="1.2"/><circle cx="60" cy="110" r="1.4"/><circle cx="98" cy="60" r="1"/><circle cx="16" cy="96" r="1"/><circle cx="140" cy="70" r="1.1"/></g><path d="M30 46 L52 38 L68 52 L84 44" stroke="#AFC2FF" stroke-width="1.2" fill="none" opacity=".8"/><g fill="#DDE6FF"><circle cx="30" cy="46" r="2.4"/><circle cx="52" cy="38" r="2"/><circle cx="68" cy="52" r="2.6"/><circle cx="84" cy="44" r="2"/></g><circle cx="114" cy="84" r="11" fill="#FFB25E"/><circle cx="110" cy="80" r="4" fill="#FFD49A" opacity=".7"/><ellipse cx="114" cy="84" rx="20" ry="5" fill="none" stroke="#FFE0B0" stroke-width="2" transform="rotate(-18 114 84)"/><circle cx="44" cy="92" r="6" fill="#6EC6FF"/><path d="M14 16 l1.5 4 4 1.5 -4 1.5 -1.5 4 -1.5 -4 -4 -1.5 4 -1.5z" fill="#FFF3B0"/></svg><svg class="sk sk-kazakh" viewBox="0 0 156 128" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="kzb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A8264E"/><stop offset="1" stop-color="#5E0F29"/></linearGradient><pattern id="kzz" width="12" height="10" patternUnits="userSpaceOnUse"><path d="M0 8 L6 2 L12 8" stroke="#5E0F29" stroke-width="1.6" fill="none"/></pattern></defs><rect width="156" height="128" fill="url(#kzb)"/><path d="M66 0 L78 40 L90 0 Z" fill="#F7F3EA"/><path d="M64 0 L58 128 M92 0 L98 128" stroke="#E8B54A" stroke-width="6"/><g fill="none" stroke="#E8B54A" stroke-width="2.2" stroke-linecap="round"><path d="M44 34 q-8 -8 -2 -14 q6 -4 8 4 M44 34 q8 -8 14 -2"/><path d="M112 34 q8 -8 2 -14 q-6 -4 -8 4 M112 34 q-8 -8 -14 -2"/><path d="M40 74 q-6 6 0 12 q6 4 8 -4"/><path d="M116 74 q6 6 0 12 q-6 4 -8 -4"/></g><rect x="0" y="112" width="156" height="16" fill="#E8B54A"/><rect x="0" y="114" width="156" height="12" fill="url(#kzz)"/></svg><svg class="sk sk-business" viewBox="0 0 156 128" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="bsb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2B3A5E"/><stop offset="1" stop-color="#141C33"/></linearGradient></defs><rect width="156" height="128" fill="url(#bsb)"/><path d="M56 0 L100 0 L78 62 Z" fill="#FFFFFF"/><path d="M73 4 L83 4 L85 12 L80 56 L76 56 L71 12 Z" fill="#1E4FFF"/><path d="M73 4 L83 4 L81 12 L75 12 Z" fill="#163BC2"/><path d="M56 0 L78 62 L60 40 L48 6 Z" fill="#1A2540"/><path d="M100 0 L78 62 L96 40 L108 6 Z" fill="#1A2540"/><path d="M56 0 L78 62 M100 0 L78 62" stroke="#3E5180" stroke-width="1.5"/><circle cx="78" cy="78" r="3" fill="#0B1222"/><circle cx="78" cy="96" r="3" fill="#0B1222"/><path d="M30 40 L44 40 L37 32 Z" fill="#FFFFFF"/><rect x="104" y="40" width="30" height="13" rx="2" fill="#FFFFFF"/><rect x="107" y="44" width="16" height="2.4" fill="#1E4FFF"/><rect x="107" y="48" width="22" height="2" fill="#C5CCDA"/></svg></div><svg class="bot-x sk-dombra" viewBox="0 0 70 210" aria-hidden="true"><defs><radialGradient id="dbg" cx="40%" cy="40%"><stop offset="0" stop-color="#E3A25E"/><stop offset="1" stop-color="#9A5723"/></radialGradient></defs><rect x="31" y="6" width="8" height="128" rx="3" fill="#6B3E1F"/><rect x="28" y="0" width="14" height="16" rx="3" fill="#4E2C14"/><circle cx="26" cy="6" r="3" fill="#E8D2A8"/><circle cx="44" cy="10" r="3" fill="#E8D2A8"/><path d="M35 112 C10 118 4 150 8 172 C12 198 58 198 62 172 C66 150 60 118 35 112 Z" fill="url(#dbg)" stroke="#7A4219" stroke-width="2"/><circle cx="35" cy="158" r="5" fill="#4E2C14"/><path d="M33 12 L33 186 M37 12 L37 186" stroke="#F3E6C8" stroke-width=".9"/><rect x="27" y="180" width="16" height="5" rx="2" fill="#4E2C14"/></svg><div class="bot-arm r"></div><div class="bot-head"><div class="bot-shell"></div><div class="face"></div><svg class="bot-x sk-headset" viewBox="0 0 70 90" aria-hidden="true"><circle cx="30" cy="30" r="20" fill="#1F2533"/><circle cx="30" cy="30" r="10" fill="#1E4FFF"/><path d="M30 50 Q34 78 6 82" stroke="#1F2533" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="6" cy="82" r="6" fill="#1F2533"/></svg><svg class="bot-x sk-hat" viewBox="0 0 160 76" aria-hidden="true"><defs><linearGradient id="tkg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A3C9A"/><stop offset="1" stop-color="#18235E"/></linearGradient></defs><path d="M8 66 Q8 8 80 6 Q152 8 152 66 Z" fill="url(#tkg)"/><g fill="none" stroke="#E8B54A" stroke-width="2.4" stroke-linecap="round"><path d="M80 14 q-14 6 -10 20 q6 8 10 0 q4 8 10 0 q4 -14 -10 -20"/><path d="M40 40 q-6 -10 4 -14 q8 0 4 10"/><path d="M120 40 q6 -10 -4 -14 q-8 0 -4 10"/></g><rect x="6" y="56" width="148" height="14" rx="4" fill="#E8B54A"/><path d="M12 63 h136" stroke="#8B1E3F" stroke-width="2.4" stroke-dasharray="6 5"/><circle cx="80" cy="7" r="5" fill="#E8B54A"/></svg></div><div class="bot-x sk-orbit" aria-hidden="true"><div class="orb-ring"></div><div class="moon"></div><span class="tw t1">✦</span><span class="tw t2">✦</span><span class="tw t3">✦</span></div>';
 ind2.innerHTML = '<div class="face"></div>';
 ind3.innerHTML = '<div class="face"></div>';
 document.querySelectorAll('.ind .face').forEach(f => f.insertAdjacentHTML('beforeend', '<svg class="scr" viewBox="0 0 200 100" aria-hidden="true"></svg>'));
@@ -1211,6 +1312,15 @@ function tileTap(k) {
 }
 
 /* language */
+/* costume: remembered in this browser */
+function setSkin(k, announce) {
+  ['galaxy', 'kazakh', 'business'].forEach(n => stage.classList.toggle('skin-' + n, n === k));
+  document.querySelectorAll('#skinDots b').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  S.skin = k; const nm = { default: 'skinDefault', galaxy: 'skinGalaxy', kazakh: 'skinKazakh', business: 'skinBusiness' }[k];
+  const sn = document.getElementById('skinName'); sn.dataset.t = nm; sn.textContent = t(nm);
+  try { localStorage.setItem('robot-skin', k); } catch (e) {}
+  if (announce) { ind.classList.remove('assemble'); void ind.offsetWidth; ind.classList.add('assemble'); setMood(k === 'default' ? 'happy' : k === 'galaxy' ? 'sparkle' : k === 'kazakh' ? 'blush' : 'wink', 1800); }
+}
 function movePills(instant) {
   document.querySelectorAll('.langs').forEach(box => {
     let pill = box.querySelector('.lang-pill');
@@ -1249,7 +1359,7 @@ stage.addEventListener('click', e => {
     return;
   }
   if (!idleLayer.hidden && !e.target.closest('.lang')) { wakeUp(); return; }
-  if (!faceLayer.hidden && (!b || b.dataset.act === 'menu')) { if (!e.target.closest('.face-top, .face-bottom, .face-chips')) { showFace(false); return; } if (b) { showFace(false); return; } }
+  if (!faceLayer.hidden) return; // the face page has no buttons: a swipe opens the app
   if (!b) return;
   if (b.classList.contains('lang')) return setLang(b.dataset.lang);
   const act = b.dataset.act, k = b.dataset.k;
@@ -1264,6 +1374,7 @@ stage.addEventListener('click', e => {
   if (act === 'faqfull') { S.faqFull = !S.faqFull; renderFaq(); return; }
   if (act === 'guide') return startGuide(k);
   if (act === 'place') { remember(); clearTimers(); stopSpeech(); S.mode = 'think'; setInd('think', t('think')); later(() => showAnswer({ q: PLACES[k], a: PLACES[k].a, place: k }), 600); return; }
+  if (act === 'skin') return setSkin(k, true);
   if (act === 'faqrow') return faqTap(Number(b.dataset.i));
   if (act === 'faqq') { const f = FAQ[Number(b.dataset.i)]; remember(); clearTimers(); stopSpeech(); S.mode = 'think'; heard.textContent = '«' + L(f.q) + '»'; setInd('think', t('think')); later(() => showAnswer({ q: f.q, a: f.a, place: f.place }), 900); return; }
   if (act === 'faqnext') { remember(); const pages = Math.ceil(FAQ.length / PER_PAGE); S.faqPage = (S.faqPage + 1) % pages; S.faqOpen = -1; renderFaq(); renderFaqBottom(); return; }
@@ -1281,11 +1392,99 @@ offBtn.addEventListener('click', () => { S.offline = !S.offline; if (S.offline) 
 document.getElementById('idleBtn').addEventListener('click', goIdle);
 document.getElementById('comeBtn').addEventListener('click', () => {
   if (!closedLayer.hidden || S.mode === 'guide') return;
-  const sleeping = !idleLayer.hidden;
-  if (sleeping) wakeUp();
-  turnHead(-18);
-  if (sleeping || S.mode === 'home') { setInd('speak', t('speak')); say(t('hello'), () => { setInd('', t('ready')); armIdle(); }); }
+  const free = !idleLayer.hidden;
+  if (free) wakeUp();
+  if (!(free || S.mode === 'home')) return;
+  // notices the visitor: eyes snap to them, open wide, then focus, then greet
+  [ind, ind2, ind3].forEach(el => lookAt(el, 0, 0));
+  setMood('wide', 0);
+  later(() => setMood('listen', 0), 450);
+  later(() => { moodExpr = null; setInd('speak', t('speak')); say(t('hello'), () => { setInd('', t('ready')); armIdle(); }); }, 1150);
 });
+
+
+/* swipe on the face: the face follows the finger a little, then shrinks into the robot and the app opens */
+(function swipeToApp() {
+  let x0 = 0, y0 = 0, down = false;
+  const reset = () => { ind3.style.transition = 'transform .3s ease'; ind3.style.transform = ''; setTimeout(() => { if (!down) ind3.style.transition = ''; }, 320); };
+  faceLayer.addEventListener('pointerdown', e => { if (!faceLayer.hidden && !faceLayer.classList.contains('morphing')) { down = true; x0 = e.clientX; y0 = e.clientY; faceLayer.classList.add('dragging'); faceLayer.setPointerCapture(e.pointerId); armIdle(); } });
+  faceLayer.addEventListener('pointermove', e => {
+    if (!down) return;
+    const k = stage.getBoundingClientRect().width / 1600 || 1;
+    const dx = (e.clientX - x0) / k, dy = (e.clientY - y0) / k, d = Math.min(Math.hypot(dx, dy), 400);
+    ind3.style.transition = 'none';
+    ind3.style.transform = `translate(${dx * 0.25}px, ${dy * 0.25}px) scale(${1 - d / 1400})`;
+  });
+  const end = e => {
+    if (!down) return; down = false; faceLayer.classList.remove('dragging');
+    const k = stage.getBoundingClientRect().width / 1600 || 1;
+    const dx = (e.clientX - x0) / k, dy = (e.clientY - y0) / k;
+    if (Math.hypot(dx, dy) > 90) { ind3.style.transition = 'none'; ind3.style.transform = ''; showFace(false); } else reset();
+  };
+  faceLayer.addEventListener('pointerup', end);
+  faceLayer.addEventListener('pointercancel', e => { down = false; faceLayer.classList.remove('dragging'); reset(); });
+})();
+
+
+/* swipe the robot left/right to change its costume */
+(function swipeSkins() {
+  const ORDER = ['default', 'galaxy', 'kazakh', 'business'];
+  let x0 = 0, y0 = 0, down = false;
+  ind.style.touchAction = 'pan-y';
+  ind.addEventListener('pointerdown', e => { down = true; x0 = e.clientX; y0 = e.clientY; ind.setPointerCapture(e.pointerId); });
+  ind.addEventListener('pointermove', e => { if (!down) return; const k = stage.getBoundingClientRect().width / 1600 || 1; const dx = (e.clientX - x0) / k; ind.style.translate = `${Math.max(-80, Math.min(80, dx * 0.4))}px 0`; ind.style.rotate = `${Math.max(-6, Math.min(6, dx * 0.03))}deg`; });
+  const end = e => {
+    if (!down) return; down = false;
+    const k = stage.getBoundingClientRect().width / 1600 || 1, dx = (e.clientX - x0) / k, dy = (e.clientY - y0) / k;
+    ind.style.transition = 'translate .35s cubic-bezier(.3,1.3,.5,1), rotate .35s ease'; ind.style.translate = ''; ind.style.rotate = '';
+    setTimeout(() => { ind.style.transition = ''; }, 380);
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+      const i = ORDER.indexOf(S.skin || 'default');
+      setSkin(ORDER[(i + (dx < 0 ? 1 : -1) + ORDER.length) % ORDER.length], true);
+    }
+  };
+  ind.addEventListener('pointerup', end);
+  ind.addEventListener('pointercancel', end);
+  document.getElementById('skinDots').addEventListener('click', e => { const b = e.target.closest('b'); if (b) setSkin(b.dataset.k, true); });
+})();
+
+
+/* screensaver: greetings take turns in RU / KZ / EN */
+(function saverGreetings() {
+  const LINES = [['Здравствуйте!', 'Подойдите и спросите'], ['Сәлеметсіз бе!', 'Жақындап, сұраңыз'], ['Hello!', 'Come closer and ask']];
+  const hi = document.getElementById('saverHi'), sub = document.getElementById('saverSub');
+  let i = 0;
+  setInterval(() => {
+    if (idleLayer.hidden) { i = 0; hi.textContent = LINES[0][0]; sub.textContent = LINES[0][1]; return; }
+    hi.classList.add('out'); sub.classList.add('out');
+    setTimeout(() => { i = (i + 1) % LINES.length; hi.textContent = LINES[i][0]; sub.textContent = LINES[i][1]; hi.classList.remove('out'); sub.classList.remove('out'); }, 650);
+  }, 7000);
+})();
+
+/* free time (no visitor): the robot looks around, gets curious or bored, never sleeps */
+function lookAt(el, x, y) { const sc = el && el.querySelector('.scr'); if (!sc) return; sc.style.setProperty('--lx', x + 'px'); sc.style.setProperty('--ly', y + 'px'); }
+const SPOTS = [[-22, 0], [22, 0], [0, -12], [16, -10], [-16, -8], [-12, 8], [12, 6], [0, 0], [0, 0]];
+(function wanderLoop() {
+  if (!idleLayer.hidden) {
+    const r = Math.random();
+    if (r < 0.14) { idleExpr = 'bored'; lookAt(ind2, 0, 0); }
+    else if (r < 0.26) { idleExpr = 'wide'; const p = SPOTS[Math.floor(Math.random() * 7)]; lookAt(ind2, p[0], p[1]); }
+    else if (r < 0.32) { idleExpr = 'happy'; lookAt(ind2, 0, -4); }
+    else { idleExpr = 'neutral'; const p = SPOTS[Math.floor(Math.random() * SPOTS.length)]; lookAt(ind2, p[0], p[1]); }
+    applyExpr();
+  } else if (idleExpr !== 'neutral') { idleExpr = 'neutral'; applyExpr(); }
+  setTimeout(wanderLoop, 1600 + Math.random() * 2200);
+})();
+/* on the face page, while nobody is talking, the eyes glance around now and then */
+(function glanceAround() {
+  const quiet = !faceLayer.hidden && S.mode === 'home' && !S.speaking && !moodExpr && !/listen|think|speak/.test(ind3.className);
+  if (quiet) {
+    const p = SPOTS[Math.floor(Math.random() * 7)];
+    lookAt(ind3, p[0] * 0.8, p[1] * 0.8);
+    setTimeout(() => lookAt(ind3, 0, 0), 1100 + Math.random() * 600);
+  }
+  setTimeout(glanceAround, 4500 + Math.random() * 3500);
+})();
 document.getElementById('leaveBtn').addEventListener('click', () => { if (S.mode !== 'guide' && closedLayer.hidden) goIdle(); });
 document.getElementById('emoRow').insertAdjacentHTML('beforeend', Object.keys(EXPR).map(k => `<button class="emo" data-x="${k}">${EXPR_NAMES[k]}</button>`).join(''));
 document.getElementById('emoRow').addEventListener('click', e => { const b = e.target.closest('[data-x]'); if (b) setMood(b.dataset.x, 4000); });
@@ -1300,6 +1499,9 @@ modeBtn.addEventListener('click', () => {
 const soundBtn = document.getElementById('soundBtn');
 soundBtn.addEventListener('click', () => { S.sound = !S.sound; soundBtn.textContent = 'Озвучка: ' + (S.sound ? 'вкл' : 'выкл'); soundBtn.classList.toggle('on', S.sound); soundBtn.setAttribute('aria-pressed', String(S.sound)); if (!S.sound) stopSpeech(); });
 
+let savedSkin = 'default'; try { savedSkin = localStorage.getItem('robot-skin') || 'default'; } catch (e) {}
+setSkin(savedSkin);
+setLang(S.lang, true);
 wakeUp();
 requestAnimationFrame(() => movePills(true));
 window.addEventListener('resize', () => movePills(true));
