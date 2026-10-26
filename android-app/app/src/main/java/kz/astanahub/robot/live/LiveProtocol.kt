@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.Citation
+import kz.astanahub.robot.backend.CitationParser
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.RetrofitBackendApi
 import kz.astanahub.robot.core.Lang
@@ -89,7 +91,13 @@ sealed interface LiveEvent {
     class Audio(val pcm: ByteArray) : LiveEvent
     /** [turnId] — ход, к которому относится действие (контракт v1.x); старый сервер его не шлёт. */
     data class Action(val type: String, val placeId: String?, val turnId: String? = null) : LiveEvent
-    data class TurnEnd(val turnId: String?, val lang: Lang?, val found: Boolean?) : LiveEvent
+    data class TurnEnd(
+        val turnId: String?,
+        val lang: Lang?,
+        val found: Boolean?,
+        /** v1.3, необязательно: источники для подписи под ответом. */
+        val citations: List<Citation> = emptyList(),
+    ) : LiveEvent
     data class Interrupted(val turnId: String?) : LiveEvent
     /** `{"type":"error"}` с сервера. */
     data class Error(val error: BackendError) : LiveEvent
@@ -115,7 +123,10 @@ sealed interface LiveEvent {
                 "phrase" -> str("text")?.trim()?.takeIf { it.isNotEmpty() }?.let(::Phrase)
                 // Тип действия — в `type_` (поле `type` занято типом кадра); `action` — на всякий случай.
                 "action" -> (str("type_") ?: str("action"))?.let { Action(it, str("place_id"), str("turn_id")?.takeIf(String::isNotBlank)) }
-                "turn_end" -> TurnEnd(str("turn_id"), Lang.fromCode(str("lang")), (obj["found"] as? JsonPrimitive)?.booleanOrNull)
+                "turn_end" -> TurnEnd(
+                    str("turn_id"), Lang.fromCode(str("lang")), (obj["found"] as? JsonPrimitive)?.booleanOrNull,
+                    CitationParser.parse(obj["citations"]),
+                )
                 "interrupted" -> Interrupted(str("turn_id"))
                 "error" -> {
                     val err = obj["error"] as? JsonObject

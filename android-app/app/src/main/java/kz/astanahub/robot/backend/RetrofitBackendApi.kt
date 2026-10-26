@@ -330,6 +330,7 @@ internal fun AnswerDto.toDomain() = Answer(
     phrases = phrases.ifEmpty { listOf(answer) },
     lang = Lang.fromCode(lang),
     found = found,
+    citations = CitationParser.parse(citations),
 )
 
 internal inline fun <T, R> ApiResult<T>.map(transform: (T) -> R): ApiResult<R> = when (this) {

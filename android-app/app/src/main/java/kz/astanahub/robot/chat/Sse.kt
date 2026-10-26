@@ -9,6 +9,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.CitationParser
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.RetrofitBackendApi
 import kz.astanahub.robot.core.Lang
@@ -77,6 +78,7 @@ object ChatEventDecoder {
         sources = (obj?.get("sources") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
         actions = (obj?.get("actions") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.action() }.orEmpty(),
         ignored = obj?.bool("ignored") ?: false,
+        citations = CitationParser.parse(obj?.get("citations")),
     )
 
     /**

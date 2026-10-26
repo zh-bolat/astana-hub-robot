@@ -1,5 +1,6 @@
 package kz.astanahub.robot.chat
 
+import kz.astanahub.robot.backend.Citation
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.core.Lang
 import org.junit.Assert.assertEquals
@@ -51,6 +52,26 @@ class SseParserTest {
         assertEquals(Lang.KK, d.lang)
         assertEquals(false, d.found)
         assertTrue(d.actions.isEmpty())
+    }
+
+    @Test
+    fun `done carries citations for display, malformed items are skipped`() {
+        val d = events(
+            "event: done\ndata: {\"found\": true, \"citations\": [" +
+                "{\"id\": \"document:hub_space#2\", \"type\": \"document\", \"title\": \"Hub Space — как стать участником\", \"url\": \"https://astanahub.com/ru/l/hubspace\"}, " +
+                "{\"id\": \"fact:wifi\", \"type\": \"fact\", \"title\": \"Wi-Fi\", \"url\": null}, " +
+                "{\"id\": \"x\"}, 42]}\n\n",
+        ).single() as ChatEvent.Done
+        assertEquals(
+            listOf(
+                Citation("document:hub_space#2", "document", "Hub Space — как стать участником", "https://astanahub.com/ru/l/hubspace"),
+                Citation("fact:wifi", "fact", "Wi-Fi", null),
+            ),
+            d.citations,
+        )
+        // Старый сервер поля не шлёт, кривое значение — не массив: подписи просто нет.
+        assertTrue((events("event: done\ndata: {}\n\n").single() as ChatEvent.Done).citations.isEmpty())
+        assertTrue((events("event: done\ndata: {\"citations\": \"oops\"}\n\n").single() as ChatEvent.Done).citations.isEmpty())
     }
 
     @Test

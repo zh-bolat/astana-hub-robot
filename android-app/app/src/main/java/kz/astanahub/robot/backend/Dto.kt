@@ -27,6 +27,8 @@ internal data class AnswerDto(
     val lang: String? = null,
     val found: Boolean = true,
     val sources: List<String> = emptyList(),
+    /** v1.3, необязательно: разбирается мягко ([CitationParser]) — кривой элемент не ломает ответ. */
+    val citations: kotlinx.serialization.json.JsonElement? = null,
 )
 
 @Serializable

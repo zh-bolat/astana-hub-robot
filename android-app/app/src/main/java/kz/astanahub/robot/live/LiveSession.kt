@@ -43,7 +43,12 @@ sealed interface LiveSignal {
     /** Звук хода пошёл из динамика. */
     data class AudioStarted(val turnId: String?) : LiveSignal
     data class Action(val type: String, val placeId: String?, val turnId: String?) : LiveSignal
-    data class TurnEnd(val turnId: String?, val lang: Lang?, val found: Boolean?) : LiveSignal
+    data class TurnEnd(
+        val turnId: String?,
+        val lang: Lang?,
+        val found: Boolean?,
+        val citations: List<kz.astanahub.robot.backend.Citation> = emptyList(),
+    ) : LiveSignal
     /** Звук хода оборван: посетитель перебил ([local] = false — решил сервер) или «Стоп» на роботе. */
     data class Interrupted(val turnId: String?, val local: Boolean) : LiveSignal
     /** Ход доигран до конца; `playback_done` уже отправлен. */
@@ -281,7 +286,7 @@ class LiveSession(
             is LiveEvent.TurnEnd -> {
                 if (dropping) return
                 player.endTurn(event.turnId ?: currentTurn)
-                emit(LiveSignal.TurnEnd(event.turnId ?: currentTurn, event.lang, event.found))
+                emit(LiveSignal.TurnEnd(event.turnId ?: currentTurn, event.lang, event.found, event.citations))
             }
             is LiveEvent.Interrupted -> {
                 player.flush()

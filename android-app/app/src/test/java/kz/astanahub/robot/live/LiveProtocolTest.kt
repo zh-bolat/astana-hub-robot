@@ -1,5 +1,6 @@
 package kz.astanahub.robot.live
 
+import kz.astanahub.robot.backend.Citation
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
@@ -94,6 +95,10 @@ class LiveProtocolTest {
             LiveEvent.parse("""{"type":"action","type_":"guide_to","place_id":"cafe","turn_id":"trn_1"}"""),
         )
         assertEquals(LiveEvent.TurnEnd("trn_1", Lang.EN, true), LiveEvent.parse("""{"type":"turn_end","turn_id":"trn_1","lang":"en","found":true}"""))
+        assertEquals(
+            LiveEvent.TurnEnd("trn_2", Lang.RU, true, listOf(Citation("place:cafe", "place", "Кафе", null))),
+            LiveEvent.parse("""{"type":"turn_end","turn_id":"trn_2","lang":"ru","found":true,"citations":[{"id":"place:cafe","type":"place","title":"Кафе","url":null}]}"""),
+        )
         assertEquals(LiveEvent.Interrupted("trn_1"), LiveEvent.parse("""{"type":"interrupted","turn_id":"trn_1"}"""))
         val error = LiveEvent.parse("""{"type":"error","error":{"code":"llm_unavailable","message":"x"}}""") as LiveEvent.Error
         assertEquals(ErrorKind.LLM_UNAVAILABLE, error.error.kind)

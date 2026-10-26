@@ -1,6 +1,7 @@
 package kz.astanahub.robot.chat
 
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.Citation
 import kz.astanahub.robot.core.Lang
 
 /**
@@ -56,6 +57,8 @@ sealed interface ChatEvent {
         val actions: List<ChatAction> = emptyList(),
         /** v1.2: реплика — шум, модель не звали. Робот молчит, лицо без реакции, запасного пути нет. */
         val ignored: Boolean = false,
+        /** v1.3: источники для показа под ответом; старый сервер не шлёт — пусто. */
+        val citations: List<Citation> = emptyList(),
     ) : ChatEvent
 
     /**

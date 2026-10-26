@@ -106,7 +106,9 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
                 }
             }
         }
-        emit(ChatEvent.Done("req_fake", lang, found = true, actions = actions))
+        // Источники (v1.3) — как у настоящего сервера на вопросы о хабе: подпись под ответом на экране 2.
+        val citations = if (CITED_WORDS.any { text.contains(it) }) FAKE_CITATIONS else emptyList()
+        emit(ChatEvent.Done("req_fake", lang, found = true, actions = actions, citations = citations))
     }
 
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage): ApiResult<Unit> =
@@ -123,6 +125,11 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
     companion object {
         private val GUIDE_WORDS = listOf("провод", "отвед", "бастап", "take me", "guide")
         private val LOOK_WORDS = listOf("что это", "бұл не", "what is this", "что видишь")
+        private val CITED_WORDS = listOf("hub", "хаб", "резидент", "resident", "tech orda", "стартап")
+        val FAKE_CITATIONS = listOf(
+            Citation("document:hub_space#2", "document", "Hub Space — как стать участником", "https://astanahub.com/ru/l/hubspace"),
+            Citation("fact:residency", "fact", "Резидентство Astana Hub"),
+        )
 
         /** Совпадают с точками FakeRobotGateway (map_name). */
         val FAKE_PLACES = listOf(
