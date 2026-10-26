@@ -20,6 +20,8 @@ gson = "2.11.0"
 # Compose — UI-слой (экран лица, далее экран 2). BOM 2026.06.01 = Compose 1.11.4: compileSdk ≥ 35, AGP ≥ 8.6
 # (1.12+ требует compileSdk 37 и AGP 9.1 — пока не берём).
 composeBom = "2026.06.01"
+# Тесты Compose на JVM (касания, зоны нажатия): Robolectric + compose ui-test.
+robolectric = "4.14.1"
 
 [libraries]
 orionstar-agent-sdk = { group = "com.orionstar.agent", name = "sdk", version.ref = "orionstarAgentSdk" }
@@ -53,6 +55,9 @@ androidx-compose-foundation = { group = "androidx.compose.foundation", name = "f
 androidx-compose-animation = { group = "androidx.compose.animation", name = "animation" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityKtx" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 

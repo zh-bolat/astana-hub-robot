@@ -121,6 +121,8 @@ android {
     testOptions {
         // android.util.Log и прочие заглушки android.jar в JVM-тестах возвращают значения по умолчанию.
         unitTests.isReturnDefaultValues = true
+        // Тесты Compose на Robolectric (касания кнопок, ui/screen/*TouchTest): ресурсы и манифест — в тестах.
+        unitTests.isIncludeAndroidResources = true
     }
 
     sourceSets {
@@ -220,12 +222,17 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    // ComponentActivity для createComposeRule в тестах Robolectric (только debug).
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
 }
 
 // Копия APK для раздачи роботу через http-сервер: ./gradlew publishTestApks

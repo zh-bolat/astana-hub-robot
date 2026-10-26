@@ -63,10 +63,13 @@ fun Pressable(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     takeTouch: Boolean = false,
+    /** Своё состояние нажатия (кто-то ещё показывает отклик — мини-лицо в шапке); null — внутреннее. */
+    pressed: MutableState<Boolean>? = null,
     contentAlignment: Alignment = Alignment.Center,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val pressed = remember { mutableStateOf(false) }
+    val own = remember { mutableStateOf(false) }
+    val pressed = pressed ?: own
     val scale by animateFloatAsState(if (pressed.value) HubMotion.PRESS_SCALE else 1f, HubMotion.Press.compose(), label = "press")
     val dim by animateFloatAsState(if (enabled) 1f else DISABLED_ALPHA, HubMotion.Default.compose(), label = "enabled")
     Box(
@@ -76,14 +79,16 @@ fun Pressable(
                 scaleY = scale
                 alpha = dim
             }
-            .then(modifier)
+            // Касание — ДО modifier вызывающего: его отступы (padding пилюли, поля строки, плитки) внутри зоны
+            // касания, нажимается вся видимая кнопка (ревью M3-r1, B1). Размер узла задают size/height из modifier.
             .then(
                 when {
                     !enabled -> Modifier
                     takeTouch -> Modifier.pressToClick(pressed, onClick)
                     else -> Modifier.tapUnlessDragged(pressed, onClick)
                 },
-            ),
+            )
+            .then(modifier),
         contentAlignment = contentAlignment,
         content = content,
     )
