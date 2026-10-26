@@ -339,6 +339,7 @@ class MainActivity : AppCompatActivity() {
         face.onState(state)
         val screen = face.screen
         screen.traveling = state.guidingTo != null
+        screen.islandGuide = state.guideTarget != null && state.guidingTo == null
         screen.asleep = state.mode == ScreenMode.SLEEP
         if (islandTextsFor != state.lang) {
             islandTextsFor = state.lang

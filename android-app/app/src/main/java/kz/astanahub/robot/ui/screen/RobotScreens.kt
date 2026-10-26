@@ -238,6 +238,7 @@ fun RobotScreens(
             Island(
                 content = screen.island.takeIf { !screen.menuOpen },
                 texts = screen.islandTexts,
+                guideAvailable = screen.islandGuide,
                 onStop = { hostNow.onTravelStop() },
                 onGuide = { hostNow.onIslandGuide() },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),

@@ -78,6 +78,7 @@ data class IslandTexts(
 fun Island(
     content: IslandContent?,
     texts: IslandTexts,
+    guideAvailable: Boolean,
     onStop: () -> Unit,
     onGuide: () -> Unit,
     modifier: Modifier = Modifier,
@@ -120,7 +121,7 @@ fun Island(
                 label = "island",
             ) { c ->
                 when (c) {
-                    is IslandContent.WhereIs -> WhereRow(c, texts, onGuide)
+                    is IslandContent.WhereIs -> WhereRow(c, texts, guideAvailable, onGuide)
                     is IslandContent.Trip -> TripRow(c, texts, onStop)
                     is IslandContent.Outcome -> OutcomeRow(c, texts)
                     null -> Spacer(Modifier.height(ISLAND_HEIGHT))
@@ -139,8 +140,10 @@ private fun key(c: IslandContent?): Any = when (c) {
 
 /** «Где»: стрелка в сторону места (от посетителя), место, расстояние; «Проводить», если можно. */
 @Composable
-private fun WhereRow(c: IslandContent.WhereIs, texts: IslandTexts, onGuide: () -> Unit) {
+private fun WhereRow(c: IslandContent.WhereIs, texts: IslandTexts, guideAvailable: Boolean, onGuide: () -> Unit) {
     val hint = c.hint
+    // Посетитель спросил о другом — предложение «Проводить» снято (ViewModel сбросила место), кнопки нет.
+    val guide = hint.canGuide && guideAvailable
     val rotation by animateFloatAsState(
         IslandGeometry.arrowRotationDeg(hint.visitorAngleRad),
         HubMotion.Default.compose(),
@@ -151,7 +154,7 @@ private fun WhereRow(c: IslandContent.WhereIs, texts: IslandTexts, onGuide: () -
     Row(
         Modifier
             .height(ISLAND_HEIGHT)
-            .padding(start = 32.dp, end = if (hint.canGuide) 12.dp else 40.dp),
+            .padding(start = 32.dp, end = if (guide) 12.dp else 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
@@ -172,7 +175,7 @@ private fun WhereRow(c: IslandContent.WhereIs, texts: IslandTexts, onGuide: () -
         )
         Spacer(Modifier.width(18.dp))
         BasicText(distance, style = HubType.Headline.copy(color = HubColors.LabelSecondary), maxLines = 1)
-        if (hint.canGuide) {
+        if (guide) {
             Spacer(Modifier.width(32.dp))
             PillButton(label = texts.guide, onClick = onGuide)
         }

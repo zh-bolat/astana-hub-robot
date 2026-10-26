@@ -62,6 +62,9 @@ class FaceScreenState {
     var island by mutableStateOf<IslandContent?>(null)
     var islandTexts by mutableStateOf(IslandTexts())
 
+    /** «Проводить» на острове where_is доступно (у ViewModel есть место, куда предложено проводить). */
+    var islandGuide by mutableStateOf(false)
+
     /** Спит: ручка свайпа гаснет. */
     var asleep by mutableStateOf(false)
 
