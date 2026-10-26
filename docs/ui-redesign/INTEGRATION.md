@@ -4,7 +4,8 @@
 проверено. Бизнес-логика (`MainViewModel`, live, voice, robot, places, backend) не переписывается: новый UI
 читает `MainViewModel.state` и `MainViewModel.faceCues`, звук — из `AudioLevels`.
 
-Статус: **M1** — экран 1 (лицо). Экран 2 (чат, плитки, язык, citations) — M3, остров where_is и поездки — M4.
+Статус: **M1** — экран 1 (лицо), **M2** — интерактив (тап, удержание → админка, поглаживание, ручка свайпа, сон
+3 мин). Экран 2 (чат, плитки, язык, citations) — M3, остров where_is и поездки — M4.
 До M3 всё прежнее живёт на старом экране (свайп влево с лица / «К роботу» обратно) — функционал не потерян.
 
 Пути: `ui/` = `android-app/app/src/main/java/kz/astanahub/robot/ui/`, тесты — `android-app/app/src/test/...`.
@@ -31,6 +32,8 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 | посетитель говорит (**первичный сигнал — VAD**) | `AudioLevels.voiceActive`: VAD приложения (`MicRecorder.speaking` — `EnergyVad`, `LiveEndpointer`) и сервера (`user_speaking` → `user_final`) | `audio/AudioLevels.kt`, `voice/ServerVoiceGateway.kt`, `live/LiveSession.kt` | `AudioLevelsTest`, `LiveSessionTest.server VAD…`, `FaceDirectorTest`, `FaceEngineTest.steady hall noise…` |
 | громкость голоса (только сила реакции) | `AudioLevels.micLevel`, шумовой фон вычитается | `audio/AudioLevels.kt`, `FaceAudioEnvelope.mic` | `FaceAudioEnvelopeTest`, `FaceEngineTest` |
 | речь робота | `AudioLevels.playbackLevel` | `audio/AudioLevels.kt`, `live/StreamPlayer.kt`, `audio/PlaybackVisualizer.kt` | `AudioLevelsTest`, `FaceEngineTest` |
+| касание: палец на лице, где он, удержание, поглаживание (скорость) | `FaceScreen` → `FaceGestureRecognizer` → `FaceInputs.touching/touchX/touchY/holdStartMs/petting/strokeVx/strokeVy` | `ui/face/FaceGestures.kt`, `ui/face/FaceScreen.kt`, `ui/face/FaceEngine.kt` | `FaceGestureRecognizerTest`, `FaceEngineTest.eyes go to the finger…`, `.hold ring…`, `.petting…` |
+| голос посетителя будит из сна | `AudioLevels.voice` (StateFlow) → `MainViewModel.onVisitorVoice` | `audio/AudioLevels.kt`, `ui/MainViewModel.kt` | `MainViewModelSleepTest`, `AudioLevelsTest.voice flow…` |
 
 ## Live `WS /v1/live` (сервер → робот)
 
@@ -38,7 +41,7 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 |---|---|---|---|
 | `ready` | — (лицо не меняется; `offline` снимается) | `MainViewModel.onLive` | `MainViewModelLiveTest` |
 | `listening` | фаза LISTENING → лицо в покое (микрофон открыт всегда — это не «слушаю») | `FaceDirector` | `FaceDirectorTest.activities map to moods` |
-| `user_speaking` | VAD сервера → «слушает» (до `user_final` / `ignored` / `thinking`, удержание 500 мс); громкость микрофона — только сила реакции | `live/LiveSession.kt` → `AudioLevels.reportVoice`, `FaceDirector`, `VoiceHold` | `LiveSessionTest.server VAD…`, `FaceDirectorTest.vad voice…` |
+| `user_speaking` | VAD сервера → «слушает» (до `user_final` / `ignored` / `thinking`, удержание 500 мс; поток оборвался без `user_final` — гаснет через 8 с); громкость микрофона — только сила реакции; спит — будит (если рядом человек или нет PersonApi) | `live/LiveSession.kt` → `AudioLevels.reportVoice(sticky)`, `FaceDirector`, `VoiceHold` | `LiveSessionTest.server VAD…`, `FaceDirectorTest.vad voice…`, `AudioLevelsTest.app vad goes stale…` |
 | `user_partial` | `partialQuestion` → LISTENING (внимательный взгляд, реакция на громкость) | `FaceInputMapper` | `FaceInputMapperTest`, `FaceDirectorTest.visitor partial text…` |
 | `user_final` | вопрос → дальше THINKING по `thinking`; реплика обрывает идущую реакцию | `FaceDirector` | `FaceDirectorTest.visitor starting to talk…` |
 | `ignored` | без реакции (как и раньше) | `MainViewModel.onLiveIgnored` | `MainViewModelLiveTest` |
@@ -79,18 +82,21 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 | Событие | Что делает новый UI (M1) | Где | Тест |
 |---|---|---|---|
 | поездка (NAVIGATING) | экран 1 показывается сам (даже из меню), TRAVEL + остров со «Стоп» | `MainActivity.renderFaceScreen`, `FaceScreen` | ручная проверка (запись `guide_travel_arrive.mp4`) |
-| «Стоп» на острове | `MainViewModel.stop()` → реакция ACK | `FaceScreen.PillButton` | `MainViewModelFaceCueTest.stop during the trip…` |
-| тап по лицу | спит → `wake()`; говорит → `stop()` (tap-to-interrupt); в поездке — ничего (только «Стоп») | `FaceInputMapper.tap`, `MainActivity.onFaceTap` | `FaceInputMapperTest.tap…`, запись `fix/tap_*.mp4` |
+| «Стоп» на острове | `MainViewModel.stop()` → реакция ACK; единственный способ остановить поездку с экрана | `FaceScreen.PillButton` | `MainViewModelFaceCueTest.stop during the trip…` |
+| тап по лицу | спит → `wake()`; говорит → `stop()` (tap-to-interrupt); **в поездке и говорит → `interruptSpeech()`: замолкает, поездка продолжается** (речь видна по `robotSpeaking` — фаза в поездке всё время NAVIGATING); молчит → рефлекс лица (моргнуть / вздрогнуть, без спама) | `FaceInputMapper.tap`, `MainActivity.onFaceTap`, `MainViewModel.interruptSpeech/robotSpeaking`, `FaceEngine.reflex` | `FaceInputMapperTest.tap…`, `MainViewModelSleepTest.tap in a trip…`, `FaceEngineTest.tap reflex…`, записи `M2/m2_tap_*.mp4` |
+| удержание по лицу 3 с | PIN (`DiagPinDialog`) → `DiagnosticsActivity` — тот же вход, что удержание логотипа; без PIN на роботе — выключено | `FaceScreen` (`onHold`) → `MainActivity.openDiagnostics` | `FaceGestureRecognizerTest.holding still…`, запись `M2/m2_hold_admin.mp4` |
+| поглаживание | PETTED, пока гладят, +0.7 с; голова льнёт к руке | `FaceInputs.petting/strokeVx/strokeVy` | `FaceEngineTest.petting…`, `FaceGestureRecognizerTest.vertical strokes…`, `.circling…` |
+| свайп влево | прежний экран; **в поездке не засчитывается** (сопротивление и возврат) | `FaceScreen`, `SwipeToMenu.release(allowed)` | `SwipeToMenuTest`, запись `M2/m2_swipe_trip.mp4` |
 | итог поездки | приехали → HAPPY; ошибка / не локализован → ERROR; точки нет → CONFUSED; отмена → ACK | `MainViewModel.tripCue` | `MainViewModelFaceCueTest` |
 | человек подошёл (presence) | пробуждение WAKE → приветствие EXCITED | `MainViewModel.onPresence` → `GREET` | `MainViewModelFaceCueTest.visitor arriving…` |
-| сон (бездействие) | зевок → сон («z», медленное дыхание); голос/касание/человек — бодрое пробуждение | `FaceDirector` | `FaceDirectorTest`, `FaceEngineTest.sleep…` |
+| сон (бездействие **3 мин**, `SCREENSAVER_SECONDS=180`) | зевок → сон («z», медленное дыхание); человек рядом, поездка, запрос — не засыпает. Будят: тап, подошедший человек (+ приветствие `visitor_arrived`), голос посетителя по VAD — на роботе с PersonApi только если рядом человек (разговоры в зале не будят), без PersonApi — сразу | `MainViewModel.restartIdleTimer/onVisitorVoice/onPresence`, `FaceDirector` | `MainViewModelSleepTest`, `FaceDirectorTest`, `FaceEngineTest.sleep…` |
 | локальное «да» на «Проводить?» | как поездка | | существующие тесты |
 
 ## Настройки, диагностика, сборки
 
 | Что | Статус в M1 |
 |---|---|
-| PIN, масштаб UI, микрофон, адрес бэкенда, режим разговора | без изменений: диагностика — удержанием логотипа на прежнем экране; long press по лицу — M2 |
+| PIN, масштаб UI, микрофон, адрес бэкенда, режим разговора | без изменений: диагностика — удержанием логотипа на прежнем экране или (M2) удержанием по лицу 3 с, тот же PIN |
 | масштаб UI (`UiScale`) | лицо вписывается в экран само (виртуальный холст), прежний экран — как был |
 | режим legacy | «бодрый» экран — меню (как раньше), лицо — во сне и в поездке |
 | flavor `emulator` | отладочные команды лицу (adb broadcast) — только debug + emulator |
@@ -105,3 +111,7 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
   включает то же, что начинает распознавание; громкость голоса для реакции — после вычета шумового фона.
 - 60 fps на железе робота (на эмуляторе с GPU хоста — 0.35 % janky, см. `shots/M1/gfxinfo_*.txt`).
 - Версия Android (API 28?): лицо не использует ничего новее API 26.
+- Касания на сенсоре 14" (M2): гистерезис 10 dp (12 px) — не путает ли тап и поглаживание рука посетителя; кольцо
+  удержания не закрывается пальцем (радиус ≈ 80 px на 1920 × 1080); ручка заметна на расстоянии 1–1.5 м.
+- Пробуждение голосом: VAD на массиве микрофонов Nova + PersonApi — будит ли голос подошедшего, не будят ли разговоры
+  в зале; тап в поездке обрывает фразу пути встроенного TTS / серверного голоса (`stopSpeaking`, `interrupt`).
