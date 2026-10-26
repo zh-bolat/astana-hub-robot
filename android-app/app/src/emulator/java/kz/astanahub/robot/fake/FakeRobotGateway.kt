@@ -38,6 +38,8 @@ class FakeRobotGateway : RobotGateway {
             if (withTimeoutOrNull(FAKE_TRIP_MILLIS / 2) { stop.await() } != null) return NavigationResult.Cancelled
             onEvent(NavEvent.OBSTACLE)
             delay(500)
+            // Коворкинг на эмуляторе недостижим: путь «перекрыт» — итог поездки «не получилось» (остров, лицо).
+            if (placeName == UNREACHABLE) return NavigationResult.Failed(FAKE_BLOCKED_CODE, "fake: path blocked")
             onEvent(NavEvent.OBSTACLE_CLEARED)
             if (withTimeoutOrNull(FAKE_TRIP_MILLIS / 2) { stop.await() } != null) return NavigationResult.Cancelled
             return NavigationResult.Arrived
@@ -60,5 +62,7 @@ class FakeRobotGateway : RobotGateway {
 
     private companion object {
         const val FAKE_TRIP_MILLIS = 6_000L
+        const val UNREACHABLE = "Коворкинг"
+        const val FAKE_BLOCKED_CODE = -116
     }
 }
