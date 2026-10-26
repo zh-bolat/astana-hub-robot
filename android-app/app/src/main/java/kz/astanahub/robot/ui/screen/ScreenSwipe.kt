@@ -50,6 +50,76 @@ object ScreenSwipe {
 }
 
 /**
+ * Палец и переход (чистый Kotlin, тест; [RobotScreens] — обёртка над ним):
+ * - касание **сразу** останавливает летящий экран под пальцем (apple-design §3) — [catch];
+ * - сдвиг ведёт переход 1:1 от прогресса в момент касания, а не от нуля (перехват уезжающего экрана — без прыжка);
+ * - отпускание после сдвига — решение жеста ([ScreenSwipe.release]); без сдвига (тап, задержали и отпустили) —
+ *   решения нет, переход продолжается к цели ViewModel;
+ * - ViewModel сменила режим, пока палец держит экран (поездка, таймер меню) — жест прерывается до отпускания пальца:
+ *   источник истины — ViewModel.
+ */
+class TransitionGesture(private val lockedPeek: Float = LOCKED_PEEK) {
+
+    /** Прогресс под пальцем (его и рисуем, пока держат); null — палец переход не держит. */
+    var held: Float? = null
+        private set
+
+    /** Палец сдвинулся (это жест, а не касание). */
+    var moved: Boolean = false
+        private set
+
+    private var start = 0f
+    private var blocked = false
+
+    /** Касание летящего экрана: замирает на [current]. */
+    fun catch(current: Float) {
+        blocked = false
+        start = current
+        held = current
+        moved = false
+    }
+
+    /**
+     * Сдвиг пальца на [dx] (px, влево — отрицательный) от точки касания. [current] — прогресс, если касание ещё не
+     * поймало экран (покоился). [locked] — поездка: экран только выглядывает и пружинит назад.
+     */
+    fun drag(dx: Float, width: Float, current: Float, locked: Boolean) {
+        if (blocked) return
+        if (held == null) catch(current)
+        moved = true
+        val p = ScreenSwipe.progress(start, dx, width)
+        held = if (locked) start + (p - start) * lockedPeek else p
+    }
+
+    /** Палец отпущен: решение жеста (null — сдвига не было) и где отпустили. */
+    fun release(velocityX: Float, width: Float, allowOpen: Boolean): ScreenSwipe.Release? {
+        val p = held
+        val r = if (p != null && moved) ScreenSwipe.release(p, velocityX, width, allowOpen) else null
+        reset()
+        return r
+    }
+
+    /** ViewModel сменила режим посреди жеста: жест прерван, до отпускания пальца сдвиги не ведут переход. */
+    fun abort() {
+        held = null
+        moved = false
+        blocked = true
+    }
+
+    /** Палец поднят (любой исход). */
+    fun reset() {
+        held = null
+        moved = false
+        blocked = false
+    }
+
+    companion object {
+        /** В поездке экран 2 только выглядывает: доля хода пальца. */
+        const val LOCKED_PEEK = 0.25f
+    }
+}
+
+/**
  * Лицо при переходе (чистые функции — тест): полноэкранное (0) непрерывно сжимается в мини-лицо в шапке экрана 2 (1)
  * — по прогрессу жеста, не по таймеру. Масштаб — по логарифму (на глаз равномерно: каждый шаг пальца уменьшает лицо
  * в одно и то же число раз), центр видимого лица едет по прямой к центру слота в шапке.

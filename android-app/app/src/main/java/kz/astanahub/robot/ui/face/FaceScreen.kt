@@ -72,11 +72,16 @@ class FaceScreenState {
     var holdEnabled by mutableStateOf(false)
 }
 
-/** Свайп по лицу к экрану 2: смещение пальца, отпускание со скоростью (px/с), отмена (жест стал поглаживанием). */
+/**
+ * Свайп по лицу к экрану 2: касание (ловит летящий переход), смещение пальца, отпускание со скоростью (px/с),
+ * отмена (жест стал поглаживанием), конец касания (любой исход).
+ */
 interface FaceSwipeListener {
+    fun onTouchDown() {}
     fun onSwipe(dx: Float)
     fun onSwipeEnd(dx: Float, velocity: Float)
     fun onSwipeCancel()
+    fun onTouchEnd() {}
 }
 
 /**
@@ -112,6 +117,7 @@ fun Modifier.faceGestures(
                 touch(x, y)
                 inputs.touching = true
                 pressed.value = true
+                swipeNow.onTouchDown()
             }
 
             override fun onMove(x: Float, y: Float) = touch(x, y)
@@ -155,6 +161,7 @@ fun Modifier.faceGestures(
                 inputs.holdStartMs = -1L
                 inputs.petting = false
                 pressed.value = false
+                swipeNow.onTouchEnd()
             }
         }
         val recognizer = FaceGestureRecognizer(

@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
@@ -29,6 +31,8 @@ import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -88,37 +92,79 @@ fun RobotScreens(
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val running = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     val progress = remember { Animatable(if (screen.menuOpen) 1f else 0f) }
-    // Палец ведёт переход: прогресс под пальцем (без корутин на каждое движение); null — не тянут.
-    var dragFrom by remember { mutableStateOf<Float?>(null) }
-    val dragProgress = remember { mutableFloatStateOf(0f) }
+    // Палец и переход ([TransitionGesture]): касание ловит летящий экран, сдвиг ведёт его от точки касания.
+    // [held] — прогресс под пальцем (снимок-состояние: читается в фазе отрисовки), null — палец переход не держит.
+    val gesture = remember { TransitionGesture() }
+    var held by remember { mutableStateOf<Float?>(null) }
     // Накопленный сдвиг пальца при закрытии экрана 2 (draggable даёт приращения).
     val dragX = remember { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
     val hostNow by rememberUpdatedState(host)
     val reduced = face.engine.reducedMotion
 
-    fun visual(): Float = if (dragFrom != null) dragProgress.floatValue else progress.value
+    fun visual(): Float = held ?: progress.value
 
     val target = if (screen.menuOpen) 1f else 0f
+    val targetNow by rememberUpdatedState(target)
+
+    /** Пружина к [to] от того места, где отпустили, со скоростью пальца (бросок — с лёгким отскоком). */
+    fun settle(from: Float, to: Float, r: ScreenSwipe.Release?) {
+        scope.launch {
+            progress.snapTo(from)
+            held = null
+            when {
+                reduced -> progress.snapTo(to)
+                r == null -> progress.animateTo(to, HubMotion.Default.compose())
+                else -> {
+                    val spec = if (r.fling) HubMotion.Momentum.compose<Float>() else HubMotion.Default.compose()
+                    progress.animateTo(to, spec, initialVelocity = r.velocity)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(target) {
-        if (dragFrom != null) return@LaunchedEffect
+        val h = held
+        if (h != null) {
+            // Режим сменился, пока палец держит экран (началась поездка, таймер меню): источник истины — ViewModel.
+            gesture.abort()
+            settle(h, target, null)
+            return@LaunchedEffect
+        }
         if (progress.isRunning && progress.targetValue == target) return@LaunchedEffect
         // Смена режима без жеста: пружина от текущего прогресса и скорости (прерываемо).
         if (reduced) progress.snapTo(target) else progress.animateTo(target, HubMotion.Gentle.compose())
     }
 
-    /** Отпускание: решение, ViewModel, пружина со скоростью пальца (бросок — с лёгким отскоком). */
-    fun release(start: Float, velocityX: Float, width: Float, allowOpen: Boolean) {
-        val p = dragProgress.floatValue
-        val r = ScreenSwipe.release(p, velocityX, width, allowOpen)
-        val open = if (r.open != (start >= 0.5f)) hostNow.onSwitch(r.open) else r.open
-        val to = if (open) 1f else 0f
-        scope.launch {
-            progress.snapTo(p)
-            dragFrom = null
-            val spec = if (r.fling) HubMotion.Momentum.compose<Float>() else HubMotion.Default.compose()
-            if (reduced) progress.snapTo(to) else progress.animateTo(to, spec, initialVelocity = r.velocity)
+    /** Касание: летящий экран замирает под пальцем (apple-design §3); покоящийся — не трогаем. */
+    fun touchDown() {
+        if (!progress.isRunning) return
+        gesture.catch(progress.value)
+        held = gesture.held
+        scope.launch { progress.stop() }
+    }
+
+    /** Сдвиг пальца ведёт переход от прогресса в момент касания (перехват уезжающего экрана — без прыжка). */
+    fun drag(dx: Float, width: Float, locked: Boolean) {
+        if (gesture.held == null && progress.isRunning) scope.launch { progress.stop() }
+        gesture.drag(dx, width, progress.value, locked)
+        held = gesture.held
+    }
+
+    /**
+     * Палец отпущен. Был сдвиг — решение жеста всегда уходит в ViewModel ([RobotScreensHost.onSwitch]): она может не
+     * согласиться (поездка, legacy) — едем туда, куда она сказала. Сдвига не было (поймали и отпустили) — дальше к
+     * цели ViewModel.
+     */
+    fun release(velocityX: Float, width: Float, allowOpen: Boolean) {
+        val from = gesture.held ?: return gesture.reset()
+        val r = gesture.release(velocityX, width, allowOpen)
+        val to = if (r != null) {
+            if (hostNow.onSwitch(r.open)) 1f else 0f
+        } else {
+            targetNow
         }
+        settle(from, to, r)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HubColors.Black)) {
@@ -153,21 +199,27 @@ fun RobotScreens(
                         renderEffect = null
                     }
                 }
+                // Касание экрана 2 сразу ловит летящий переход; отпустили без сдвига — переход продолжается.
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        touchDown()
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Final)
+                        } while (event.changes.any { it.pressed })
+                        if (!gesture.moved) release(0f, w, allowOpen = true)
+                    }
+                }
                 .draggable(
                     state = rememberDraggableState { delta ->
-                        val from = dragFrom ?: return@rememberDraggableState
                         dragX.floatValue += delta
-                        dragProgress.floatValue = ScreenSwipe.progress(from, dragX.floatValue, w)
+                        drag(dragX.floatValue, w, locked = false)
                     },
                     orientation = Orientation.Horizontal,
-                    enabled = menuOpenNow && !two.exitConfirm,
-                    onDragStarted = {
-                        dragX.floatValue = 0f
-                        dragProgress.floatValue = progress.value
-                        dragFrom = progress.value
-                        progress.stop()
-                    },
-                    onDragStopped = { velocity -> release(dragFrom ?: 1f, velocity, w, allowOpen = true) },
+                    // В поездке экран 2 не тянется (его и нет: ViewModel ведёт к лицу).
+                    enabled = menuOpenNow && !two.exitConfirm && !screen.traveling,
+                    onDragStarted = { dragX.floatValue = 0f },
+                    onDragStopped = { velocity -> release(velocity, w, allowOpen = true) },
                 ),
         )
 
@@ -205,20 +257,20 @@ fun RobotScreens(
                             onTap = { hostNow.onFaceTap() },
                             onHold = { hostNow.onFaceHold() },
                             swipe = object : FaceSwipeListener {
-                                override fun onSwipe(dx: Float) {
-                                    if (dragFrom == null) {
-                                        dragFrom = 0f
-                                        scope.launch { progress.stop() }
-                                    }
-                                    val p = ScreenSwipe.progress(0f, dx, w)
-                                    // В поездке экран 2 не откроется: он только чуть выглядывает и пружинит назад.
-                                    dragProgress.floatValue = if (swipeAllowedNow) p else p * LOCKED_PEEK
-                                }
+                                override fun onTouchDown() = touchDown()
+
+                                // В поездке экран 2 не откроется: он только чуть выглядывает и пружинит назад.
+                                override fun onSwipe(dx: Float) = drag(dx, w, locked = !swipeAllowedNow)
 
                                 override fun onSwipeEnd(dx: Float, velocity: Float) =
-                                    release(0f, velocity, w, allowOpen = swipeAllowedNow)
+                                    release(velocity, w, allowOpen = swipeAllowedNow)
 
-                                override fun onSwipeCancel() = release(0f, 0f, w, allowOpen = false)
+                                override fun onSwipeCancel() = release(0f, w, allowOpen = false)
+
+                                // Касание кончилось без свайпа (тап, поглаживание): пойманный экран едет дальше к цели.
+                                override fun onTouchEnd() {
+                                    if (!gesture.moved) release(0f, w, allowOpen = false)
+                                }
                             },
                         )
                     } else {
@@ -254,9 +306,6 @@ fun RobotScreens(
         }
     }
 }
-
-/** В поездке экран 2 только выглядывает: доля прогресса под пальцем. */
-private const val LOCKED_PEEK = 0.25f
 
 /** Размытие экрана под диалогом выхода (API 31+). */
 private const val EXIT_BLUR_DP = 24

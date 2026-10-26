@@ -127,11 +127,21 @@ class FaceGestureRecognizerTest {
         r.down(1500f, 540f, t)
         drag(line(1500f, 540f, 900f, 550f, 12))
         assertEquals(FaceGestureRecognizer.Mode.SWIPE, r.mode)
-        assertEquals(-600f, log.lastSwipe, 0.5f)
+        // Сдвиг экрана — без гистерезиса: на slop (12 px) меньше пальца, первый кадр свайпа — с нуля.
+        assertEquals(-600f + 12f, log.lastSwipe, 0.5f)
         r.up(900f, 550f, t)
         assertTrue("swipeEnd" in log.events)
         assertTrue("finger moved left: ${log.swipeEndVelocity}", log.swipeEndVelocity < -1_000f)
         assertFalse("stroke" in log.events || "tap" in log.events)
+    }
+
+    @Test
+    fun `the swipe starts from zero, not with a jump of the slop`() {
+        r.down(1500f, 540f, t)
+        t += 16
+        r.move(1487f, 540f, t) // 13 px — только что за гистерезисом
+        assertEquals(FaceGestureRecognizer.Mode.SWIPE, r.mode)
+        assertEquals(-1f, log.lastSwipe, 0.01f)
     }
 
     @Test

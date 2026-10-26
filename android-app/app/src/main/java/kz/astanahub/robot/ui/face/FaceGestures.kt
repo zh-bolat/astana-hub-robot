@@ -120,7 +120,7 @@ class FaceGestureRecognizer(
                 // Вышли за гистерезис: влево и по горизонтали — свайп, иначе — поглаживание.
                 if (dx < 0f && abs(dx) >= abs(dy)) {
                     mode = Mode.SWIPE
-                    listener.onSwipe(dx)
+                    listener.onSwipe(swipeShift(dx))
                 } else {
                     mode = Mode.STROKE
                     strokeStep()
@@ -132,13 +132,19 @@ class FaceGestureRecognizer(
                     mode = Mode.STROKE
                     strokeStep()
                 } else {
-                    listener.onSwipe(dx)
+                    listener.onSwipe(swipeShift(dx))
                 }
             }
             Mode.STROKE -> strokeStep()
             else -> Unit
         }
     }
+
+    /**
+     * Сдвиг свайпа без гистерезиса: свайп распознан, когда палец ушёл на [slop] — экран начинает двигаться с нуля,
+     * а не скачком на slop (apple-design §10; ревью M3-r1, M1).
+     */
+    private fun swipeShift(dx: Float): Float = (dx + slop).coerceAtMost(0f)
 
     /** Время идёт, палец лежит: удержание. */
     fun tick(t: Long) {
@@ -157,7 +163,7 @@ class FaceGestureRecognizer(
                 cancelHold()
                 if (t - t0 <= TAP_MAX_MS) listener.onTap(x0, y0)
             }
-            Mode.SWIPE -> listener.onSwipeEnd(x - x0, velocityX())
+            Mode.SWIPE -> listener.onSwipeEnd(swipeShift(x - x0), velocityX())
             Mode.STROKE -> if (stroking) listener.onStrokeEnd()
             else -> Unit
         }

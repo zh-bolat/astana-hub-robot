@@ -6,6 +6,7 @@ import kotlin.math.abs
 import kotlin.math.min
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,6 +68,55 @@ class ScreenSwipeTest {
     @Test
     fun `during a trip the screen never opens`() {
         assertFalse(ScreenSwipe.release(0.9f, -3000f, w, allowOpen = false).open)
+    }
+
+    @Test
+    fun `touch catches a flying screen where it is - no jump, a drag continues from there`() {
+        // Экран 2 уезжает к лицу, сейчас на 0.3: палец лёг — экран под пальцем на 0.3 (не 0).
+        val g = TransitionGesture()
+        g.catch(0.3f)
+        assertEquals(0.3f, g.held!!, 0f)
+        g.drag(dx = -12f, width = w, current = 0.1f, locked = false)
+        assertEquals(0.3f + 12f / w, g.held!!, 1e-5f) // ведём от 0.3, а не от нуля и не от current
+        val r = g.release(-900f, w, allowOpen = true)!!
+        assertTrue(r.open)
+        assertNull(g.held)
+    }
+
+    @Test
+    fun `caught and released without a drag - no decision, the transition goes on to the view model target`() {
+        val g = TransitionGesture()
+        g.catch(0.6f)
+        assertNull(g.release(0f, w, allowOpen = true))
+        assertNull(g.held)
+    }
+
+    @Test
+    fun `drag from rest starts at the current progress`() {
+        val g = TransitionGesture()
+        g.drag(dx = 480f, width = w, current = 1f, locked = false) // закрытие экрана 2 вправо
+        assertEquals(0.75f, g.held!!, 1e-5f)
+    }
+
+    @Test
+    fun `view model changed the mode mid-gesture - the finger no longer drives until it is lifted`() {
+        val g = TransitionGesture()
+        g.drag(dx = 300f, width = w, current = 1f, locked = false)
+        g.abort() // началась поездка
+        assertNull(g.held)
+        g.drag(dx = 600f, width = w, current = 0.2f, locked = false)
+        assertNull("blocked until up", g.held)
+        g.reset() // палец поднят
+        g.drag(dx = -100f, width = w, current = 0f, locked = false)
+        assertTrue(g.held!! > 0f)
+    }
+
+    @Test
+    fun `trip - the screen only peeks a quarter of the finger and never opens`() {
+        val g = TransitionGesture()
+        g.drag(dx = -960f, width = w, current = 0f, locked = true)
+        assertEquals(0.5f * TransitionGesture.LOCKED_PEEK, g.held!!, 1e-5f)
+        assertFalse(g.release(-3000f, w, allowOpen = false)!!.open)
     }
 
     @Test
