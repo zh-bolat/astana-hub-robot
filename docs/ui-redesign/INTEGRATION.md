@@ -5,8 +5,8 @@
 читает `MainViewModel.state` и `MainViewModel.faceCues`, звук — из `AudioLevels`.
 
 Статус: **M1** — экран 1 (лицо), **M2** — интерактив (тап, удержание → админка, поглаживание, ручка свайпа, сон
-3 мин). Экран 2 (чат, плитки, язык, citations) — M3, остров where_is и поездки — M4.
-До M3 всё прежнее живёт на старом экране (свайп влево с лица / «К роботу» обратно) — функционал не потерян.
+3 мин), **M3** — экран 2 (чат с живыми субтитрами и источниками, плитки, частые вопросы, язык, управление) вместо
+прежнего синего экрана; остров where_is и полировка поездки — M4. Что где теперь — раздел «Экран 2».
 
 Пути: `ui/` = `android-app/app/src/main/java/kz/astanahub/robot/ui/`, тесты — `android-app/app/src/test/...`.
 
@@ -48,13 +48,13 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 | `thinking` | THINKING: взгляд вверх-в сторону, прищур, бровь | `Expressions.THINKING` | `ExpressionsTest`, `FaceDirectorTest` |
 | `turn_start` | — | | |
 | `emotion` | наложение эмоции поверх состояния (`happy`, `excited`, `surprised`, `sad`, `thinking`) | `Expressions.overlay` | `ExpressionsTest`, `FaceEngineTest` |
-| `phrase` | субтитры — экран 2 (M3); лицо — SPEAKING по звуку | | |
+| `phrase` | экран 2: фраза в растущей реплике робота, живые субтитры (слова «зажигаются» по темпу речи); лицо — SPEAKING по звуку | `MainViewModel` (`answer`, `subtitle`) → `ChatLog`, `ScreenTwo.RobotLine` | `ChatLogTest`, запись `M3/m3_chat_live.mp4` |
 | бинарный звук | рот по громкости того, что **реально звучит** (RMS блоков PCM по позиции воспроизведения) | `live/StreamPlayer.kt` → `PcmPlaybackMeter` | `AudioLevelsTest.live pcm level…` |
-| `action where_is` | M1: без изменений лица (подсказка — на прежнем экране); M4 — остров и взгляд в сторону места | | |
+| `action where_is` | экран 2: строка направления со стрелкой над «Спросить голосом» (`wayHint`), ответ — в чате с «Проводить: …»; на лице — M4 (остров и взгляд в сторону места) | `ScreenTwo.Composer` | запись `M3/m3_where_guide.mp4` |
 | `action guide_to` | поездка → TRAVEL + остров «→ место / Стоп» на экране 1; итог → реакция | `FaceScreen.TravelIsland`, `MainViewModel.tripCue` | `MainViewModelFaceCueTest` |
 | `action look` | LOOKING пока идёт снимок (если долго), эмоция `surprised` | `Expressions.LOOKING` | `ExpressionsTest` |
 | `turn_end` (`found: false`) | **без реакции**: так помечены и ответы из общих знаний (`ANSWER_MODE=open`); «не знаю» передаёт эмоция `sad` | `MainViewModel.onLive` | `MainViewModelLiveTest.turn_end with found false…` |
-| `turn_end` `citations` | экран 2 (M3) | | |
+| `turn_end` `citations` (v1.3, необязательно) | подпись-источник под ответом робота («Источник: …», до 3 названий); нет поля — подписи нет | `LiveProtocol` → `LiveSignal.TurnEnd.citations` → `MainUiState.citations` → `ChatLog` → `Tiles.sourceCaption` | `LiveProtocolTest`, `ChatLogTest.citations…`, `TilesTest.source caption…` |
 | `interrupted` | фаза из голоса → лицо слушает/покой | | |
 | `error` | запасной режим (как раньше); лицо — по фазам agent | | |
 
@@ -75,7 +75,9 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 | камера не дала кадр | ERROR | `handleLook`, `agentLookResult`, `liveLook` | `MainViewModelFaceCueTest.camera…` |
 | `/v1/stt` нет связи → «нет связи» | ERROR | `onConnectionLost` | — |
 | микрофон (обычный режим) | VAD записи → «слушает»; громкость → сила реакции | `voice/ServerVoiceGateway.kt`, `audio/MicRecorder.kt` | `FaceEngineTest.listening face…`, `.vad voice alone…` |
-| `/v1/tts`, `/v1/places`, быстрые вопросы, история, метрики | без изменений (прежний экран до M3) | | существующие тесты |
+| `done` / `/v1/ask` `citations` (v1.3, необязательно) | подпись-источник под ответом (как в live); старый сервер — без подписи | `CitationParser` (`Sse.done`, `AnswerDto.toDomain`) → `MainUiState.citations` | `SseParserTest.done carries citations…`, `RetrofitBackendApiTest.ask parses optional citations…`, `MainViewModelScreenTwoTest` |
+| быстрые вопросы (`/v1/quick-questions`) | плитки экрана 2 (до 4) + «Частые вопросы» (все, по страницам) | `Tiles.home`, `ScreenTwo.TileGrid`, `FaqPanel` | `TilesTest` |
+| `/v1/tts`, `/v1/places`, история, метрики | без изменений | | существующие тесты |
 
 ## Робот
 
@@ -86,7 +88,7 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 | тап по лицу | спит → `wake()`; говорит → `stop()` (tap-to-interrupt); **в поездке и говорит → `interruptSpeech()`: замолкает, поездка продолжается** (речь видна по `robotSpeaking` — фаза в поездке всё время NAVIGATING); молчит → рефлекс лица (моргнуть / вздрогнуть, без спама) | `FaceInputMapper.tap`, `MainActivity.onFaceTap`, `MainViewModel.interruptSpeech/robotSpeaking`, `FaceEngine.reflex` | `FaceInputMapperTest.tap…`, `MainViewModelSleepTest.tap in a trip…`, `FaceEngineTest.tap reflex…`, записи `M2/m2_tap_*.mp4` |
 | удержание по лицу 3 с | PIN (`DiagPinDialog`) → `DiagnosticsActivity` — тот же вход, что удержание логотипа; без PIN на роботе — выключено | `FaceScreen` (`onHold`) → `MainActivity.openDiagnostics` | `FaceGestureRecognizerTest.holding still…`, запись `M2/m2_hold_admin.mp4` |
 | поглаживание | PETTED, пока гладят, +0.7 с; голова льнёт к руке | `FaceInputs.petting/strokeVx/strokeVy` | `FaceEngineTest.petting…`, `FaceGestureRecognizerTest.vertical strokes…`, `.circling…` |
-| свайп влево | прежний экран; **в поездке не засчитывается** (сопротивление и возврат) | `FaceScreen`, `SwipeToMenu.release(allowed)` | `SwipeToMenuTest`, запись `M2/m2_swipe_trip.mp4` |
+| свайп влево | экран 2 (переход за пальцем, лицо → мини-лицо); **в поездке не открывается** (выглядывает и пружинит назад) | `RobotScreens`, `ScreenSwipe.release(allowOpen)` | `ScreenSwipeTest`, записи `M3/m3_open_*.mp4`, `M2/m2_swipe_trip.mp4` |
 | итог поездки | приехали → HAPPY; ошибка / не локализован → ERROR; точки нет → CONFUSED; отмена → ACK | `MainViewModel.tripCue` | `MainViewModelFaceCueTest` |
 | человек подошёл (presence) | пробуждение WAKE → приветствие EXCITED | `MainViewModel.onPresence` → `GREET` | `MainViewModelFaceCueTest.visitor arriving…` |
 | сон (бездействие **3 мин**, `SCREENSAVER_SECONDS=180`) | зевок → сон («z», медленное дыхание); человек рядом, поездка, запрос — не засыпает. Будят: тап, подошедший человек (+ приветствие `visitor_arrived`), голос посетителя по VAD — на роботе с PersonApi только если рядом человек (разговоры в зале не будят), без PersonApi — сразу | `MainViewModel.restartIdleTimer/onVisitorVoice/onPresence`, `FaceDirector` | `MainViewModelSleepTest`, `FaceDirectorTest`, `FaceEngineTest.sleep…` |
@@ -94,14 +96,36 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
 
 ## Настройки, диагностика, сборки
 
-| Что | Статус в M1 |
+| Что | Статус (M3) |
 |---|---|
-| PIN, масштаб UI, микрофон, адрес бэкенда, режим разговора | без изменений: диагностика — удержанием логотипа на прежнем экране или (M2) удержанием по лицу 3 с, тот же PIN |
-| масштаб UI (`UiScale`) | лицо вписывается в экран само (виртуальный холст), прежний экран — как был |
-| режим legacy | «бодрый» экран — меню (как раньше), лицо — во сне и в поездке |
+| PIN, масштаб UI, микрофон, адрес бэкенда, режим разговора | без изменений: диагностика — удержанием «Astana Hub» в шапке экрана 2 (3 с, как прежний логотип) или удержанием по лицу 3 с, тот же PIN |
+| масштаб UI (`UiScale`) | экран 2 свёрстан в dp под ширину 1600 dp (масштаб 60–150 % работает как раньше); лицо вписывается само |
+| режим legacy | «бодрый» экран — экран 2 (как прежнее меню), лицо — во сне и в поездке; свайп вправо пружинит назад (ViewModel не уходит с меню) |
 | flavor `emulator` | отладочные команды лицу (adb broadcast) — только debug + emulator |
 | flavor `robotos` / `robot` | собираются; отладочного ресивера нет |
 | уменьшение движения | системные анимации выключены → без толчков и покачиваний |
+
+## Экран 2 (M3): прежний функционал → где теперь
+
+| Было на прежнем экране | Теперь | Код | Проверка |
+|---|---|---|---|
+| вопрос и ответ (экран «ответ»), облачко субтитров под лицом, крупные субтитры в режиме лица | чат: реплики посетителя и робота, растущий ответ, живые субтитры в реплике робота | `ChatLog`, `ScreenTwo.Chat` | `ChatLogTest`, `MainViewModelScreenTwoTest`, `M3/m3_chat_live.mp4` |
+| «что слышу» (`partialQuestion`) | полупрозрачный пузырь посетителя «…» внизу чата | `ScreenTwo.Chat` | — (live STT — на роботе) |
+| статус «Слушаю / Думаю / Говорю» | строка под «Astana Hub» в шапке; «думаю» — три точки в чате | `ScreenTwo.Header` | снимки `M3/*.png` |
+| плитки приветствия (4 вопроса + «Частые вопросы» + «Что это?») | плитки 2 × 3 справа, монохромные значки | `Tiles`, `ScreenTwo.TileGrid` | `TilesTest`, `M3/m3_*` |
+| частые вопросы (аккордеон, «Ещё вопросы (1/3)», «Проводить», «Показать полностью») | то же — в правой колонке | `ScreenTwo.FaqPanel` | `M3/m3_faq.mp4` |
+| «Проводить: Кафе» под ответом | белая пилюля под последним ответом робота | `ScreenTwo.RobotLine` | `M3/m3_where_guide.mp4` |
+| «Стоп» (внизу, пока занят) | «Стоп» вместо «Спросить голосом» | `ScreenTwo.Composer` | `M3/m3_chat_live.mp4` |
+| «Просто скажите вопрос» (одна фраза через STT) | «Спросить голосом» | `MainActivity.listenOnce` | — (микрофон — на роботе) |
+| «Что это?» внизу | плитка «Что это?» | `TileAction.Look` | — (камера — на роботе) |
+| «В начало» / «Назад» | не нужны: история — в чате; из частых вопросов — «‹» и системное «Назад» | `MainActivity` (back) | — |
+| RU / KZ / EN | сегменты в шапке | `LanguageSwitch` | `TilesTest.labels…`, `M3/m3_lang.mp4` |
+| выход (× → подтверждение, 15 с) | × в шапке → диалог (блюр на API 31+) | `ExitDialog`, `MainActivity.askExit` | `M3/m3_exit.mp4` |
+| «Нет связи», «Микрофон выключен» | плашки в шапке | `StatusBadge` | — |
+| удержание логотипа → PIN → диагностика | удержание «Astana Hub» в шапке (и удержание по лицу) | `holdToActivate`, `MainActivity.openDiagnostics` | — |
+| поле ввода (эмулятор) | поле и «отправить» внизу чата (только эмулятор) | `ScreenTwo.TextInput` | записи `M3` |
+| версия сборки | подпись внизу справа | `ScreenTwoState.buildLabel` | снимки |
+| слои «поездка» и «заставка» прежнего экрана | экран 1 (лицо, остров «Стоп», сон) — из экрана 2 переход сам пружиной | `RobotScreens` | `M3/m3_where_guide.mp4` |
 
 ## Проверить на роботе
 
@@ -115,3 +139,6 @@ MainActivity.render → FaceController.onState → FaceInputMapper → FaceInput
   удержания не закрывается пальцем (радиус ≈ 80 px на 1920 × 1080); ручка заметна на расстоянии 1–1.5 м.
 - Пробуждение голосом: VAD на массиве микрофонов Nova + PersonApi — будит ли голос подошедшего, не будят ли разговоры
   в зале; тап в поездке обрывает фразу пути встроенного TTS / серверного голоса (`stopSpeaking`, `interrupt`).
+- Экран 2 (M3): 60 fps перехода и чата на железе робота, пока мини-лицо живёт каждый кадр; читаемость текста
+  (Body 28 sp, подписи-источники 20 sp) с 1–1.5 м; свайп вправо на сенсоре не путается с прокруткой чата.
+- Материал диалога выхода: на API 31+ — размытие экрана под ним, на API 26–30 (вероятно, робот) — только затемнение.
