@@ -63,7 +63,9 @@ def test_prompt_is_masculine_playful_and_calm(kb, mode, retrieval):
     # прежние правила на месте
     for rule in ("no_answer", "guide_to", "[sad]", "<visitor_message>", "По-казахски"):
         assert rule in rules
-    assert "ремарок" in rules and "ха-ха" in rules  # смех и действия текстом не пишем
+    assert "Ремарок" in rules and "*смеётся*" in rules  # действия текстом не пишем
+    assert "«Ха-ха!»" in rules and "«Haha!»" in rules  # смех — коротким словом, к месту
+    assert "раза за разговор" in rules
 
 
 def test_greeting_turn_uses_one_of_the_styles():
