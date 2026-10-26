@@ -139,13 +139,12 @@ class MainActivity : AppCompatActivity() {
         setUpScreens()
 
         // Системная «Назад»: закрыть подтверждение выхода; на экране 2 — из частых вопросов назад, иначе к лицу.
+        // На лице — ничего (киоск).
         onBackPressedDispatcher.addCallback(this) {
-            val state = viewModel.state.value
             when {
                 two.exitConfirm -> stayIn()
-                face.screen.menuOpen && state.screen == Screen.FAQ -> viewModel.back()
+                face.screen.menuOpen && viewModel.state.value.screen == Screen.FAQ -> viewModel.back()
                 face.screen.menuOpen -> viewModel.showFace()
-                state.canGoBack -> viewModel.back()
             }
         }
         requestMicPermissionOnce()

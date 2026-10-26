@@ -177,7 +177,7 @@ object ScreenTwoLayout {
     val SlotHeight = 88.dp
 
     /** Видимое мини-лицо (глаза, брови, рот) по высоте — с запасом внутри слота на движения головы. */
-    val MiniFaceHeight = 64.dp
+    val MiniFaceHeight = 76.dp
 }
 
 /**
