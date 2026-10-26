@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -105,6 +106,8 @@ fun RobotScreens(
     two: ScreenTwoState,
     actions: ScreenTwoActions,
     host: RobotScreensHost,
+    pin: PinPadState = remember { PinPadState() },
+    pinActions: PinPadActions? = null,
 ) {
     val screen = face.screen
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -217,10 +220,12 @@ fun RobotScreens(
 
         // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
         // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
+        val settled by remember { derivedStateOf { visual() >= 0.98f && !progress.isRunning } }
         ScreenTwo(
             state = two,
             actions = actions,
             progress = ::visual,
+            interactive = settled,
             modifier = Modifier
                 .graphicsLayer {
                     translationX = if (visual() > 1f) -(visual() - 1f) * w else 0f
@@ -343,6 +348,15 @@ fun RobotScreens(
                 reducedMotion = reduced,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
             )
+            // Нет связи — и на экране лица видно (не только тишина): янтарная плашка сверху.
+            AnimatedVisibility(
+                visible = two.offline && !screen.asleep && screenOne,
+                enter = fadeIn(HubMotion.Default.compose()),
+                exit = fadeOut(HubMotion.Default.compose()),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 28.dp),
+            ) {
+                OfflinePill(two.texts.offline)
+            }
             // Сон: приветствие внизу по очереди на трёх языках (прототип, заставка).
             SleepGreeting(visible = screen.asleep && screenOne, modifier = Modifier.align(Alignment.BottomCenter))
             // Поездка — светлый слой прототипа поверх лица (стрелка, «Иду к…», «Стоп»), «где» — карточка внизу.
@@ -367,11 +381,27 @@ fun RobotScreens(
         ) {
             ExitDialog(two.texts, actions)
         }
+        if (pinActions != null) PinPad(pin, pinActions)
     }
 }
 
 /** Мини-лицо под пальцем (тап по нему — к лицу): сжимается, как кнопка (apple-design: отклик на touch-down). */
 private const val MINI_PRESS_SCALE = 0.9f
+
+/** Плашка «нет связи» на экране лица — янтарная, как полоса прототипа. */
+@Composable
+private fun OfflinePill(text: String) {
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
+    androidx.compose.foundation.layout.Row(
+        Modifier
+            .background(HubColors.AmberBg, shape)
+            .padding(horizontal = 32.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.padding(end = 14.dp).background(HubColors.AmberFg, androidx.compose.foundation.shape.CircleShape).padding(7.dp))
+        BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), maxLines = 1)
+    }
+}
 
 /** Скругление экрана головы робота (прототип: 40 % / 48 % от экрана 272 × 186). */
 private val SCREEN_RADIUS = 86.dp

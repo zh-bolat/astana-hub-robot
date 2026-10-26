@@ -51,10 +51,11 @@ class ExpressionsTest {
         // Слушает — глаза шире, реагирует на голос.
         assertTrue(value(FaceMood.LISTENING, P.EYE_H) > n[P.EYE_H])
         assertEquals(1f, value(FaceMood.LISTENING, P.LISTEN), 0f)
-        // Думает — взгляд вверх-в сторону, прищур, одна бровь выше.
+        // Думает (вид прототипа) — взгляд вверх-в сторону, глаза-полоски и «?».
         assertTrue(value(FaceMood.THINKING, P.GAZE_Y) < -0.5f)
         assertTrue(abs(value(FaceMood.THINKING, P.GAZE_X)) > 0.3f)
-        assertTrue(value(FaceMood.THINKING, P.SMILE_L) > 0f)
+        assertEquals(0f, value(FaceMood.THINKING, P.OPEN_L), 0f)
+        assertEquals(1f, value(FaceMood.THINKING, P.QUESTION), 0f)
         assertTrue(abs(value(FaceMood.THINKING, P.BROW_L) - value(FaceMood.THINKING, P.BROW_R)) > 10f)
         // Говорит — рот от звука.
         assertEquals(1f, value(FaceMood.SPEAKING, P.TALK), 0f)

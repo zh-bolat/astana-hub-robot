@@ -176,6 +176,9 @@ class ScreenTwoState {
     /** Костюм робота-компаньона (только вид). */
     var costume by mutableStateOf(Costume.CLASSIC)
 
+    /** К лицу можно вернуться (режим agent / live); в legacy главный экран — меню, голова робота не кнопка. */
+    var faceAvailable by mutableStateOf(true)
+
     /** Палец на роботе-компаньоне: отклик на touch-down рисует слой лица (глаза сжимаются). */
     val miniPressed = mutableStateOf(false)
 
@@ -246,8 +249,35 @@ object ScreenTwoLayout {
  * «Спросить голосом» / «Стоп». [progress] — переход (0 — лицо, 1 — экран 2): правая колонка чуть отстаёт.
  */
 @Composable
-fun ScreenTwo(state: ScreenTwoState, actions: ScreenTwoActions, progress: () -> Float, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().background(HubColors.Background)) {
+fun ScreenTwo(
+    state: ScreenTwoState,
+    actions: ScreenTwoActions,
+    progress: () -> Float,
+    modifier: Modifier = Modifier,
+    /** Страница доехала (не в переходе): иначе касания кнопок не срабатывают — ловят переход. */
+    interactive: Boolean = true,
+) {
+    Box(modifier.fillMaxSize()) {
+        ScreenTwoContent(state, actions, progress)
+        if (!interactive) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    // Верхний слой забирает касание у кнопок под ним (они его не получат), но не потребляет его:
+                    // ловля летящего перехода и свайп страницы (родитель) работают как прежде.
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) awaitPointerEvent()
+                        }
+                    },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScreenTwoContent(state: ScreenTwoState, actions: ScreenTwoActions, progress: () -> Float) {
+    Column(Modifier.fillMaxSize().background(HubColors.Background)) {
         TopBar(state, actions)
         val notice = state.notice
         AnimatedVisibility(
@@ -337,6 +367,7 @@ private fun LeftColumn(state: ScreenTwoState, actions: ScreenTwoActions, modifie
         // Тап по голове робота — к лицу (на касание глаза сжимаются: их рисует слой лица).
         Pressable(
             onClick = actions::onClose,
+            enabled = state.faceAvailable,
             pressed = state.miniPressed,
             modifier = Modifier
                 .offset(ScreenTwoLayout.HeadX, ScreenTwoLayout.HeadY)
@@ -886,7 +917,9 @@ private fun BottomBar(state: ScreenTwoState, actions: ScreenTwoActions, modifier
             if (busy) {
                 HubPill(texts.stop, actions::onStop, glyph = R.drawable.ic_m_stop, kind = PillKind.STOP)
             } else {
-                AskVoice(texts.askVoice, actions::onAskVoice)
+                // Посетитель говорит — кнопка показывает, что робот слушает (не предлагает «спросить» ещё раз).
+                val hearing = state.partial != null
+                AskVoice(if (hearing) state.status else texts.askVoice, actions::onAskVoice, enabled = !state.micOff && !hearing, live = hearing)
             }
         }
         Column(Modifier.align(Alignment.CenterEnd), horizontalAlignment = Alignment.End) {
@@ -902,29 +935,50 @@ private fun BottomBar(state: ScreenTwoState, actions: ScreenTwoActions, modifier
     }
 }
 
-/** «Спросить голосом» в виде прототипа (`.hint`): белая пилюля с кромкой, синий круг с микрофоном. */
+/**
+ * «Спросить голосом» в виде прототипа (`.hint`): белая пилюля с кромкой, синий круг с микрофоном. Пока посетитель
+ * говорит ([live]) — та же пилюля без нажатия: микрофон пульсирует, подпись — «Слушаю…» (не кнопка, а состояние).
+ */
 @Composable
-private fun AskVoice(label: String, onClick: () -> Unit) {
+private fun AskVoice(label: String, onClick: () -> Unit, enabled: Boolean, live: Boolean = false) {
     val shape = RoundedCornerShape(percent = 50)
-    Pressable(
-        onClick = onClick,
-        modifier = Modifier
-            .height(84.dp)
-            .softShadow(shape, 6.dp, 0.08f)
-            .background(Color.White, shape)
-            .border(1.dp, HubColors.Border, shape)
-            .padding(start = 12.dp, end = 30.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(60.dp).softShadow(CircleShape, 8.dp, 0.3f, HubColors.Blue).background(HubColors.Blue, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Glyph(R.drawable.ic_m_mic, 30.dp, Color.White)
-            }
-            Spacer(Modifier.width(16.dp))
-            BasicText(label, style = HubType.Callout.copy(color = HubColors.LangText), maxLines = 1)
+    val look = Modifier
+        .height(84.dp)
+        .softShadow(shape, 6.dp, 0.08f)
+        .background(Color.White, shape)
+        .border(1.dp, HubColors.Border, shape)
+        .padding(start = 12.dp, end = 30.dp)
+    if (live) {
+        Box(look, contentAlignment = Alignment.Center) { AskVoiceContent(label, live = true) }
+    } else {
+        Pressable(onClick = onClick, enabled = enabled, modifier = look) { AskVoiceContent(label, live = false) }
+    }
+}
+
+@Composable
+private fun AskVoiceContent(label: String, live: Boolean) {
+    val pulse = if (live) {
+        val t = rememberInfiniteTransition(label = "mic")
+        t.animateFloat(1f, 1.12f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "micPulse").value
+    } else {
+        1f
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(60.dp)
+                .graphicsLayer {
+                    scaleX = pulse
+                    scaleY = pulse
+                }
+                .softShadow(CircleShape, 8.dp, 0.3f, HubColors.Blue)
+                .background(HubColors.Blue, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Glyph(R.drawable.ic_m_mic, 30.dp, Color.White)
         }
+        Spacer(Modifier.width(16.dp))
+        BasicText(label, style = HubType.Callout.copy(color = HubColors.LangText), maxLines = 1)
     }
 }
 

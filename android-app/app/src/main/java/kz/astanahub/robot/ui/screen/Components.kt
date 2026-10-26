@@ -76,6 +76,15 @@ fun Pressable(
 ) {
     val own = remember { mutableStateOf(false) }
     val pressed = pressed ?: own
+    // Двойной / дрожащий тап не запускает действие дважды: повтор в течение [REPEAT_GUARD_MS] — без действия.
+    val lastClick = remember { longArrayOf(Long.MIN_VALUE / 2) }
+    val clickOnce: () -> Unit = {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastClick[0] >= REPEAT_GUARD_MS) {
+            lastClick[0] = now
+            onClick()
+        }
+    }
     val scale by animateFloatAsState(if (pressed.value) HubMotion.PRESS_SCALE else 1f, HubMotion.Press.compose(), label = "press")
     val dim by animateFloatAsState(if (enabled) 1f else DISABLED_ALPHA, HubMotion.Default.compose(), label = "enabled")
     Box(
@@ -90,8 +99,8 @@ fun Pressable(
             .then(
                 when {
                     !enabled -> Modifier
-                    takeTouch -> Modifier.pressToClick(pressed, onClick)
-                    else -> Modifier.tapUnlessDragged(pressed, onClick)
+                    takeTouch -> Modifier.pressToClick(pressed, clickOnce)
+                    else -> Modifier.tapUnlessDragged(pressed, clickOnce)
                 },
             )
             .then(modifier),
@@ -343,4 +352,7 @@ val NOTICE_HEIGHT = 64.dp
 private val SEGMENT_WIDTH = 84.dp
 private val SEGMENT_HEIGHT = 50.dp
 private const val DISABLED_ALPHA = 0.4f
+
+/** Повтор нажатия той же кнопки раньше — без действия (двойной тап, дрожание пальца). */
+const val REPEAT_GUARD_MS = 600L
 private const val APPEAR_STEP_MS = 40L

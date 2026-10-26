@@ -31,7 +31,9 @@ import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.security.DiagAccess
-import kz.astanahub.robot.ui.DiagPinDialog
+import kz.astanahub.robot.ui.screen.PinPadActions
+import kz.astanahub.robot.ui.screen.PinPadState
+import kz.astanahub.robot.security.DiagPinGuard
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
 import kz.astanahub.robot.ui.Phase
@@ -218,6 +220,8 @@ class MainActivity : AppCompatActivity() {
                     two = two,
                     actions = actions,
                     host = host,
+                    pin = pin,
+                    pinActions = pinActions,
                 )
             }
         }
@@ -312,11 +316,70 @@ class MainActivity : AppCompatActivity() {
         when (gate.access) {
             DiagAccess.DISABLED -> Unit
             DiagAccess.OPEN -> startActivity(Intent(this, DiagnosticsActivity::class.java))
-            DiagAccess.PIN -> DiagPinDialog.show(this, gate.guard) {
-                gate.session.unlock()
-                startActivity(Intent(this, DiagnosticsActivity::class.java))
+            DiagAccess.PIN -> showPin()
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // PIN диагностики — панель в виде прототипа (наша логика: DiagPinGuard, блокировка, минута без ввода — закрыть).
+    // ---------------------------------------------------------------------------------------------
+
+    private val pin = PinPadState()
+    private val pinTimeout = Runnable { closePin() }
+
+    private fun showPin() {
+        if (pin.visible) return
+        pin.pin = ""
+        renderPinLock()
+        if (!pin.locked) pin.message = ""
+        pin.visible = true
+        handler.removeCallbacks(pinTimeout)
+        handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
+    }
+
+    private fun renderPinLock(): Boolean {
+        val lock = container.diagnostics.guard.lockRemainingMillis()
+        pin.locked = lock > 0
+        if (pin.locked) pin.message = "Слишком много попыток. Попробуйте через ${(lock + 59_999) / 60_000} мин."
+        return pin.locked
+    }
+
+    private fun closePin() {
+        handler.removeCallbacks(pinTimeout)
+        pin.visible = false
+        pin.pin = ""
+    }
+
+    private val pinActions = object : PinPadActions {
+        override fun onPinDigit(d: Char) {
+            if (pin.locked || pin.pin.length >= MAX_PIN) return
+            pin.pin += d
+            pin.message = ""
+            handler.removeCallbacks(pinTimeout)
+            handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
+        }
+
+        override fun onPinErase() {
+            pin.pin = pin.pin.dropLast(1)
+        }
+
+        override fun onPinSubmit() {
+            if (renderPinLock()) return
+            val entered = pin.pin
+            pin.pin = ""
+            val gate = container.diagnostics
+            when (val r = gate.guard.check(entered)) {
+                DiagPinGuard.Result.Ok -> {
+                    closePin()
+                    gate.session.unlock()
+                    startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                }
+                is DiagPinGuard.Result.Wrong -> pin.message = "Неверный PIN. Осталось попыток: ${r.attemptsLeft}"
+                is DiagPinGuard.Result.Locked -> renderPinLock()
             }
         }
+
+        override fun onPinCancel() = closePin()
     }
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -393,6 +456,7 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
+        two.faceAvailable = container.chatSettings.mode.value.usesAgent
     }
 
     /** Экран 2 открыт: режим MENU, не едем и остров не досказывает поездку. */
@@ -531,6 +595,8 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
+        const val PIN_TIMEOUT_MS = 60_000L
+        const val MAX_PIN = 12
         val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
