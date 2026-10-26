@@ -55,9 +55,12 @@ class FaceScreenState {
      */
     var menuOpen by mutableStateOf(false)
 
-    /** Поездка: «Иду к: Кафе»; null — не едем. В поездке экран 2 не открывается (лицо обязано быть на экране). */
-    var travelTitle by mutableStateOf<String?>(null)
-    var stopLabel by mutableStateOf("")
+    /** Робот везёт человека: экран 2 не открывается (лицо обязано быть на экране), ручки нет. */
+    var traveling by mutableStateOf(false)
+
+    /** Остров внизу ([IslandModel]: where_is, поездка, итог); null — острова нет. */
+    var island by mutableStateOf<IslandContent?>(null)
+    var islandTexts by mutableStateOf(IslandTexts())
 
     /** Спит: ручка свайпа гаснет. */
     var asleep by mutableStateOf(false)
@@ -244,47 +247,6 @@ fun SwipeHandle(
             .height(84.dp)
             .background(HubColors.White, RoundedCornerShape(percent = 50)),
     )
-}
-
-/**
- * «Остров» поездки: место + «Стоп». Появляется «материализуясь» — scale 0.92 → 1 и прозрачность пружиной
- * от нижнего края, уходит тем же путём (AnimatedVisibility: переходы прерываемые, от текущих значений).
- * Полировка — M4.
- */
-@Composable
-fun TravelIsland(title: String?, stopLabel: String, onStop: () -> Unit, modifier: Modifier = Modifier) {
-    // Пока остров уходит, title уже null — показываем последнее место (запоминаем после композиции).
-    val last = remember { mutableStateOf(title.orEmpty()) }
-    SideEffect { if (title != null) last.value = title }
-    val text = title ?: last.value
-    val origin = TransformOrigin(0.5f, 1f)
-    AnimatedVisibility(
-        visible = title != null,
-        modifier = modifier,
-        enter = fadeIn(HubMotion.Default.compose()) +
-            scaleIn(HubMotion.Default.compose(), initialScale = 0.92f, transformOrigin = origin),
-        exit = fadeOut(HubMotion.Default.compose()) +
-            scaleOut(HubMotion.Default.compose(), targetScale = 0.92f, transformOrigin = origin),
-    ) {
-        val shape = RoundedCornerShape(percent = 50)
-        Row(
-            Modifier
-                .background(HubColors.Island, shape)
-                .border(1.dp, HubColors.Hairline, shape)
-                .padding(start = 40.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicText(
-                text = "→  " + text,
-                style = HubType.Headline.copy(color = HubColors.Label),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 760.dp),
-            )
-            Spacer(Modifier.width(32.dp))
-            PillButton(label = stopLabel, onClick = onStop)
-        }
-    }
 }
 
 /**

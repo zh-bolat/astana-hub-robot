@@ -51,4 +51,10 @@
     <string name="action_ask_voice">Ask by voice</string>
     <string name="chat_you">You</string>
     <string name="tiles_title">Quick questions</string>
+    <string name="island_arrived">We\'re here: %1$s</string>
+    <string name="island_failed">Couldn\'t get there</string>
+    <string name="island_stopped">Stopped</string>
+    <string name="island_meters">%1$d m</string>
+    <string name="island_near">nearby</string>
+    <string name="action_stop_trip">Stop</string>
 </resources>

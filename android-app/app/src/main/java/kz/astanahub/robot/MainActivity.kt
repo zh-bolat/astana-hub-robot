@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +39,12 @@ import kz.astanahub.robot.ui.Screen
 import kz.astanahub.robot.ui.ScreenMode
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.ui.face.FaceController
+import kz.astanahub.robot.ui.face.FaceCue
+import kz.astanahub.robot.ui.face.IslandContent
+import kz.astanahub.robot.ui.face.IslandGeometry
+import kz.astanahub.robot.ui.face.IslandModel
+import kz.astanahub.robot.ui.face.IslandTexts
+import kz.astanahub.robot.ui.face.TripOutcome
 import kz.astanahub.robot.ui.face.FaceDebug
 import kz.astanahub.robot.ui.face.FaceInputMapper
 import kz.astanahub.robot.ui.screen.ChatLog
@@ -95,6 +102,13 @@ class MainActivity : AppCompatActivity() {
 
     /** Что уже собрано (подписи и плитки пересобираем только при смене языка / списка вопросов). */
     private var textsFor: Lang? = null
+    private var islandTextsFor: Lang? = null
+
+    /** Остров экрана лица и его таймер (where_is ~9 с, итог поездки ~2 с). */
+    private val island = IslandModel()
+    private val islandTick = Runnable {
+        if (island.tick(SystemClock.uptimeMillis())) applyIsland() else scheduleIsland()
+    }
     private var tilesFor: Any? = null
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -155,7 +169,17 @@ class MainActivity : AppCompatActivity() {
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.faceCues.collect { face.onCue(it) }
+                viewModel.faceCues.collect { cue ->
+                    face.onCue(cue)
+                    // Итог поездки — коротко на острове.
+                    val outcome = when (cue) {
+                        FaceCue.ARRIVED -> TripOutcome.ARRIVED
+                        FaceCue.TRIP_FAILED -> TripOutcome.FAILED
+                        FaceCue.TRIP_CANCELLED -> TripOutcome.STOPPED
+                        else -> null
+                    }
+                    if (outcome != null && island.onOutcome(outcome, SystemClock.uptimeMillis())) applyIsland()
+                }
             }
         }
     }
@@ -209,12 +233,19 @@ class MainActivity : AppCompatActivity() {
 
         override fun onTravelStop() = viewModel.stop()
 
+        override fun onIslandGuide() = viewModel.guideToOffered()
+
         override fun onSwitch(open: Boolean): Boolean {
-            if (open) viewModel.openMenu() else viewModel.showFace()
+            if (open) {
+                viewModel.openMenu()
+                // Посетитель сам ушёл на экран 2 — итог поездки на острове его не держит.
+                if (island.clear()) applyIsland()
+            } else {
+                viewModel.showFace()
+            }
             // Состояние ViewModel обновлено синхронно — сразу отдаём, куда доехать (без кадра «туда-обратно»).
-            val menuOpen = ScreenTwoMapper.menuOpen(viewModel.state.value)
-            face.screen.menuOpen = menuOpen
-            return menuOpen
+            refreshMenuOpen()
+            return face.screen.menuOpen
         }
     }
 
@@ -306,10 +337,16 @@ class MainActivity : AppCompatActivity() {
     private fun render(state: MainUiState) {
         face.onState(state)
         val screen = face.screen
-        screen.menuOpen = ScreenTwoMapper.menuOpen(state)
-        screen.travelTitle = state.guidingTo?.let { container.text.get(R.string.guide_title, state.lang, it) }
-        screen.stopLabel = str(R.string.action_stop, state.lang)
+        screen.traveling = state.guidingTo != null
         screen.asleep = state.mode == ScreenMode.SLEEP
+        if (islandTextsFor != state.lang) {
+            islandTextsFor = state.lang
+            screen.islandTexts = islandTexts(state.lang)
+        }
+        // Остров: поездка / итог / «где» (спит — острова нет).
+        val now = SystemClock.uptimeMillis()
+        val changed = if (state.mode == ScreenMode.SLEEP) island.clear() else island.update(state.guidingTo, state.whereIs, now)
+        if (changed) applyIsland() else refreshMenuOpen()
         // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
         screen.holdEnabled = ScreenTwoMapper.faceHoldEnabled(state, container.diagnostics.access != DiagAccess.DISABLED)
         // Уснул — диалог выхода закрывается (робот работает дальше).
@@ -348,6 +385,48 @@ class MainActivity : AppCompatActivity() {
         two.wayHint = state.wayHint
         two.offline = state.offline
     }
+
+    /** Экран 2 открыт: режим MENU, не едем и остров не досказывает поездку. */
+    private fun refreshMenuOpen() {
+        val c = island.content
+        face.screen.menuOpen = ScreenTwoMapper.menuOpen(
+            viewModel.state.value,
+            islandHoldsFace = c is IslandContent.Trip || c is IslandContent.Outcome,
+        )
+    }
+
+    /** Остров → экран лица: содержимое, взгляд в сторону места (where_is), следующий тик таймера. */
+    private fun applyIsland() {
+        val content = island.content
+        face.screen.island = content
+        refreshMenuOpen()
+        val inputs = face.engine.inputs
+        if (content is IslandContent.WhereIs) {
+            inputs.lookX = IslandGeometry.gazeX(content.hint.visitorAngleRad)
+            inputs.lookY = IslandGeometry.gazeY(content.hint.visitorAngleRad)
+            inputs.looking = true
+        } else {
+            inputs.looking = false
+        }
+        scheduleIsland()
+    }
+
+    private fun scheduleIsland() {
+        handler.removeCallbacks(islandTick)
+        val at = island.nextChangeAt() ?: return
+        handler.postAtTime(islandTick, at)
+    }
+
+    private fun islandTexts(lang: Lang) = IslandTexts(
+        tripTitle = str(R.string.guide_title, lang),
+        stopTrip = str(R.string.action_stop_trip, lang),
+        guide = str(R.string.action_guide_short, lang),
+        arrived = str(R.string.island_arrived, lang),
+        failed = str(R.string.island_failed, lang),
+        stopped = str(R.string.island_stopped, lang),
+        meters = str(R.string.island_meters, lang),
+        near = str(R.string.island_near, lang),
+    )
 
     private fun texts(lang: Lang) = ScreenTexts(
         title = getString(R.string.title),

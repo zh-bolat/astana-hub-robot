@@ -40,7 +40,7 @@ import kz.astanahub.robot.ui.design.HubMotion
 import kz.astanahub.robot.ui.face.FaceController
 import kz.astanahub.robot.ui.face.FaceSwipeListener
 import kz.astanahub.robot.ui.face.SwipeHandle
-import kz.astanahub.robot.ui.face.TravelIsland
+import kz.astanahub.robot.ui.face.Island
 import kz.astanahub.robot.ui.face.faceGestures
 import kz.astanahub.robot.ui.face.faceSurface
 
@@ -52,8 +52,11 @@ interface RobotScreensHost {
     /** Удержание по лицу 3 с — PIN → админка. */
     fun onFaceHold()
 
-    /** «Стоп» на острове поездки. */
+    /** «Остановить» на острове поездки. */
     fun onTravelStop()
+
+    /** «Проводить» на острове where_is. */
+    fun onIslandGuide()
 
     /**
      * Жест решил открыть ([open] = true) или закрыть экран 2. MainActivity зовёт MainViewModel (`openMenu` /
@@ -187,7 +190,7 @@ fun RobotScreens(
 
         // Экран 1: жесты по лицу, ручка, остров поездки. Пока открыт экран 2 — слоя жестов нет (касания идут экрану 2).
         val pressed = remember { mutableStateOf(false) }
-        val swipeAllowed = screen.travelTitle == null
+        val swipeAllowed = !screen.traveling
         val swipeAllowedNow by rememberUpdatedState(swipeAllowed)
         val screenOne = !screen.menuOpen
         Box(
@@ -231,10 +234,12 @@ fun RobotScreens(
                 reducedMotion = reduced,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
             )
-            TravelIsland(
-                title = screen.travelTitle,
-                stopLabel = screen.stopLabel,
+            // Остров — только на экране лица (на экране 2 «где» и «Проводить» уже в чате).
+            Island(
+                content = screen.island.takeIf { !screen.menuOpen },
+                texts = screen.islandTexts,
                 onStop = { hostNow.onTravelStop() },
+                onGuide = { hostNow.onIslandGuide() },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
             )
         }

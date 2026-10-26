@@ -24,6 +24,8 @@ class ScreenTwoMapperTest {
         assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU, guidingTo = "Кафе")))
         assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.FACE)))
         assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.SLEEP)))
+        // Поездка кончилась, остров ещё показывает итог — экран 2 подождёт.
+        assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU), islandHoldsFace = true))
     }
 
     @Test

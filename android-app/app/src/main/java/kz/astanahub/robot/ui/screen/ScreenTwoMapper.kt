@@ -12,8 +12,12 @@ import kz.astanahub.robot.ui.ScreenMode
  */
 object ScreenTwoMapper {
 
-    /** Экран 2 открыт: режим MENU и не едем (в поездке лицо обязано быть на экране). */
-    fun menuOpen(s: MainUiState): Boolean = s.mode == ScreenMode.MENU && s.guidingTo == null
+    /**
+     * Экран 2 открыт: режим MENU и не едем (в поездке лицо обязано быть на экране). [islandHoldsFace] — остров ещё
+     * показывает поездку или её итог: к экрану 2 возвращаемся, когда итог показан (лицо и пилюля успевают «досказать»).
+     */
+    fun menuOpen(s: MainUiState, islandHoldsFace: Boolean = false): Boolean =
+        s.mode == ScreenMode.MENU && s.guidingTo == null && !islandHoldsFace
 
     /** Занят: думает / смотрит / говорит — «Стоп» вместо «Спросить голосом». */
     fun busy(s: MainUiState): Boolean = s.processing || s.phase == Phase.SPEAKING
