@@ -22,7 +22,10 @@ import timber.log.Timber
  * Каждый MediaPlayer освобождается ровно один раз: по завершении/ошибке/стопу [play], отменой [prepare]
  * или [release] для не сыгранного клипа.
  */
-class Mp3Player : ClipPlayer {
+class Mp3Player(
+    /** Громкость речи для лица (Visualizer на сессии плеера); null — не измеряем (тесты, диагностика). */
+    private val meter: PlaybackVisualizer? = null,
+) : ClipPlayer {
 
     private class Clip(val player: MediaPlayer, private val beforeRelease: () -> Unit = {}) : AudioClip {
         private val released = AtomicBoolean(false)
@@ -41,6 +44,21 @@ class Mp3Player : ClipPlayer {
     private class Session(val finish: (Boolean) -> Unit)
 
     @Volatile private var session: Session? = null
+
+    /** Клип, на сессии которого сейчас висит [meter] (только главный поток). */
+    private var meteredClip: Clip? = null
+
+    private fun meterStart(c: Clip) {
+        val m = meter ?: return
+        meteredClip = c
+        m.attach(runCatching { c.player.audioSessionId }.getOrDefault(0))
+    }
+
+    private fun meterStop(c: Clip) {
+        if (meteredClip !== c) return
+        meteredClip = null
+        meter?.detach()
+    }
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -93,6 +111,7 @@ class Mp3Player : ClipPlayer {
             lateinit var self: Session
             fun finish(ok: Boolean) {
                 if (session === self) session = null
+                meterStop(c)
                 c.releaseNow()
                 if (cont.isActive) cont.resume(ok)
             }
@@ -102,7 +121,10 @@ class Mp3Player : ClipPlayer {
             session = self
             cont.invokeOnCancellation {
                 if (session === self) session = null
-                mainHandler.post { c.releaseNow() }
+                mainHandler.post {
+                    meterStop(c)
+                    c.releaseNow()
+                }
             }
             try {
                 c.player.setOnCompletionListener { finish(true) }
@@ -111,6 +133,7 @@ class Mp3Player : ClipPlayer {
                     finish(false); true
                 }
                 c.player.start()
+                meterStart(c)
             } catch (e: Exception) {
                 Timber.e(e, "MediaPlayer start")
                 finish(false)

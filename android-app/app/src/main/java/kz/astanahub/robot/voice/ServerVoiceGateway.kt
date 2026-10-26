@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runInterruptible
+import kz.astanahub.robot.audio.AudioLevels
 import kz.astanahub.robot.audio.GrowingAudio
 import kz.astanahub.robot.audio.LiveEndpointer
 import kz.astanahub.robot.audio.LiveVadEvent
@@ -85,6 +86,8 @@ class ServerVoiceGateway(
     /** Сколько повторять неудачный синтез куска (1 повтор). */
     private val ttsRetries: Int = 1,
     private val firstByteTimeoutMillis: Long = FIRST_BYTE_TIMEOUT_MS,
+    /** Громкость микрофона для лица (реакция на голос посетителя); null — не передаём. */
+    private val levels: AudioLevels? = null,
 ) : VoiceGateway {
 
     private val _transcripts = MutableSharedFlow<Transcript>(extraBufferCapacity = 16)
@@ -169,6 +172,11 @@ class ServerVoiceGateway(
         }
     }
 
+    private fun onMicLevel(level: Float) {
+        _micLevel.value = level
+        levels?.reportMic(level)
+    }
+
     fun stopListening() {
         continuous = false
         listenJob?.cancel()
@@ -190,7 +198,7 @@ class ServerVoiceGateway(
         _activity.value = VoiceActivity.LISTENING
         val vad = vadConfig()
         val result = try {
-            cancelOnSpeech { recorder.recordUtterance(vad) { _micLevel.value = it } }
+            cancelOnSpeech { recorder.recordUtterance(vad) { onMicLevel(it) } }
         } finally {
             _micLevel.value = 0f
             if (_activity.value == VoiceActivity.LISTENING) _activity.value = VoiceActivity.IDLE
@@ -288,7 +296,7 @@ class ServerVoiceGateway(
             session?.cancel()
         }
         val mic = launch {
-            val error = recorder.stream(vad.sampleRate, LIVE_CHUNK_MS, onLevel = { _micLevel.value = it }) { chunk ->
+            val error = recorder.stream(vad.sampleRate, LIVE_CHUNK_MS, onLevel = ::onMicLevel) { chunk ->
                 val event = endpointer.feed(chunk)
                 if (endpointer.shortSounds > shortSounds) {
                     shortSounds = endpointer.shortSounds
