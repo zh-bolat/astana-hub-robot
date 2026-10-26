@@ -161,6 +161,8 @@ class MainViewModel(
     private var idleJob: Job? = null
     private var emotionJob: Job? = null
     private var menuJob: Job? = null
+    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — переключить экран на лицо (один раз за вопрос). */
+    private var faceOnAnswer = false
     private var busy = false
 
     private val turnRunner = AgentTurnRunner(backend, chatTimeouts)
@@ -265,9 +267,11 @@ class MainViewModel(
             voice.transcripts.collect(::onTranscript)
         }
         viewModelScope.launch {
-            voice.activity.collect {
+            voice.activity.collect { activity ->
                 // Своя озвучка мимо сервера (навигация, agent-ответ на кнопку) — live шлёт вместо микрофона тишину.
-                live?.setLocalSpeech(it == VoiceActivity.SPEAKING)
+                live?.setLocalSpeech(activity == VoiceActivity.SPEAKING)
+                // Ответ начал звучать: показать лицо на весь экран (касание вернёт меню, речь не прерывается).
+                if (activity == VoiceActivity.SPEAKING) showFaceWhileAnswering()
                 refreshPhase()
                 restartIdleTimer()
             }
@@ -462,9 +466,23 @@ class MainViewModel(
 
     /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
+        // Касание «в меню» во время ответа: только меняем вид, речь не прерываем и обратно к лицу не перекидываем.
+        faceOnAnswer = false
         wake()
         if (_state.value.mode != ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.MENU) }
         restartMenuTimer()
+    }
+
+    /**
+     * Робот начал отвечать на вопрос: показываем лицо на весь экран с крупными субтитрами.
+     * Касание лица вернёт меню ([openMenu]), а речь продолжится.
+     */
+    private fun showFaceWhileAnswering() {
+        if (!faceOnAnswer) return
+        faceOnAnswer = false
+        if (_state.value.mode != ScreenMode.MENU) return
+        menuJob?.cancel()
+        _state.update { it.copy(mode = ScreenMode.FACE) }
     }
 
     /** «К роботу»: из меню обратно к лицу (только agent). */
@@ -562,6 +580,7 @@ class MainViewModel(
         // Вопрос кнопкой/текстом при живом режиме: звук live обрываем, отвечает agent (/v1/chat, та же сессия).
         live?.interrupt()
         requestJob?.cancel()
+        faceOnAnswer = true
         if (faqId == null) {
             // Вопрос из любого места → экран ответа; прежний экран запоминаем для «Назад».
             remember()

@@ -50,4 +50,8 @@
     <string name="action_menu">Menu</string>
     <string name="action_face">Back to robot</string>
     <string name="face_hint">Just ask, I am listening</string>
+    <string name="exit_pin_sub">Only staff can exit. Enter the PIN.</string>
+    <string name="exit_pin_wrong">Wrong PIN. Attempts left: %1$d</string>
+    <string name="exit_pin_locked">Too many attempts. Try again in %1$d min.</string>
+    <string name="exit_pin_erase">Erase</string>
 </resources>

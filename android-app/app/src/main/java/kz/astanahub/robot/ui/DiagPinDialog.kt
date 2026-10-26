@@ -24,7 +24,7 @@ object DiagPinDialog {
     fun show(activity: Activity, guard: DiagPinGuard, onUnlocked: () -> Unit) {
         val pad = dp(activity, 24)
         val input = EditText(activity).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             filters = arrayOf(InputFilter.LengthFilter(12))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 36f)
             gravity = Gravity.CENTER

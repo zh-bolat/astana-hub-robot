@@ -60,4 +60,8 @@
     <string name="action_menu">Меню</string>
     <string name="action_face">К роботу</string>
     <string name="face_hint">Скажите вопрос, я слушаю</string>
+    <string name="exit_pin_sub">Выйти может только сотрудник. Введите PIN.</string>
+    <string name="exit_pin_wrong">Неверный PIN. Осталось попыток: %1$d</string>
+    <string name="exit_pin_locked">Слишком много попыток. Попробуйте через %1$d мин.</string>
+    <string name="exit_pin_erase">Стереть</string>
 </resources>

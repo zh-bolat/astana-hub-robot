@@ -965,6 +965,50 @@
                 android:textSize="30sp"
                 tools:text="Робот перестанет отвечать посетителям." />
 
+            <!-- PIN сотрудника: точки вместо цифр, ошибка и экранная клавиатура (кнопки создаёт MainActivity) -->
+            <LinearLayout
+                android:id="@+id/exitPinBox"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <TextView
+                    android:id="@+id/exitPinDots"
+                    android:layout_width="wrap_content"
+                    android:layout_height="64dp"
+                    android:gravity="center"
+                    android:letterSpacing="0.3"
+                    android:textColor="@color/hub_ink"
+                    android:textSize="44sp"
+                    tools:text="●●●●" />
+
+                <TextView
+                    android:id="@+id/exitPinError"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:minHeight="40dp"
+                    android:gravity="center"
+                    android:textColor="@color/hub_offline"
+                    android:textSize="26sp"
+                    tools:text="Неверный PIN. Осталось попыток: 4" />
+
+                <LinearLayout
+                    android:id="@+id/exitPad"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
