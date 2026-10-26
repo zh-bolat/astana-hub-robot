@@ -3,8 +3,9 @@
 снимать кадр — делает приложение.
 
 Исключение — search_kb: поиск по базе на сервере (app/knowledge/search.py), регистрируется только при
-RETRIEVAL_MODE=hybrid. Найденное уходит модели (до 3 фрагментов, ≤ ~2500 символов) и в ответ клиенту —
-`sources` и `citations` (docs/api-contract.md, «Источники и поиск по документам»).
+RETRIEVAL_MODE=tool. Найденное уходит модели (до 3 фрагментов, ≤ ~2500 символов) и в ответ клиенту —
+`sources` и `citations` (docs/api-contract.md, «Источники и поиск по документам»). При RETRIEVAL_MODE=prefetch
+инструмента нет: тот же поиск (find_parts) сервер делает сам до ответа модели (app/agent/service.py).
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ class ChatContext:
     stopped_by: str | None = None
     # WS /v1/live: фразы «где X» от позиции робота (state.directions), place_id → {ru|kk|en: фраза}
     directions: dict[str, dict[str, str]] = field(default_factory=dict)
-    # search_kb: поиск (None — инструмента нет), найденное в этом ходе
+    # search_kb: поиск (None — инструмента нет); найденное и отданное модели в этом ходе (search_kb или справка)
     search: KbSearch | None = None
     searches: int = 0
     search_ms: int = 0
@@ -50,6 +51,11 @@ class ChatContext:
     found_texts: list[str] = field(
         default_factory=list
     )  # отданное модели — в корпус выходного фильтра
+
+    def add_found(self, hit: SearchHit, part: str) -> None:
+        """Фрагмент отдан модели: в sources/citations ответа и в корпус выходного фильтра."""
+        self.add_citation(hit)
+        self.found_texts.append(part)
 
     def add_citation(self, hit: SearchHit) -> None:
         if hit.id not in self.sources:
@@ -153,6 +159,13 @@ def search_texts(hits: list[SearchHit], query: str, budget: int = SEARCH_BUDGET_
     return out
 
 
+async def find_parts(search: KbSearch, query: str, lang: Lang) -> list[tuple[SearchHit, str]]:
+    """Поиск для модели: до 3 фрагментов (документы раньше фактов и мест) и текст каждого (≤ бюджета на всё).
+    Исключения БД пробрасываются."""
+    hits = prefer_documents(await search.search(query, lang, k=SEARCH_CANDIDATES))
+    return list(zip(hits, search_texts(hits, query), strict=True))
+
+
 @function_tool
 async def search_kb(wrapper: RunContextWrapper[ChatContext], query: str) -> str:
     """Найти подробности о хабе: программы, правила, цены, льготы, резидентство, визы, пространства,
@@ -175,16 +188,15 @@ async def search_kb(wrapper: RunContextWrapper[ChatContext], query: str) -> str:
     ctx.searches += 1
     started = time.perf_counter()
     try:
-        hits = prefer_documents(await ctx.search.search(query, ctx.lang, k=SEARCH_CANDIDATES))
+        parts = await find_parts(ctx.search, query, ctx.lang)
     except Exception as exc:  # БД недоступна
         logger.warning("kb_search_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
         return _result(ctx, "search_kb", args, {"ok": False, "error": "search unavailable"})
     finally:
         ctx.search_ms += int((time.perf_counter() - started) * 1000)
     results = []
-    for hit, part in zip(hits, search_texts(hits, query), strict=True):
-        ctx.add_citation(hit)
-        ctx.found_texts.append(part)
+    for hit, part in parts:
+        ctx.add_found(hit, part)
         results.append({"id": hit.id, "title": hit.title, "text": part})
     if not results:
         return _result(ctx, "search_kb", args, {"ok": True, "results": [], "note": "nothing found"})
