@@ -227,13 +227,13 @@ def create_app(
         else NULL_RECORDER
     )
     service = AnswerService(settings, store, text_llm, vision_llm, log_writer, metrics)
-    # Поиск по базе (RAG): инструмент агента search_kb + фоновая индексация kb_chunks
+    # Поиск по базе (RAG): справка к ходу (prefetch) или инструмент search_kb (tool) + фоновая индексация
     kb_search: KbSearch | None = None
     indexer: KbIndexer | None = None
     if (
         syncer is not None  # база из Postgres (не подменена)
-        and settings.retrieval_mode == "hybrid"
-        and (embedder is not None or settings.resolved_retrieval_mode() == "hybrid")
+        and settings.retrieval_kind() != "off"
+        and (embedder is not None or settings.resolved_retrieval_mode() != "off")
     ):
         embedder = embedder or build_embedder(settings)
     else:
@@ -346,7 +346,9 @@ def create_app(
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
             "chat": chat.name,
-            "retrieval": f"hybrid:{embedder.name}:{embedder.model}" if embedder else "off",
+            "retrieval": (
+                f"{chat.retrieval}:{embedder.name}:{embedder.model}" if embedder else "off"
+            ),
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,

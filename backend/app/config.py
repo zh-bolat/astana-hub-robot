@@ -77,9 +77,9 @@ class Settings(BaseSettings):
     # БД без единого факта и таблица не задана → при старте засеять из YAML (разработка)
     kb_seed_yaml_if_empty: bool = True
 
-    # Поиск по базе (RAG, docs/db-schema.md раздел 2): инструмент агента search_kb — по смыслу (эмбеддинги в
-    # kb_chunks) и по словам (полнотекст), слияние RRF. Эмбеддинги: auto — openrouter при OPENROUTER_API_KEY,
-    # иначе off; fake — без сети (тесты). off — поиска нет, агент работает только с фактами в промпте.
+    # Поиск по базе (RAG, docs/db-schema.md раздел 2): по смыслу (эмбеддинги в kb_chunks) и по словам
+    # (полнотекст), слияние RRF. Эмбеддинги: auto — openrouter при OPENROUTER_API_KEY, иначе off; fake — без
+    # сети (тесты). off — поиска нет, агент работает только с фактами в промпте.
     embedding_provider: Literal["auto", "openrouter", "fake", "off"] = "auto"
     embedding_model: str = "google/gemini-embedding-2"
     # Эмбеддинг вопроса на пути ответа, сек: не успел — поиск только по словам
@@ -87,8 +87,13 @@ class Settings(BaseSettings):
     # Индексация: текстов в одном запросе к провайдеру; таймаут одного запроса, сек
     embedding_batch_size: int = Field(64, ge=1, le=256)
     embedding_timeout_s: float = 30.0
-    # hybrid — инструмент search_kb (если эмбеддинги доступны); off — без инструмента, всё как раньше
-    retrieval_mode: Literal["off", "hybrid"] = "hybrid"
+    # Как агент получает найденное (только если эмбеддинги доступны, иначе off):
+    # prefetch — сервер сам ищет по реплике до ответа модели и кладёт найденное в сообщение хода («Справка»);
+    # tool — модель сама вызывает инструмент search_kb (hybrid — старое имя tool); off — поиска нет
+    retrieval_mode: Literal["off", "prefetch", "tool", "hybrid"] = "prefetch"
+    # prefetch: потолок поиска на ход, сек (эмбеддинг ≤ EMBEDDING_QUERY_TIMEOUT_S, дальше — только полнотекст);
+    # не успел — ход идёт к модели без справки
+    kb_prefetch_timeout_s: float = 1.2
 
     # PostgreSQL 16 + pgvector — единственная рабочая БД (docs/db-schema.md).
     # Локально: infra/docker-compose.dev.yml (порт 127.0.0.1:5432), пароль — в backend/.env.
@@ -358,11 +363,17 @@ class Settings(BaseSettings):
             return self.embedding_provider
         return "openrouter" if self.openrouter_api_key else "off"
 
+    def retrieval_kind(self) -> str:
+        """off | tool | prefetch по RETRIEVAL_MODE, без учёта эмбеддингов (hybrid — старое имя tool)."""
+        if self.retrieval_mode == "hybrid":
+            return "tool"
+        return self.retrieval_mode
+
     def resolved_retrieval_mode(self) -> str:
-        """hybrid только при доступных эмбеддингах (поиск без них — не включаем)."""
-        if self.retrieval_mode == "off" or self.resolved_embedding_provider() == "off":
+        """tool / prefetch только при доступных эмбеддингах (поиск без них — не включаем)."""
+        if self.resolved_embedding_provider() == "off":
             return "off"
-        return "hybrid"
+        return self.retrieval_kind()
 
     def resolved_stt_stream_provider(self) -> str:
         if self.stt_stream_provider != "auto":

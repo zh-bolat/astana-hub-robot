@@ -1,5 +1,6 @@
-"""Поиск по базе (RAG, задача 11): документы, чанкинг, индексация, гибридный поиск, инструмент search_kb,
-citations в /v1/chat и live turn_end.
+"""Поиск по базе (RAG, задача 11): документы, чанкинг, индексация, гибридный поиск, справка к ходу
+(RETRIEVAL_MODE=prefetch, по умолчанию), инструмент search_kb (RETRIEVAL_MODE=tool), citations в /v1/chat
+и live turn_end.
 
 Эмбеддинги — FakeEmbeddings (без сети, мешок основ слов). Документы — фикстуры ниже: выдуманные тексты для
 проверки механики, не факты о хабе.
@@ -12,6 +13,7 @@ import json
 import re
 import shutil
 import time
+from contextlib import aclosing
 from pathlib import Path
 
 import httpx
@@ -19,6 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.agent.prompts import REFERENCE_HEADER
+from app.agent.service import LiveTurn, prefetch_query
 from app.agent.tools import SEARCH_BUDGET_CHARS, prefer_documents, search_texts
 from app.config import Settings
 from app.knowledge.chunks import MAX_CHARS, DocumentSource, chunk_document, kb_chunks
@@ -47,8 +51,11 @@ from app.llm.embeddings import (
 from app.llm.fake import FakeProvider
 from app.main import create_app
 from app.prompts import REFUSALS
+from app.schemas import ChatRequest
 from tests.conftest import AUTH, ask_body, logged, temp_database
 from tests.test_chat import FakeModel, call, events, messages, say
+from tests.test_latency import rows as latency_rows
+from tests.test_latency import stages
 from tests.test_live import live_server, run, session  # noqa: F401 — фикстура live_server
 
 # ---------------------------------------------------------------- фикстуры
@@ -648,8 +655,12 @@ def test_embedding_and_retrieval_settings():
     on = Settings(**base, openrouter_api_key="k", embedding_provider="auto")
     assert (on.resolved_embedding_provider(), on.resolved_retrieval_mode()) == (
         "openrouter",
-        "hybrid",
+        "prefetch",  # по умолчанию — справка к ходу
     )
+    for mode, kind in [("tool", "tool"), ("hybrid", "tool"), ("prefetch", "prefetch")]:
+        s = Settings(**base, openrouter_api_key="k", retrieval_mode=mode)
+        assert (s.retrieval_kind(), s.resolved_retrieval_mode()) == (kind, kind)
+    assert Settings(**base, retrieval_mode="hybrid").resolved_retrieval_mode() == "off"  # без ключа
     emb = build_embedder(on)
     assert isinstance(emb, OpenRouterEmbeddings) and emb.model == "google/gemini-embedding-2"
     asyncio.run(emb.aclose())
@@ -658,7 +669,7 @@ def test_embedding_and_retrieval_settings():
         == "off"
     )
     fake = Settings(**base, embedding_provider="fake")
-    assert fake.resolved_retrieval_mode() == "hybrid" and isinstance(
+    assert fake.resolved_retrieval_mode() == "prefetch" and isinstance(
         build_embedder(fake), FakeEmbeddings
     )
     assert (
@@ -667,7 +678,9 @@ def test_embedding_and_retrieval_settings():
     )
 
 
-# ---------------------------------------------------------------- агент /v1/chat (DoD задачи 11)
+# ---------------------------------------------------------------- агент /v1/chat, RETRIEVAL_MODE=tool
+
+TOOL = {"retrieval_mode": "tool"}  # модель сама вызывает search_kb (до prefetch — режим hybrid)
 
 QUESTION = "Сколько недель длится программа Орбита?"
 ORBITA_2 = {
@@ -696,7 +709,7 @@ def test_chat_answers_document_detail_with_citation(make_client, docs_dir):
         call("search_kb", {"query": "сколько недель длится программа Орбита"}),
         say("[happy] Программа «Орбита» длится девятнадцать недель."),
     )
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
 
     evs = events(client, QUESTION, lang="ru")
 
@@ -720,7 +733,7 @@ def test_chat_json_mode_has_citations(make_client, docs_dir):
         call("search_kb", {"query": "сколько недель длится программа Орбита"}),
         say("[happy] Программа «Орбита» длится девятнадцать недель."),
     )
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
     body = client.post("/v1/chat", json=ask_body(QUESTION, lang="ru"), headers=AUTH).json()
     assert ORBITA_2 in body["citations"] and "document:orbita#2" in body["sources"]
     assert "девятнадцать недель" in body["answer"]
@@ -728,7 +741,7 @@ def test_chat_json_mode_has_citations(make_client, docs_dir):
 
 def test_no_search_no_citations_and_tool_only_with_retrieval(make_client, docs_dir):
     model = FakeModel(say("[happy] Здравствуйте, чем помочь?"))
-    client = make_client(chat_client=model.client(), embedding_provider="fake")
+    client = make_client(chat_client=model.client(), embedding_provider="fake", **TOOL)
     evs = events(client, "Расскажи о хабе", lang="ru")
     assert evs[-1][1]["citations"] == []
     req = model.requests[0]
@@ -751,7 +764,7 @@ def test_link_from_found_document_passes_output_filter(make_client, docs_dir):
         call("search_kb", {"query": "регистрация на программу Орбита"}),
         say("[happy] Регистрация на сайте orbita-demo.kz."),
     )
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
     evs = events(client, "Где зарегистрироваться на Орбиту?", lang="ru")
     assert evs[0] == ("phrase", {"text": "Регистрация на сайте orbita-demo.kz."})
     assert "document:orbita#3" in [c["id"] for c in evs[-1][1]["citations"]]
@@ -760,14 +773,14 @@ def test_link_from_found_document_passes_output_filter(make_client, docs_dir):
 
 def test_link_without_search_is_still_blocked(make_client, docs_dir):
     model = FakeModel(say("[happy] Регистрация на сайте orbita-demo.kz."))
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
     events(client, "Где зарегистрироваться на Орбиту?", lang="ru")
     assert logged(client)[0].category == "blocked"
 
 
 def test_nothing_suitable_after_search_is_logged_unanswered(make_client, docs_dir):
     model = FakeModel(call("search_kb", {"query": "камера хранения"}), call("no_answer"))
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
     evs = events(client, "Есть ли камера хранения?", lang="ru")
     assert " ".join(d["text"] for e, d in evs if e == "phrase") == REFUSALS["ru"]
     done = evs[-1][1]
@@ -796,7 +809,7 @@ def test_repeated_search_is_limited_and_citations_dedup(make_client, docs_dir):
         call("search_kb", {"query": "программа Орбита сроки"}),
         say("[happy] Программа «Орбита» длится девятнадцать недель."),
     )
-    client = rag_client(make_client, model)
+    client = rag_client(make_client, model, **TOOL)
     evs = events(client, QUESTION, lang="ru")
     assert tool_output(model, 2)["ok"] is True  # повтор — можно один раз
     assert "limit" in tool_output(model, 3)["error"]  # третий поиск — нет
@@ -810,7 +823,7 @@ def test_live_turn_end_has_sources_and_citations(live_server, docs_dir):  # noqa
         say("[happy] Программа «Орбита» длится девятнадцать недель."),
     )
     url, app, _ = live_server(
-        model, script=[QUESTION], live_fast_places=False, embedding_provider="fake"
+        model, script=[QUESTION], live_fast_places=False, embedding_provider="fake", **TOOL
     )
     assert app.state.indexer.index().ok
 
@@ -825,6 +838,256 @@ def test_live_turn_end_has_sources_and_citations(live_server, docs_dir):  # noqa
             ]
 
     run(scenario())
+
+
+# ---------------------------------------------------------------- справка к ходу, RETRIEVAL_MODE=prefetch
+
+
+def spy_search(app) -> list[str]:
+    """Запросы поиска по базе за время теста (поиск при этом работает как обычно)."""
+    search = app.state.kb_search
+    queries: list[str] = []
+    real = search.search
+
+    async def spy(query: str, lang, k: int = 3):
+        queries.append(query)
+        return await real(query, lang, k)
+
+    search.search = spy
+    return queries
+
+
+def turn_text(model: FakeModel, request_no: int = 0) -> str:
+    """Сообщение хода (последнее сообщение посетителя) в запросе к модели."""
+    return [m for m in model.requests[request_no]["messages"] if m["role"] == "user"][-1]["content"]
+
+
+def system_text(model: FakeModel, request_no: int = 0) -> str:
+    return model.requests[request_no]["messages"][0]["content"][0]["text"]
+
+
+def test_prefetch_answers_document_detail_with_citation(make_client, docs_dir):
+    """DoD задачи 11 в режиме по умолчанию: сервер сам нашёл фрагмент документа и положил его в сообщение
+    хода, модель ответила по справке; citations — то, что было в справке."""
+    model = FakeModel(
+        say("[happy] Программа «Орбита» длится девятнадцать недель."),
+        say("[happy] Участие бесплатное."),
+    )
+    client = rag_client(make_client, model)
+    assert client.app.state.chat.retrieval == "prefetch"
+
+    evs = events(client, QUESTION, lang="ru")
+
+    assert [e for e, _ in evs] == ["phrase", "done"]
+    assert "девятнадцать недель" in evs[0][1]["text"]
+    done = evs[-1][1]
+    assert ORBITA_2 in done["citations"]
+    assert "document:orbita#2" in done["sources"] and done["found"] is True
+    assert len({c["id"] for c in done["citations"]}) == len(done["citations"]) <= 3
+    req = model.requests[0]
+    assert {t["function"]["name"] for t in req["tools"]} == {
+        "where_is",
+        "guide_to",
+        "look",
+        "no_answer",
+    }
+    system, turn = system_text(model), turn_text(model)
+    assert "search_kb" not in system and "«Справка»" in system
+    assert REFERENCE_HEADER not in system and "девятнадцать недель" not in system
+    assert REFERENCE_HEADER in turn and "девятнадцать недель" in turn
+    assert "база" not in turn.split(REFERENCE_HEADER)[0].lower()
+    assert turn.index(REFERENCE_HEADER) < turn.index("<visitor_message>")
+    # в справке ровно отданное модели: по фрагменту на каждую citation, текст ≤ ~2500 символов
+    assert re.findall(r"^\[(\d)\] ", turn, re.M) == [
+        str(i + 1) for i in range(len(done["citations"]))
+    ]
+    body = turn.split(REFERENCE_HEADER)[1].split("Язык ответа:")[0]
+    assert len(body) <= SEARCH_BUDGET_CHARS + 300
+    row = logged(client)[0]
+    assert row.found and "document:orbita#2" in row.sources
+    assert any(name == "kb_prefetch" for _, _, name in messages(client))
+    by = stages(latency_rows(client, "chat"))
+    assert by["kb_search_ms"].ms is not None
+    assert by["llm_total_ms"].extra["tools"] == ["kb_prefetch"]
+
+    events(client, "Сколько стоит участие в программе Орбита?", lang="ru")
+    assert system_text(model, 1) == system  # системный промпт одинаков между ходами — кеш
+    assert "orbita-demo.kz" in turn_text(model, 1)  # своя справка у каждого хода
+    first_user = next(m for m in model.requests[1]["messages"] if m["role"] == "user")
+    assert REFERENCE_HEADER not in first_user["content"]  # в истории — только реплика посетителя
+
+
+def test_prefetch_json_mode_has_citations(make_client, docs_dir):
+    model = FakeModel(say("[happy] Программа «Орбита» длится девятнадцать недель."))
+    client = rag_client(make_client, model)
+    body = client.post("/v1/chat", json=ask_body(QUESTION, lang="ru"), headers=AUTH).json()
+    assert ORBITA_2 in body["citations"] and "document:orbita#2" in body["sources"]
+    assert "девятнадцать недель" in body["answer"]
+
+
+def test_prefetch_skips_noise_small_talk_greeting_one_word_places_and_consent(
+    make_client, docs_dir
+):
+    model = FakeModel(
+        say("[happy] Здравствуйте! Что ищете?"),  # visitor_arrived
+        say("[thinking] Что про Орбиту подсказать?"),  # «Орбита?»
+        call("where_is", {"place_id": "place:cafe"}),
+        say("[happy] Показала на экране, куда идти. Проводить вас?"),
+        call("guide_to", {"place_id": "place:cafe"}),
+        say("[excited] Идите за мной, провожаю в кафе!"),
+        say("[happy] Программа «Орбита» длится девятнадцать недель."),
+    )
+    client = rag_client(make_client, model)
+    queries = spy_search(client.app)
+
+    assert events(client, "Ну…", lang="ru")[-1][1]["ignored"] is True  # шум
+    events(client, "Спасибо большое", lang="ru")  # локальный small talk
+    events(client, "", lang="ru", event="visitor_arrived")
+    events(client, "Орбита?", lang="ru")  # одно слово
+    events(client, "Где кафе?", lang="ru")  # место — в промпте
+    evs = events(client, "Да, проводите", lang="ru")  # «да» на «Проводить вас?»
+    assert ("action", {"type": "guide_to", "place_id": "cafe"}) in evs
+    assert queries == []
+    assert len(model.requests) == 6
+    assert all(REFERENCE_HEADER not in turn_text(model, i) for i in range(6))
+
+    # live: быстрый путь мест и «да» на «Проводить вас?» — без модели и без поиска
+    chat = client.app.state.chat
+
+    async def live_turns() -> list[list[str]]:
+        out = []
+        for question in ["Где кафе?", "Да, проводите"]:
+            req = ChatRequest(question=question, lang="ru", session_id="live-session")
+            async with aclosing(chat.chat_stream(req, "req", live=LiveTurn())) as stream:
+                out.append([kind async for kind, _ in stream])
+        return out
+
+    assert asyncio.run(live_turns()) == [
+        ["action", "emotion", "phrase", "phrase", "done"],
+        ["action", "emotion", "phrase", "done"],
+    ]
+    assert queries == [] and len(model.requests) == 6
+
+    # обычный вопрос — ищем; короткий (5 слов) — вместе с прошлой репликой о чём-то: «да, проводите» и
+    # «спасибо» темы не несут, берётся «Где кафе?»
+    events(client, QUESTION, lang="ru")
+    assert queries == [f"Где кафе? {QUESTION}"]
+    assert REFERENCE_HEADER in turn_text(model, 6)
+
+
+def test_prefetch_query_adds_previous_utterance_for_short_or_reference():
+    prev = "Расскажите про программу Орбита"
+    assert prefetch_query("А сколько это стоит?", prev) == f"{prev} А сколько это стоит?"
+    assert prefetch_query("Есть ли скидка студентам", prev) == f"{prev} Есть ли скидка студентам"
+    long_ref = "Скажите пожалуйста сколько всего недель длится это обучение"  # 8 слов, «это»
+    assert prefetch_query(long_ref, prev) == f"{prev} {long_ref}"
+    en_ref = "And how much does the whole program cost for a team"
+    assert prefetch_query(en_ref, prev) == f"{prev} {en_ref}"
+    standalone = "Сколько недель длится программа Орбита для команд?"  # 7 слов, без отсылки
+    assert prefetch_query(standalone, prev) == standalone
+    assert prefetch_query("А сколько это стоит?", None) == "А сколько это стоит?"
+    assert prefetch_query("  А сколько это стоит?  ", "  ") == "А сколько это стоит?"
+
+
+def test_prefetch_short_follow_up_searches_with_previous_utterance(make_client, docs_dir):
+    answer = say("[happy] Участие бесплатное.")
+    model = FakeModel(answer, answer, answer)
+    client = rag_client(make_client, model)
+    queries = spy_search(client.app)
+    first, follow = "Расскажите про программу Орбита", "А сколько это стоит?"
+
+    events(client, first, lang="ru")
+    events(client, follow, lang="ru")
+    assert queries == [first, f"{first} {follow}"]
+    assert "orbita-demo.kz" in turn_text(model, 1)  # «стоит» + «Орбита» → раздел про оплату
+
+    # перезапуск сервера: кеша памяти нет — прошлая реплика из БД (ждём загрузку истории)
+    messages(client)
+    restarted = make_client(chat_client=model.client(), embedding_provider="fake")
+    again = spy_search(restarted.app)
+    events(restarted, "А там кормят?", lang="ru")
+    assert again == [f"{follow} А там кормят?"]
+
+
+def test_prefetch_embedding_timeout_falls_back_to_full_text(make_client, docs_dir):
+    model = FakeModel(say("[happy] Программа «Орбита» длится девятнадцать недель."))
+    client = rag_client(
+        make_client, model, embedder=SlowEmbeddings(), embedding_query_timeout_s=0.2
+    )
+    started = time.perf_counter()
+    evs = events(client, QUESTION, lang="ru")
+    assert time.perf_counter() - started < 1.5
+    assert ORBITA_2 in evs[-1][1]["citations"]
+    assert "девятнадцать недель" in turn_text(model)  # нашлось по словам
+
+
+def test_prefetch_failure_or_ceiling_answers_without_reference(make_client, docs_dir):
+    answer = say("[happy] В «Орбиту» берут команды с прототипом.")
+    model = FakeModel(answer, answer)
+    client = rag_client(make_client, model, kb_prefetch_timeout_s=0.3)
+    search = client.app.state.kb_search
+
+    async def broken(query: str, lang, k: int = 3):
+        raise RuntimeError("db down")
+
+    search.search = broken
+    evs = events(client, QUESTION, lang="ru")
+    assert [e for e, _ in evs] == ["phrase", "done"] and evs[-1][1]["citations"] == []
+    assert REFERENCE_HEADER not in turn_text(model, 0)
+
+    async def slow(query: str, lang, k: int = 3):
+        await asyncio.sleep(3)
+        return []
+
+    search.search = slow
+    started = time.perf_counter()
+    evs = events(client, QUESTION, lang="ru")
+    assert time.perf_counter() - started < 2.0  # потолок справки, дальше — к модели без неё
+    assert [e for e, _ in evs] == ["phrase", "done"] and evs[-1][1]["citations"] == []
+    assert REFERENCE_HEADER not in turn_text(model, 1)
+    assert [r.category for r in logged(client)] == ["agent", "agent"]
+    searched = [r.ms for r in latency_rows(client, "chat") if r.stage == "kb_search_ms"]
+    assert len(searched) == 2 and searched[1] >= 300
+
+
+def test_prefetch_reference_feeds_output_filter(make_client, docs_dir):
+    """Ссылка из справки — не выдумка модели; без справки та же ссылка блокируется."""
+    answer = say("[happy] Регистрация на сайте orbita-demo.kz.")
+    model = FakeModel(answer, answer)
+    client = rag_client(make_client, model)
+    evs = events(client, "Где зарегистрироваться на Орбиту?", lang="ru")
+    assert evs[0] == ("phrase", {"text": "Регистрация на сайте orbita-demo.kz."})
+    assert "document:orbita#3" in [c["id"] for c in evs[-1][1]["citations"]]
+
+    async def nothing(query: str, lang, k: int = 3):
+        return []
+
+    client.app.state.kb_search.search = nothing
+    events(client, "Где зарегистрироваться на Орбиту?", lang="ru")
+    assert [r.category for r in logged(client)] == ["agent", "blocked"]
+
+
+def test_prefetch_live_turn_end_has_sources_and_citations(live_server, docs_dir):  # noqa: F811
+    model = FakeModel(say("[happy] Программа «Орбита» длится девятнадцать недель."))
+    url, app, _ = live_server(
+        model, script=[QUESTION], live_fast_places=False, embedding_provider="fake"
+    )
+    assert app.state.indexer.index().ok
+    queries = spy_search(app)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.6)
+            end = await c.wait("turn_end", timeout=12)
+            assert "document:orbita#2" in end["sources"]
+            assert ORBITA_2 in end["citations"]
+            assert [p["text"] for p in c.events("phrase")] == [
+                "Программа «Орбита» длится девятнадцать недель."
+            ]
+
+    run(scenario())
+    assert queries == [QUESTION]
+    assert REFERENCE_HEADER in turn_text(model)
 
 
 def test_server_indexes_in_background_on_start(settings, docs_dir):
@@ -872,7 +1135,10 @@ def test_cli_kb_index_and_status(monkeypatch, capsys, knowledge_dir, docs_dir):
         assert "documents=2" in out and "document=4" in out and "fake-stems-768" in out
 
 
-def test_eval_matches_document_prefix_and_runs_chat_with_search(tmp_path, monkeypatch, docs_dir):
+@pytest.mark.parametrize("mode", ["prefetch", "tool"])
+def test_eval_matches_document_prefix_and_runs_chat_with_search(
+    tmp_path, monkeypatch, docs_dir, mode
+):
     from eval.run_eval import run as run_eval
     from eval.run_eval import source_matches
     from tests.conftest import PG_URL
@@ -890,9 +1156,12 @@ def test_eval_matches_document_prefix_and_runs_chat_with_search(tmp_path, monkey
         encoding="utf-8",
     )
     monkeypatch.setenv("KNOWLEDGE_DIR", str(docs_dir.parent))
-    model = FakeModel(
-        call("search_kb", {"query": "сколько недель длится программа Орбита"}),
-        say("[happy] Программа «Орбита» длится девятнадцать недель."),
+    monkeypatch.setenv("RETRIEVAL_MODE", mode)
+    answer = say("[happy] Программа «Орбита» длится девятнадцать недель.")
+    model = (
+        FakeModel(call("search_kb", {"query": "сколько недель длится программа Орбита"}), answer)
+        if mode == "tool"
+        else FakeModel(answer)  # справку сервер нашёл сам
     )
     report = run_eval(
         questions,
@@ -902,5 +1171,5 @@ def test_eval_matches_document_prefix_and_runs_chat_with_search(tmp_path, monkey
         chat_client=model.client(),
         embedder=FakeEmbeddings(),
     )
-    assert report["retrieval"] == "hybrid:fake-stems-768"
+    assert report["retrieval"] == f"{mode}:fake-stems-768"
     assert report["summary"]["all"]["accuracy"] == 1.0, report["results"]

@@ -7,7 +7,7 @@
 #   expect_source — (опц.) документ, который должен попасть в sources; "document:<slug>" засчитывает
 #                   любой его фрагмент "document:<slug>#<n>"
 #   expect_contains — (опц.) подстроки, которые должны быть в ответе (без учёта регистра)
-# Документы ищет агент (search_kb), поэтому вопросы гоняются через /v1/chat.
+# Документы ищет агент /v1/chat (справка prefetch или search_kb), поэтому вопросы гоняются через него.
 questions:
   # --- ru: ответ только в документах ---
   - {id: rag-ru-c46-biggest-room, lang: ru, question: "Какая самая большая переговорная в павильоне C4.6?", expect_found: true, expect_source: "document:meeting_rooms_halls", expect_contains: ["Tesla"]}

@@ -3,8 +3,9 @@
     uv run python -m eval.run_eval                      # /v1/ask, провайдер из .env (без ключа — fake)
     uv run python -m eval.run_eval --min-accuracy 0.9   # код выхода 1, если ниже порога (для CI)
     uv run python -m eval.run_eval --json report.json
-    # поиск по документам (задача 11): агент /v1/chat + search_kb; нужен Postgres (создаётся временная БД
-    # на этом сервере: миграции, сид YAML и documents/*.md, индексация) и OPENROUTER_API_KEY
+    # поиск по документам (задача 11): агент /v1/chat + поиск (RETRIEVAL_MODE: справка prefetch или search_kb);
+    # нужен Postgres (временная БД на этом сервере: миграции, сид YAML и documents/*.md, индексация)
+    # и OPENROUTER_API_KEY
     uv run python -m eval.run_eval --chat --questions eval/rag_questions.yaml \
         --database-url postgresql+psycopg://hub:…@127.0.0.1:5432/hub
 
@@ -181,7 +182,7 @@ def run(
     return {
         "endpoint": endpoint,
         "provider": label,
-        "retrieval": f"hybrid:{search.embedder.model}" if search is not None else "off",
+        "retrieval": f"{chat.retrieval}:{search.embedder.model}" if search is not None else "off",
         "summary": summary,
         "results": results,
     }

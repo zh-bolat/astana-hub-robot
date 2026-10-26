@@ -153,6 +153,9 @@ data: {"request_id": "req_01J…", "lang": "ru", "found": true, "sources": ["pla
   искал): `[{"id": "document:hub_space#2", "type": "document", "title": "Hub Space — как стать участником",
   "url": "https://astanahub.com/ru/l/hubspace"}]`. `type`: `document` | `fact` | `place`; `url` — у документа, иначе `null`.
 
+По умолчанию (`RETRIEVAL_MODE=prefetch`) ищет сам сервер — по реплике посетителя до ответа модели, — и `citations` —
+то, что было в справке к этому ходу; формат полей тот же.
+
 Поля необязательные: старый клиент их игнорирует, сейчас робот их не показывает. В live — те же поля в `turn_end`.
 
 ### Шум вместо реплики (v1.2)
