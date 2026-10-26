@@ -13,12 +13,21 @@
 `document:<slug>` засчитывает любой фрагмент `document:<slug>#<n>`), есть все expect_contains и язык ответа
 совпал с языком вопроса. Лог вопросов пишется в память (без --database-url) или во временную БД — боевой
 лог не засоряется.
+
+Необязательные поля (набор характера eval/persona_questions.yaml, агент --chat):
+  event            — событие хода (visitor_arrived — приветствие, question пустой)
+  before           — реплики посетителя до вопроса в том же разговоре (контекст, их ответы не проверяются)
+  expect_actions   — типы действий робота в ответе, как множество (where_is, guide_to; [] — без действий)
+  forbid           — регулярки, которых не должно быть в ответе (без учёта регистра)
+  tone             — что проверить в тоне глазами; не проверяется, попадает в отчёт рядом с ответом
+На уровне файла: forbid_all — регулярки для каждого ответа; first_phrase_max_words — потолок слов первой фразы.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 import sys
 import tempfile
@@ -84,8 +93,11 @@ def _chat(client: TestClient, body: dict, token: str) -> tuple[int, dict]:
     if last[0] != "done":
         code = (last[1].get("error") or {}).get("code")
         return {"llm_unavailable": 503, "timeout": 504}.get(code, 500), {}
+    phrases = [d["text"] for e, d in events if e == "phrase"]
     return 200, {
-        "answer": " ".join(d["text"] for e, d in events if e == "phrase"),
+        "answer": " ".join(phrases),
+        "phrases": phrases,
+        "actions": [a.get("type") for a in last[1].get("actions", [])],
         "found": last[1].get("found"),
         "lang": last[1].get("lang"),
         "sources": last[1].get("sources", []),
@@ -131,6 +143,10 @@ def run(
     базе); chat_client / embedder — подменить модель агента и эмбеддинги (тесты)."""
     data = yaml.safe_load(questions_path.read_text(encoding="utf-8"))
     questions = data["questions"]
+    rules = {
+        "forbid_all": data.get("forbid_all", []),
+        "first_phrase_max_words": data.get("first_phrase_max_words"),
+    }
     token = secrets.token_hex(16)
     with tempfile.TemporaryDirectory() as tmp, _maybe_db(database_url) as db_url:
         settings = Settings(
@@ -154,6 +170,10 @@ def run(
                     body = {"question": q["question"], "session_id": f"eval-{q['id']}"}
                     if pass_lang:
                         body["lang"] = q["lang"]
+                    if q.get("event"):
+                        body["event"] = q["event"]
+                    for earlier in q.get("before", []):  # контекст разговора: ответы не проверяем
+                        _chat(client, {**body, "question": earlier, "event": None}, token)
                     t0 = time.perf_counter()
                     if endpoint == "chat":
                         status, res = _chat(client, body, token)
@@ -163,7 +183,7 @@ def run(
                         )
                         status, res = r.status_code, (r.json() if r.status_code == 200 else {})
                     latency_ms = int((time.perf_counter() - t0) * 1000)
-                    results.append(_check(q, status, res, latency_ms))
+                    results.append(_check(q, status, res, latency_ms, rules))
         finally:
             app.state.engine.dispose()
 
@@ -197,12 +217,13 @@ def _maybe_db(server_url: str | None) -> Iterator[str | None]:
         yield url
 
 
-def _check(q: dict, status: int, res: dict, latency_ms: int) -> dict:
+def _check(q: dict, status: int, res: dict, latency_ms: int, rules: dict | None = None) -> dict:
+    rules = rules or {}
     reasons = []
     if status != 200:
         reasons.append(f"http {status}")
     else:
-        if res["found"] != q["expect_found"]:
+        if "expect_found" in q and res["found"] != q["expect_found"]:
             reasons.append(f"found={res['found']}")
         if q.get("expect_source") and not source_matches(q["expect_source"], res["sources"]):
             reasons.append(f"sources={res['sources']}")
@@ -211,6 +232,15 @@ def _check(q: dict, status: int, res: dict, latency_ms: int) -> dict:
                 reasons.append(f"missing '{sub}'")
         if res["lang"] != q["lang"]:
             reasons.append(f"lang={res['lang']}")
+        if "expect_actions" in q and set(res.get("actions", [])) != set(q["expect_actions"]):
+            reasons.append(f"actions={res.get('actions', [])}")
+        for pattern in [*rules.get("forbid_all", []), *q.get("forbid", [])]:
+            if re.search(pattern, res["answer"], re.IGNORECASE):
+                reasons.append(f"forbidden /{pattern}/")
+        limit = rules.get("first_phrase_max_words")
+        phrases = res.get("phrases") or [res["answer"]]
+        if limit and phrases and len(phrases[0].split()) > limit:
+            reasons.append(f"first phrase {len(phrases[0].split())} words")
     return {
         "id": q["id"],
         "lang": q["lang"],
@@ -220,6 +250,8 @@ def _check(q: dict, status: int, res: dict, latency_ms: int) -> dict:
         "found": res.get("found"),
         "answer": res.get("answer"),
         "sources": res.get("sources"),
+        "actions": res.get("actions"),
+        "tone": q.get("tone"),
         "latency_ms": latency_ms,
     }
 
