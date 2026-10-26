@@ -79,6 +79,19 @@ class ChatLogTest {
     }
 
     @Test
+    fun `back from the FAQ returns an earlier turn - no duplicates`() {
+        step { copy(question = "Где кафе?", answer = "Справа.") }
+        step { copy(question = "Что такое Hub?", answer = null) } // раскрыли вопрос в частых
+        step { copy(answer = "Технопарк.") }
+        step { copy(question = "Где кафе?", answer = "Справа.") } // «Назад» вернул прежний ход
+        assertEquals(listOf("V:Где кафе?", "R:Справа.", "V:Что такое Hub?", "R:Технопарк."), texts())
+        // Тот же вопрос по-настоящему заново — новая пара.
+        step { copy(answer = null) }
+        step { copy(answer = "Справа.") }
+        assertEquals(listOf("V:Где кафе?", "R:Справа.", "V:Что такое Hub?", "R:Технопарк.", "V:Где кафе?", "R:Справа."), texts())
+    }
+
+    @Test
     fun `home closes the turn but keeps the chat, next greeting does not overwrite the old answer`() {
         step { copy(question = "Q", answer = "A") }
         step { copy(question = null, answer = null) }

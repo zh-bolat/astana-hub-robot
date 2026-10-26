@@ -77,10 +77,13 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
         if (newTurn) {
             val restored = restoredTurn(q, a)
             if (restored != null) {
-                // Откат к прошлому ходу: висящие вопросы без ответа после него убираем, новых реплик нет.
-                while (list.isNotEmpty() && list.last().id != restored.second) {
-                    list.removeAt(list.lastIndex)
+                // Экран вернули к прошлому ходу («шум» с откатом, «Назад» из частых вопросов) — новых реплик нет;
+                // висящие в конце вопросы без ответа (отозванный «шум») убираем.
+                var i = list.lastIndex
+                while (i >= 0 && list[i].id != restored.second && list[i].role == ChatRole.VISITOR) {
+                    list.removeAt(i)
                     changed = true
+                    i--
                 }
                 visitorId = restored.first
                 robotId = restored.second
@@ -123,18 +126,20 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
     }
 
     /**
-     * Ход, на который вернули экран: последняя реплика робота с текстом [a], перед ней — посетитель с [q], после неё —
-     * только вопросы без ответа. (visitorId, robotId) или null.
+     * Ход, на который вернули экран: реплика робота с текстом [a], перед ней — посетитель с [q] (ищем с конца: «Назад»
+     * возвращает и более ранний ход). (visitorId, robotId) или null. Новый ход с тем же вопросом и ответом сюда не
+     * попадает: у нового хода сначала нет ответа.
      */
     private fun restoredTurn(q: String, a: String?): Pair<Long, Long>? {
         if (a == null) return null
-        var i = list.lastIndex
-        while (i >= 0 && list[i].role == ChatRole.VISITOR) i--
-        if (i < 1) return null
-        val robot = list[i]
-        val visitor = list[i - 1]
-        if (robot.text != a || visitor.role != ChatRole.VISITOR || visitor.text != q) return null
-        return visitor.id to robot.id
+        for (i in list.lastIndex downTo 1) {
+            val robot = list[i]
+            val visitor = list[i - 1]
+            if (robot.role == ChatRole.ROBOT && robot.text == a && visitor.role == ChatRole.VISITOR && visitor.text == q) {
+                return visitor.id to robot.id
+            }
+        }
+        return null
     }
 
     /** Последний ход: (вопрос, ответ) — посетитель и следующая за ним реплика робота; null — нет такого. */
