@@ -10,22 +10,23 @@ import re
 
 from app.lang import Lang
 
-# Коротко и тепло, без перечня умений («что ты умеешь?» отвечает LLM)
+# Коротко, тепло и энергично, в характере агента (app/agent/prompts.py), о себе — в мужском роде; без перечня
+# умений («что ты умеешь?» отвечает LLM). На приветствие — сразу два-три варианта, чем помочь.
 _REPLIES: dict[str, dict[str, str]] = {
     "greeting": {
-        "ru": "Здравствуйте! Я робот Astana Hub, что подсказать?",
-        "kk": "Сәлеметсіз бе! Мен Astana Hub роботымын, қалай көмектесейін?",
-        "en": "Hello! I'm the Astana Hub robot, what can I help with?",
+        "ru": "Здравствуйте! Я робот Astana Hub, рад вас видеть. Подсказать дорогу или рассказать о хабе?",
+        "kk": "Сәлеметсіз бе! Мен Astana Hub роботымын. Жол көрсетейін бе, әлде хаб туралы айтайын ба?",
+        "en": "Hello there! I'm the Astana Hub robot. Need directions or something about the hub?",
     },
     "thanks": {
-        "ru": "Пожалуйста, обращайтесь!",
+        "ru": "Пожалуйста! Всегда рад помочь.",
         "kk": "Оқасы жоқ, келіп тұрыңыз!",
-        "en": "You're welcome, anytime!",
+        "en": "You're welcome, happy to help anytime!",
     },
     "bye": {
-        "ru": "До свидания! Хорошего дня!",
+        "ru": "До свидания! Отличного вам дня!",
         "kk": "Сау болыңыз! Күніңіз сәтті өтсін!",
-        "en": "Goodbye! Have a great day!",
+        "en": "Goodbye! Have an awesome day!",
     },
 }
 

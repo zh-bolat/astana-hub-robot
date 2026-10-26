@@ -460,6 +460,7 @@ _YES = frozenset(
         "проведи",
         "проведите",
         "можно",
+        "хочу",
         "иә",
         "ия",
         "иа",
@@ -671,11 +672,21 @@ def _direction(place: Place, lang: Lang) -> list[str] | None:
     return None
 
 
-_OFFER = {"ru": "Проводить вас?", "kk": "Апарып салайын ба?", "en": "Want me to take you there?"}
+# Предложение проводить — вопросом: на «да» сервер сразу отдаёт guide_to (ChatService._remember_offer)
+OFFERS: dict[Lang, tuple[str, ...]] = {
+    "ru": ("Проводить вас?", "Хотите, я вас провожу?"),
+    "kk": ("Апарып салайын ба?", "Бірге барайық па?"),
+    "en": ("Want me to take you there?", "Shall I walk you there?"),
+}
 # Предложение проводить внутри фразы робота (WayPhrases.offerGuide) — сервер ставит своё «Проводить вас?»
 _ROBOT_OFFERS = frozenset(
     _norm(s)
-    for s in ("Могу проводить.", "Апарып салайын ба?", "I can take you there.", *_OFFER.values())
+    for s in (
+        "Могу проводить.",
+        "Апарып салайын ба?",
+        "I can take you there.",
+        *(offer for offers in OFFERS.values() for offer in offers),
+    )
 )
 
 
@@ -712,47 +723,67 @@ def place_reply(
     shown = _display(name, lang)
     if intent.kind == "guide_to":
         return "excited", [guide_phrase(place, lang, rng)]
+    offer = rng.choice(OFFERS[lang])
     if direction:
-        return "happy", [direction, _OFFER[lang]]
+        return "happy", [direction, offer]
     described = _direction(place, lang)
     if described:
-        return "happy", [*described, _OFFER[lang]]
+        return "happy", [*described, offer]
     if lang == "ru":
         first = rng.choice(
-            [f"{_cap(shown)} — смотрите стрелку на экране.", f"Показала на экране, где {shown}."]
+            [f"Показал на экране, где {shown}!", f"{_cap(shown)} — смотрите стрелку на экране!"]
         )
     elif lang == "kk":
         first = rng.choice(
             [
-                f"{_cap(shown)} — экрандағы көрсеткіге қараңыз.",
-                f"{_cap(shown)} қайда екенін экранда көрсеттім.",
+                f"{_cap(shown)} қайда екенін экранда көрсеттім!",
+                f"{_cap(shown)} — экрандағы көрсеткіге қараңыз!",
             ]
         )
     else:
         first = rng.choice(
             [
-                f"The {shown} is this way, see my screen.",
-                f"My screen shows the way to the {shown}.",
+                f"The {shown} is this way, check my screen!",
+                f"The {shown}? Check the arrow on my screen!",
             ]
         )
-    return "happy", [first, _OFFER[lang]]
+    return "happy", [first, offer]
 
 
 def guide_phrase(place: Place, lang: Lang, rng: random.Random | None = None) -> str:
-    """«Пойдёмте, провожу до кафе!» / «Жүріңіз, кафеге апарып саламын!» / «Sure, follow me to the cafe!»"""
+    """«Поехали! Провожу до кафе.» / «Жүріңіз, кафеге апарып саламын!» / «Sure, follow me to the cafe!»
+    Робот говорит о себе в мужском роде; фраза одна и короткая — её озвучивают сразу, без модели."""
     rng = rng or _RNG
     name = place.names.get(lang)
     shown = _display(name, lang)
     if lang == "ru":
         gen = _ru_genitive(shown)
         if gen is None:
-            return rng.choice(["Пойдёмте, провожу!", "Конечно, идите за мной!"])
-        return rng.choice([f"Пойдёмте, провожу до {gen}!", f"Конечно, идёмте до {gen}!"])
+            return rng.choice(
+                ["Поехали, провожу!", "Идёмте, покажу дорогу!", "С радостью, идите за мной!"]
+            )
+        return rng.choice(
+            [
+                f"Поехали! Провожу до {gen}.",
+                f"Идёмте, провожу до {gen}!",
+                f"С радостью провожу до {gen}, идёмте!",
+            ]
+        )
     if lang == "kk":
         dat = _kk_dative(shown)
         if dat is None:
-            return "Жүріңіз, апарып саламын!"
-        return rng.choice([f"Жүріңіз, {dat} апарып саламын!", f"Әрине, {dat} бірге барайық!"])
+            return rng.choice(["Жүріңіз, апарып саламын!", "Кеттік, соңымнан жүріңіз!"])
+        return rng.choice(
+            [
+                f"Жүріңіз, {dat} апарып саламын!",
+                f"Кеттік! {_cap(dat)} бірге барайық.",
+                f"Әрине, {dat} бастап барамын!",
+            ]
+        )
     return rng.choice(
-        [f"Sure, follow me to the {shown}!", f"Let's go, I'll take you to the {shown}!"]
+        [
+            f"Off we go! Follow me to the {shown}.",
+            f"Sure, follow me to the {shown}!",
+            f"Let's go, I'll take you to the {shown}!",
+        ]
     )
