@@ -26,7 +26,8 @@ data class ChatItem(
  * - вопрос отозван (сервер счёл шумом: `question` → null, ответа не было) — реплика посетителя убирается;
  *   на экран вернули прежний ход (`question`/`answer` прошлого хода) — это откат, не новая реплика;
  * - `citations` — к реплике робота текущего хода (пустые не стирают уже показанные);
- * - новый разговор (`conversation`, новый посетитель) — чат с чистого листа;
+ * - новый разговор (`conversation`, новый посетитель) — чат с чистого листа; последний ход старого разговора,
+ *   если снимок ещё несёт его (session_id сменился раньше сброса), в новый чат не попадает;
  * - хранится не больше [maxItems] реплик (старые уходят сверху).
  */
 class ChatLog(private val maxItems: Int = MAX_ITEMS) {
@@ -51,14 +52,18 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
         var changed = false
         if (s.conversation != conversation) {
             conversation = s.conversation
+            // ViewModel меняет session_id раньше, чем сбрасывает вопрос и ответ: снимок нового разговора может ещё
+            // нести последний ход старого — он остаётся за чертой (не попадает в новый чат).
+            val oldTurn = lastTurn()
             if (list.isNotEmpty()) {
                 list.clear()
                 changed = true
             }
             visitorId = NONE
             robotId = NONE
-            prevQuestion = null
-            prevAnswer = null
+            val leftover = oldTurn != null && s.question == oldTurn.first && s.answer != null && s.answer == oldTurn.second
+            prevQuestion = if (leftover) s.question else null
+            prevAnswer = if (leftover) s.answer else null
         }
         val q = s.question
         val a = s.answer
@@ -130,6 +135,14 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
         val visitor = list[i - 1]
         if (robot.text != a || visitor.role != ChatRole.VISITOR || visitor.text != q) return null
         return visitor.id to robot.id
+    }
+
+    /** Последний ход: (вопрос, ответ) — посетитель и следующая за ним реплика робота; null — нет такого. */
+    private fun lastTurn(): Pair<String, String>? {
+        val r = list.lastOrNull() ?: return null
+        if (r.role != ChatRole.ROBOT) return null
+        val v = list.getOrNull(list.size - 2)?.takeIf { it.role == ChatRole.VISITOR } ?: return null
+        return v.text to r.text
     }
 
     private fun append(role: ChatRole, text: String): Long {

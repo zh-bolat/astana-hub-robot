@@ -107,6 +107,31 @@ class ChatLogTest {
     }
 
     @Test
+    fun `new conversation snapshot that still carries the old turn - the old turn stays out`() {
+        // goIdle: session_id меняется раньше сброса вопроса/ответа — коллектор может увидеть промежуточный снимок.
+        step { copy(question = "Q30", answer = "A30") }
+        step { copy(conversation = conversation + 1) }
+        assertTrue(log.items.isEmpty())
+        step { copy(question = null, answer = null) }
+        assertTrue(log.items.isEmpty())
+        // Новый посетитель спрашивает — в чате только его разговор.
+        step { copy(question = "Где кафе?") }
+        step { copy(answer = "Справа.") }
+        assertEquals(listOf("V:Где кафе?", "R:Справа."), texts())
+    }
+
+    @Test
+    fun `new conversation with the new question in the same snapshot - the question is shown`() {
+        step { copy(question = "Q", answer = "A") }
+        // touchSession: новый session_id и новый вопрос склеились в один снимок.
+        step { copy(conversation = conversation + 1, question = "Новый вопрос", answer = null) }
+        assertEquals(listOf("V:Новый вопрос"), texts())
+        // Тот же вопрос, что и в прошлом разговоре, — тоже новый (ответа ещё нет).
+        step { copy(conversation = conversation + 1, question = "Новый вопрос", answer = null) }
+        assertEquals(listOf("V:Новый вопрос"), texts())
+    }
+
+    @Test
     fun `no change - same snapshot object, no update reported`() {
         step { copy(question = "Q", answer = "A") }
         val before = log.items
