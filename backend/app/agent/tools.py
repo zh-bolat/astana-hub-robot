@@ -24,8 +24,8 @@ from app.logging_setup import logger
 # После этих инструментов агент не говорит: фразу подставляет сервер
 STOP_TOOLS = ["look", "no_answer"]
 SEARCH_RESULTS = 3
-# Кандидатов поиска: факты и так лежат в промпте целиком, поэтому в ответ инструмента сначала идут документы
-# и места, факт — только если осталось место (иначе короткие факты вытесняют нужный фрагмент документа)
+# Кандидатов поиска: факты и места и так лежат в промпте целиком, поэтому в ответ инструмента сначала идут
+# документы, факт или место — только если осталось место (иначе короткие факты вытесняют нужный фрагмент документа)
 SEARCH_CANDIDATES = 5
 SEARCH_BUDGET_CHARS = 2500  # текст всех фрагментов в ответе инструмента
 SEARCH_MAX_CALLS = 2  # повторный поиск в том же ходе — один раз (защита от циклов)
@@ -137,8 +137,8 @@ def no_answer(wrapper: RunContextWrapper[ChatContext]) -> str:
 
 
 def prefer_documents(hits: list[SearchHit], k: int = SEARCH_RESULTS) -> list[SearchHit]:
-    """До k результатов: документы и места по порядку поиска, затем факты."""
-    return sorted(hits, key=lambda h: h.type == "fact")[:k]
+    """До k результатов: документы по порядку поиска, затем факты и места (они уже в промпте)."""
+    return sorted(hits, key=lambda h: h.type != "document")[:k]
 
 
 def search_texts(hits: list[SearchHit], query: str, budget: int = SEARCH_BUDGET_CHARS) -> list[str]:

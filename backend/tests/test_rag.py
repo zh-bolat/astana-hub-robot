@@ -466,7 +466,7 @@ def test_tool_prefers_documents_because_facts_are_in_prompt():
 
     hits = [hit("fact:a", "fact"), hit("document:d#1", "document"), hit("fact:b", "fact")]
     hits += [hit("place:p", "place"), hit("document:d#2", "document")]
-    assert [h.id for h in prefer_documents(hits)] == ["document:d#1", "place:p", "document:d#2"]
+    assert [h.id for h in prefer_documents(hits)] == ["document:d#1", "document:d#2", "fact:a"]
     assert [h.id for h in prefer_documents(hits[:3])] == ["document:d#1", "fact:a", "fact:b"]
 
 
