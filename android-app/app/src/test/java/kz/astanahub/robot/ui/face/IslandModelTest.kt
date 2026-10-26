@@ -125,6 +125,15 @@ class IslandModelTest {
     }
 
     @Test
+    fun `screen recreated with an old where answer in the state - no island pops up`() {
+        m.markSeen(hint(3))
+        assertFalse(m.update(null, hint(3), now))
+        assertNull(m.content)
+        m.update(null, hint(4), now)
+        assertEquals(IslandContent.WhereIs(hint(4)), m.content)
+    }
+
+    @Test
     fun `failed trip shows its own outcome, sleep clears the island at once`() {
         m.update("Ресепшен", null, now)
         m.update(null, null, now + 10)

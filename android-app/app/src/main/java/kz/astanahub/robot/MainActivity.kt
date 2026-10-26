@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Остров экрана лица и его таймер (where_is ~9 с, итог поездки ~2 с). */
     private val island = IslandModel()
+    private var firstRender = true
     private val islandTick = Runnable {
         if (island.tick(SystemClock.uptimeMillis())) applyIsland() else scheduleIsland()
     }
@@ -343,8 +344,13 @@ class MainActivity : AppCompatActivity() {
             islandTextsFor = state.lang
             screen.islandTexts = islandTexts(state.lang)
         }
-        // Остров: поездка / итог / «где» (спит — острова нет).
+        // Остров: поездка / итог / «где» (спит — острова нет). Ответ «где» из состояния до пересоздания экрана
+        // (смена масштаба в диагностике) — уже показан, заново не всплывает.
         val now = SystemClock.uptimeMillis()
+        if (firstRender) {
+            firstRender = false
+            island.markSeen(state.whereIs)
+        }
         val changed = if (state.mode == ScreenMode.SLEEP) island.clear() else island.update(state.guidingTo, state.whereIs, now)
         if (changed) applyIsland() else refreshMenuOpen()
         // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
@@ -389,25 +395,26 @@ class MainActivity : AppCompatActivity() {
     /** Экран 2 открыт: режим MENU, не едем и остров не досказывает поездку. */
     private fun refreshMenuOpen() {
         val c = island.content
-        face.screen.menuOpen = ScreenTwoMapper.menuOpen(
+        val menuOpen = ScreenTwoMapper.menuOpen(
             viewModel.state.value,
             islandHoldsFace = c is IslandContent.Trip || c is IslandContent.Outcome,
         )
-    }
-
-    /** Остров → экран лица: содержимое, взгляд в сторону места (where_is), следующий тик таймера. */
-    private fun applyIsland() {
-        val content = island.content
-        face.screen.island = content
-        refreshMenuOpen()
+        face.screen.menuOpen = menuOpen
+        // Глаза смотрят в сторону места, пока остров where_is на экране лица (на экране 2 острова нет).
         val inputs = face.engine.inputs
-        if (content is IslandContent.WhereIs) {
-            inputs.lookX = IslandGeometry.gazeX(content.hint.visitorAngleRad)
-            inputs.lookY = IslandGeometry.gazeY(content.hint.visitorAngleRad)
+        if (c is IslandContent.WhereIs && !menuOpen) {
+            inputs.lookX = IslandGeometry.gazeX(c.hint.visitorAngleRad)
+            inputs.lookY = IslandGeometry.gazeY(c.hint.visitorAngleRad)
             inputs.looking = true
         } else {
             inputs.looking = false
         }
+    }
+
+    /** Остров → экран лица: содержимое, взгляд в сторону места (where_is), следующий тик таймера. */
+    private fun applyIsland() {
+        face.screen.island = island.content
+        refreshMenuOpen()
         scheduleIsland()
     }
 

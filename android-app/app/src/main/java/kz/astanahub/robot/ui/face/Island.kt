@@ -95,6 +95,11 @@ class IslandModel(
         return resolve(now)
     }
 
+    /** Этот ответ «где» уже показан (экран пересоздан, а ответ в состоянии старый) — острова по нему нет. */
+    fun markSeen(whereIs: WhereIsHint?) {
+        if (whereIs != null) whereSeq = whereIs.seq
+    }
+
     /** Итог поездки (реакция ViewModel: приехали / ошибка / отмена). */
     fun onOutcome(kind: TripOutcome, now: Long): Boolean {
         if (tripPlace == null) return false
