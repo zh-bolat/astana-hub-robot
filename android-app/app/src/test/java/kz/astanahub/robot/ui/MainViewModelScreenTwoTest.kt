@@ -114,6 +114,28 @@ class MainViewModelScreenTwoTest {
     }
 
     @Test
+    fun `back from diagnostics - screen 2 stays open unless the chat mode really changed`() = runTest(dispatcher) {
+        var mode = ChatMode.AGENT
+        val vm = MainViewModel(
+            backend, TestVoice(), mockk<CameraGateway>(), phrases, clock = { testScheduler.currentTime },
+            chatMode = { mode }, screensaverMillis = 180_000L,
+        )
+        runCurrent()
+        vm.onSettingsChanged() // onResume при старте
+        vm.openMenu()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        vm.onSettingsChanged() // вернулись из диагностики, ничего не меняли
+        assertEquals("screen 2 stays", ScreenMode.MENU, vm.state.value.mode)
+        mode = ChatMode.LEGACY
+        vm.onSettingsChanged()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        mode = ChatMode.AGENT
+        vm.onSettingsChanged() // legacy → agent: «бодрый» экран — лицо
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.viewModelScope.cancel()
+    }
+
+    @Test
     fun `chat log follows real turns, citations under the robot answer, new visitor - clean chat`() = runTest(dispatcher) {
         val vm = createVm()
         val log = ChatLog()

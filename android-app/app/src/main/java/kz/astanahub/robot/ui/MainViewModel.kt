@@ -560,6 +560,9 @@ class MainViewModel(
         }
     }
 
+    /** Режим «бодрого» экрана при прошлой проверке настроек (null — ещё не проверяли). */
+    private var lastAwakeMode: ScreenMode? = null
+
     /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
     private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
@@ -580,7 +583,12 @@ class MainViewModel(
     /** Сменили режим разговора на экране диагностики. */
     fun onSettingsChanged() {
         val mode = _state.value.mode
-        if (mode != ScreenMode.SLEEP && mode != awakeMode()) _state.update { it.copy(mode = awakeMode()) }
+        // Режим «бодрого» экрана меняем, только если его правда сменили (agent ↔ legacy): оператор, вернувшийся из
+        // диагностики на экран 2, остаётся на нём (ревью M3-r1, M7).
+        val awake = awakeMode()
+        val awakeChanged = lastAwakeMode != null && lastAwakeMode != awake
+        lastAwakeMode = awake
+        if (awakeChanged && mode != ScreenMode.SLEEP && mode != awake) _state.update { it.copy(mode = awake) }
         if (chatMode() != ChatMode.LIVE) {
             closeLive()
         } else if (mode != ScreenMode.SLEEP) {
