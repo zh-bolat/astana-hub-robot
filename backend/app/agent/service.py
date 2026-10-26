@@ -160,6 +160,12 @@ _META = re.compile(
     r"по правилам|согласно правилам|системн\w* промпт|\b(where_is|guide_to|no_answer|search_kb|look\(\))",
     re.IGNORECASE,
 )
+# Служебный префикс перед самим ответом: «Translate to Kazakh: EXPO жерасты паркингі…» — модель «переводит»
+# факт вслух. Префикс вырезаем, ответ после него оставляем.
+_META_PREFIX = re.compile(
+    r"^\s*(translat(e|ion)(\s+(to|into)\s+\w+)?|answer|ответ|перевод(\s+на\s+\w+(\s+язык)?)?|аударма(сы)?)\s*:\s*",
+    re.IGNORECASE,
+)
 
 
 # Тег эмоции в начале ответа модели: «[happy] Здравствуйте!» (v1.1). Сервер его вырезает и отдаёт
@@ -596,6 +602,9 @@ class ChatService:
         corpus — база и найденное поиском в этом ходе (ссылка из найденного — не выдумка модели)."""
         out: list[str] = []
         for phrase in split_phrases(clean_for_tts(text)):
+            phrase = _META_PREFIX.sub("", phrase)
+            if not phrase.strip():
+                continue
             if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
                 logger.info("agent_filler_dropped", extra={"chars": len(phrase)})
                 continue

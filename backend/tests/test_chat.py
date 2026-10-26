@@ -433,6 +433,16 @@ def test_narration_is_not_spoken(make_client):
     assert [d["text"] for e, d in evs if e == "phrase"] == ["Куда вас проводить?"]
 
 
+def test_translate_prefix_is_cut_answer_is_kept(make_client):
+    # Haiku на проде: «Translate to Kazakh: EXPO жерасты паркингі…» — префикс не озвучиваем, ответ — да
+    model = FakeModel(say("Translate to Kazakh: EXPO жерасты паркингі, шамамен 3000 орын. Перевод: Келіңіз!"))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Көлікті қайда қоюға болады?", lang="kk")
+
+    assert [d["text"] for e, d in evs if e == "phrase"] == ["EXPO жерасты паркингі, шамамен 3000 орын.", "Келіңіз!"]
+
+
 # ---------- v1.1: эмоции ----------
 
 
