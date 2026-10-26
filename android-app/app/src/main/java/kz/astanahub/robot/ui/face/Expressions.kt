@@ -384,13 +384,14 @@ object Expressions {
 
     /**
      * Сила эмоции поверх состояния: в покое — целиком, пока говорит — почти целиком (рот говорит сам),
-     * слушает / ведёт — наполовину, во «встроенных» выражениях (думает, ошибка, сон…) — не накладывается.
+     * слушает — на 0.6, ведёт и смотрит — на 0.3, во «встроенных» выражениях (думает, ошибка, сон…) — нет.
      */
     fun overlayWeight(m: FaceMood): Float = when (m) {
         FaceMood.IDLE -> 1f
         FaceMood.SPEAKING -> 0.85f
-        FaceMood.LISTENING, FaceMood.TRAVEL -> 0.6f
-        FaceMood.LOOKING -> 0.3f
+        FaceMood.LISTENING -> 0.6f
+        // В поездке выражение «целеустремлённо» главнее: эмоция лишь слегка.
+        FaceMood.TRAVEL, FaceMood.LOOKING -> 0.3f
         else -> 0f
     }
 

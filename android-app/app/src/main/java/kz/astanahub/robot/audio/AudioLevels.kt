@@ -21,12 +21,17 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
     @Volatile private var micAt = Long.MIN_VALUE / 2
     @Volatile private var play = 0f
     @Volatile private var playAt = Long.MIN_VALUE / 2
+    @Volatile private var voice = false
+    @Volatile private var voiceAt = Long.MIN_VALUE / 2
 
     /** Речь live-режима: громкость по PCM в момент, который реально звучит из динамика. */
     val pcm = PcmPlaybackMeter(clockMs)
 
     @Volatile var debugMic: Boolean = false
     @Volatile var debugPlayback: Boolean = false
+
+    /** Отладка: постоянный гул зала (громкость без речи — VAD молчит). */
+    @Volatile var debugNoise: Boolean = false
     private val debugMicSynth = SpeechSynth(Random(11))
     private val debugPlaySynth = SpeechSynth(Random(23))
 
@@ -34,6 +39,21 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
     fun reportMic(level: Float) {
         mic = level
         micAt = clockMs()
+    }
+
+    /**
+     * VAD: посетитель говорит / замолчал. Источники: адаптивный VAD приложения (`EnergyVad` / `LiveEndpointer`
+     * в ServerVoiceGateway) и `user_speaking` … `user_final` сервера (LiveSession). Не обновлялся [VOICE_STALE_MS] —
+     * считается тишиной (источник оборвался, не сказав «замолчал»).
+     */
+    fun reportVoice(active: Boolean) {
+        voice = active
+        voiceAt = clockMs()
+    }
+
+    override fun voiceActive(): Boolean {
+        if (debugMic) return true
+        return voice && clockMs() - voiceAt <= VOICE_STALE_MS
     }
 
     /** Уровень речи робота 0..1, измеренный не по PCM (Visualizer). */
@@ -44,7 +64,8 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
 
     override fun micLevel(): Float {
         val now = clockMs()
-        if (debugMic) return debugMicSynth.level(now, true) * 0.6f
+        if (debugMic) return debugMicSynth.level(now, true) * 0.6f + if (debugNoise) DEBUG_NOISE_RMS else 0f
+        if (debugNoise) return DEBUG_NOISE_RMS
         return if (now - micAt <= FRESH_MS) mic else 0f
     }
 
@@ -59,6 +80,12 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
     companion object {
         /** Уровень старше — уже не «сейчас» (поток записи остановлен). */
         const val FRESH_MS = 250L
+
+        /** VAD без обновлений столько — тишина. Сервер шлёт `user_speaking` один раз, конец — `user_final`: до 8 с. */
+        const val VOICE_STALE_MS = 8_000L
+
+        /** Гул зала для отладки: −30 дБFS (вентиляция и толпа в атриуме). */
+        const val DEBUG_NOISE_RMS = 0.03f
 
         /** RMS кадра PCM 16-bit LE mono / 32768. */
         fun rmsPcm16(bytes: ByteArray, offset: Int, length: Int): Float {

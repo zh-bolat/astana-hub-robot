@@ -168,14 +168,13 @@ class FaceRenderer {
 
     private fun drawDecor(canvas: Canvas, pose: FacePose) {
         val v = pose.v
-        val t = pose.time
 
         // «?» у левой брови: обводится штрихом, точка появляется в конце, лёгкое покачивание.
         val q = v[P.QUESTION]
         if (q > 0.01f) {
             canvas.save()
             canvas.translate(-FaceLayout.EYE_X - 160f, FaceLayout.EYE_Y - 140f)
-            canvas.rotate(-8f + 5f * sin(t * 2.6f))
+            canvas.rotate(-8f + 5f * sin(pose.wobble))
             val k = 0.75f + 0.25f * q
             canvas.scale(k, k)
             decorPath.rewind()
@@ -210,7 +209,7 @@ class FaceRenderer {
         // Капля у правой брови: медленно сползает.
         val sweat = v[P.SWEAT]
         if (sweat > 0.01f) {
-            val slide = (t * 0.6f) % 1f
+            val slide = pose.sweatPhase
             canvas.save()
             canvas.translate(geometry.browRight.x1 + 46f, geometry.browRight.y1 + 10f + 18f * slide)
             val k = 0.7f + 0.3f * sweat
@@ -228,7 +227,7 @@ class FaceRenderer {
         if (z > 0.01f) {
             strokePaint.strokeWidth = Z_STROKE
             for (i in 0 until 3) {
-                val p = ((t / Z_PERIOD) + i / 3f) % 1f
+                val p = (pose.zPhase + i / 3f) % 1f
                 val size = 14f + 18f * p
                 val x = FaceLayout.EYE_X + 150f + 70f * p
                 val y = FaceLayout.EYE_Y - 140f - 170f * p
@@ -272,7 +271,6 @@ class FaceRenderer {
         private const val BLUSH_STROKE = 9f
         private const val SWEAT_STROKE = 9f
         private const val Z_STROKE = 9f
-        private const val Z_PERIOD = 3.2f
 
         /**
          * «Линза»: углы (lx, ly), (rx, ry), вершины (ax, top) и (ax, bottom), четверти эллипса между ними.

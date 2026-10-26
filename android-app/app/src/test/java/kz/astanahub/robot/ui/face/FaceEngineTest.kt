@@ -11,9 +11,10 @@ import kz.astanahub.robot.ui.face.FaceParam as P
 class FaceEngineTest {
 
     /** Тестовый звук: уровни задаёт тест. */
-    private class FakeAudio(var mic: Float = 0f, var playback: Float = -1f) : FaceAudioSource {
+    private class FakeAudio(var mic: Float = 0f, var playback: Float = -1f, var voice: Boolean = false) : FaceAudioSource {
         override fun micLevel() = mic
         override fun playbackLevel() = playback
+        override fun voiceActive() = voice
     }
 
     private val frameNanos = 16_666_667L
@@ -249,14 +250,47 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `voice alone switches idle to listening`() {
-        val audio = FakeAudio(mic = 0.08f)
+    fun `vad voice alone switches idle to listening`() {
+        val audio = FakeAudio(mic = 0.08f, voice = true)
         val e = engine(audio)
         e.frames(30)
         assertEquals(FaceMood.LISTENING, e.director.mood)
         audio.mic = 0f
+        audio.voice = false
         e.frames(90)
         assertEquals(FaceMood.IDLE, e.director.mood)
+    }
+
+    @Test
+    fun `steady hall noise without vad keeps the face idle and calm`() {
+        // −30 дБFS гул атриума: громко, но VAD молчит.
+        val audio = FakeAudio(mic = 0.03f, voice = false)
+        val e = engine(audio)
+        e.frames(60 * 10) { assertEquals(FaceMood.IDLE, it.director.mood) }
+        // Огибающая микрофона вычла фон: реакции на гул нет.
+        assertTrue("listen envelope ${e.pose.listen}", e.pose.listen < 0.05f)
+    }
+
+    @Test
+    fun `face does not depend on uptime - 30 days later it moves exactly the same`() {
+        // Робот-киоск работает неделями: время лица не должно терять точность (float от аптайма).
+        val day = 86_400_000_000_000L
+        val early = FaceEngine(seed = 3)
+        val late = FaceEngine(seed = 3)
+        var t1 = 1_000_000_000L
+        var t2 = 30 * day
+        early.update(t1)
+        late.update(t2)
+        var maxDiff = 0f
+        repeat(60 * 20) {
+            t1 += frameNanos
+            t2 += frameNanos
+            early.update(t1)
+            late.update(t2)
+            for (p in 0 until P.COUNT) maxDiff = maxOf(maxDiff, abs(early.pose[p] - late.pose[p]))
+            maxDiff = maxOf(maxDiff, abs(early.pose.wobble - late.pose.wobble), abs(early.pose.zPhase - late.pose.zPhase))
+        }
+        assertTrue("max difference $maxDiff", maxDiff < 1e-3f)
     }
 
     @Test

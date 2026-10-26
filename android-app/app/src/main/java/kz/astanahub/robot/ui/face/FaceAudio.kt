@@ -7,15 +7,21 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Громкость для лица (реализация — [kz.astanahub.robot.audio.AudioLevels]; в тестах — фейк).
+ * Звук для лица (реализация — [kz.astanahub.robot.audio.AudioLevels]; в тестах — фейк).
  * Уровни — RMS / 32768 (0..1). Вызывается из кадра — без аллокаций и блокировок.
+ *
+ * «Посетитель говорит» — только по VAD ([voiceActive]: адаптивный VAD приложения или `user_speaking` сервера);
+ * громкость микрофона ([micLevel]) — лишь сила реакции. Постоянный шум зала лицо в «слушаю» не переводит.
  */
 interface FaceAudioSource {
-    /** Микрофон (голос посетителя); 0 — нет свежих данных. */
+    /** Микрофон (громкость голоса посетителя); 0 — нет свежих данных. */
     fun micLevel(): Float
 
     /** Речь робота, если её громкость измеряется (live PCM, Visualizer); −1 — не измеряется (встроенный TTS и т. п.). */
     fun playbackLevel(): Float
+
+    /** VAD: посетитель сейчас говорит. */
+    fun voiceActive(): Boolean = false
 
     companion object {
         val SILENT: FaceAudioSource = object : FaceAudioSource {
@@ -38,6 +44,8 @@ class FaceAudioEnvelope(
     private val minPeak: Float,
     /** За столько секунд пик спадает в e раз. */
     private val peakDecaySec: Float = 2f,
+    /** Следить за шумовым фоном (медленный минимум уровня) и вычитать его: постоянный гул зала → 0. */
+    private val trackNoise: Boolean = false,
 ) {
     /** Сглаженный уровень (в единицах входа). */
     var level: Float = 0f
@@ -49,15 +57,25 @@ class FaceAudioEnvelope(
 
     private var peak = minPeak
 
+    /** Шумовой фон: быстро опускается в паузах, медленно поднимается (речь — всплесками, гул — постоянно). */
+    var noise: Float = 0f
+        private set
+
     fun step(input: Float, dt: Float): Float {
         if (dt <= 0f) return value
         val x = if (input > 0f) input else 0f
         val tau = if (x > level) attackSec else releaseSec
         level += (x - level) * (1f - exp(-dt / tau))
+        var bottom = floor
+        if (trackNoise) {
+            val noiseTau = if (level < noise) NOISE_FALL_SEC else NOISE_RISE_SEC
+            noise += (level - noise) * (1f - exp(-dt / noiseTau))
+            bottom = max(floor, noise * NOISE_MARGIN)
+        }
         // Пик догоняет громкость плавно (τ [PEAK_ATTACK_SEC]) и медленно спадает: один громкий кадр не перестраивает шкалу.
         peak = if (level > peak) peak + (level - peak) * (1f - exp(-dt / PEAK_ATTACK_SEC)) else peak * exp(-dt / peakDecaySec)
-        peak = max(peak, minPeak)
-        value = ((level - floor) / (peak - floor)).coerceIn(0f, 1f)
+        peak = max(peak, max(minPeak, bottom + minPeak - floor))
+        value = ((level - bottom) / (peak - bottom)).coerceIn(0f, 1f)
         return value
     }
 
@@ -65,16 +83,20 @@ class FaceAudioEnvelope(
         level = 0f
         value = 0f
         peak = minPeak
+        noise = 0f
     }
 
     companion object {
         private const val PEAK_ATTACK_SEC = 0.25f
+        private const val NOISE_FALL_SEC = 0.4f
+        private const val NOISE_RISE_SEC = 8f
+        private const val NOISE_MARGIN = 1.3f
 
         /** Речь робота: открывается за ~45 мс, закрывается за ~140 мс. */
         fun playback() = FaceAudioEnvelope(attackSec = 0.045f, releaseSec = 0.14f, floor = 0.008f, minPeak = 0.12f)
 
-        /** Голос посетителя: мягче, спад ~0.25 с. */
-        fun mic() = FaceAudioEnvelope(attackSec = 0.04f, releaseSec = 0.25f, floor = 0.012f, minPeak = 0.06f)
+        /** Голос посетителя: мягче, спад ~0.25 с, шум зала вычитается. */
+        fun mic() = FaceAudioEnvelope(attackSec = 0.04f, releaseSec = 0.25f, floor = 0.012f, minPeak = 0.06f, trackNoise = true)
     }
 }
 

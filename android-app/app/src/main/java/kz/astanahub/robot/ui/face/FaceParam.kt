@@ -130,8 +130,8 @@ object FaceSprings {
     /** Форма глаз, бровей, рта: быстрый морфинг без перелёта. */
     val SHAPE = SpringSpec(dampingRatio = 1f, response = 0.30f)
 
-    /** Саккады взгляда: очень быстро, без перелёта. */
-    val GAZE = SpringSpec(dampingRatio = 1f, response = 0.13f)
+    /** Саккады взгляда: быстро, без перелёта; 0.16 с — полный ход без «строба» (≤ ~45 px за кадр). */
+    val GAZE = SpringSpec(dampingRatio = 1f, response = 0.16f)
 
     /** Голова: медленнее глаз — глаза ведут, голова догоняет. */
     val HEAD = SpringSpec(dampingRatio = 1f, response = 0.55f)

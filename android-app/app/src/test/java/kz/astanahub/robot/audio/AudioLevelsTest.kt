@@ -100,11 +100,33 @@ class AudioLevelsTest {
     }
 
     @Test
+    fun `vad voice is reported, cleared and goes stale`() {
+        assertEquals(false, levels.voiceActive())
+        levels.reportVoice(true)
+        assertEquals(true, levels.voiceActive())
+        now += 1_000
+        levels.reportVoice(false)
+        assertEquals(false, levels.voiceActive())
+        levels.reportVoice(true)
+        now += AudioLevels.VOICE_STALE_MS + 1
+        assertEquals("source died without saying 'stopped'", false, levels.voiceActive())
+    }
+
+    @Test
+    fun `debug hall noise is loud but not a voice`() {
+        levels.debugNoise = true
+        assertEquals(AudioLevels.DEBUG_NOISE_RMS, levels.micLevel(), 0f)
+        assertEquals(false, levels.voiceActive())
+        levels.debugNoise = false
+    }
+
+    @Test
     fun `debug voice produces a varying level`() {
         levels.debugMic = true
         val values = (0 until 100).map { now += 16; levels.micLevel() }
         assertTrue(values.max() > 0.04f)
         assertTrue(values.any { it == 0f } || values.min() < values.max() / 3)
+        assertTrue(levels.voiceActive())
         levels.debugMic = false
         assertEquals(0f, levels.micLevel(), 0f)
     }

@@ -44,41 +44,23 @@ class FaceInputs {
 }
 
 /**
- * Голос посетителя по громкости микрофона (огибающая 0..1) с гистерезисом: включается, если громко
- * [onMillis] подряд, выключается после [offMillis] тишины — лицо не дёргается от коротких шумов и пауз.
+ * Голос посетителя по VAD (адаптивный VAD приложения или `user_speaking` сервера) с удержанием [holdMillis]:
+ * короткие паузы между словами не роняют «слушаю». Громкость сюда не входит — шум зала не включает «слушаю».
  */
-class VoiceDetector(
-    private val onLevel: Float = 0.22f,
-    private val offLevel: Float = 0.10f,
-    private val onMillis: Long = 100,
-    private val offMillis: Long = 650,
-) {
+class VoiceHold(private val holdMillis: Long = 500) {
     var active: Boolean = false
         private set
-    private var aboveSince = -1L
-    private var belowSince = -1L
+    private var lastVoice = Long.MIN_VALUE / 2
 
-    fun update(level: Float, nowMs: Long): Boolean {
-        if (level >= onLevel) {
-            if (aboveSince < 0) aboveSince = nowMs
-            belowSince = -1
-            if (!active && nowMs - aboveSince >= onMillis) active = true
-        } else {
-            aboveSince = -1
-            if (level <= offLevel) {
-                if (belowSince < 0) belowSince = nowMs
-                if (active && nowMs - belowSince >= offMillis) active = false
-            } else {
-                belowSince = -1
-            }
-        }
+    fun update(voice: Boolean, nowMs: Long): Boolean {
+        if (voice) lastVoice = nowMs
+        active = voice || nowMs - lastVoice < holdMillis
         return active
     }
 
     fun reset() {
         active = false
-        aboveSince = -1
-        belowSince = -1
+        lastVoice = Long.MIN_VALUE / 2
     }
 }
 
@@ -90,7 +72,7 @@ class VoiceDetector(
  * поглаживание → реакция ([REACTIONS], пока не истекла или не началось новое дело) → поездка → думает → смотрит →
  * говорит → слушает (голос посетителя) → покой.
  */
-class FaceDirector(private val voice: VoiceDetector = VoiceDetector()) {
+class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
 
     var mood: FaceMood = FaceMood.IDLE
         private set
@@ -111,7 +93,7 @@ class FaceDirector(private val voice: VoiceDetector = VoiceDetector()) {
     /** Сила наложения эмоции для текущего состояния. */
     val overlayWeight: Float get() = Expressions.overlayWeight(mood)
 
-    /** Голос посетителя слышен (по микрофону). */
+    /** Посетитель говорит (по VAD, с удержанием). */
     val voiceActive: Boolean get() = voice.active
 
     /** Отладка (эмулятор): принудительное состояние / эмоция; null — по событиям. */
@@ -137,8 +119,9 @@ class FaceDirector(private val voice: VoiceDetector = VoiceDetector()) {
         reactionUntil = nowMs + ms
     }
 
-    fun update(inputs: FaceInputs, micLevel: Float, nowMs: Long) {
-        val voiceOn = voice.update(micLevel, nowMs)
+    /** [voice] — VAD: посетитель говорит сейчас ([FaceAudioSource.voiceActive]). */
+    fun update(inputs: FaceInputs, voice: Boolean, nowMs: Long) {
+        val voiceOn = this.voice.update(voice, nowMs)
 
         // Сон и пробуждение.
         if (!started) {
@@ -152,7 +135,7 @@ class FaceDirector(private val voice: VoiceDetector = VoiceDetector()) {
             reaction = null
         } else if (!wasAwake && inputs.awake) {
             wakeUntil = nowMs + WAKE_MS
-            voice.reset()
+            this.voice.reset()
         }
         wasAwake = inputs.awake
 

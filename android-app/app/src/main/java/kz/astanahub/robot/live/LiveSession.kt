@@ -242,11 +242,26 @@ class LiveSession(
                 emit(LiveSignal.Ready(aec))
             }
             LiveEvent.Listening -> emit(LiveSignal.Listening)
-            LiveEvent.UserSpeaking -> if (!echoGuard()) emit(LiveSignal.UserSpeaking)
-            is LiveEvent.UserPartial -> if (!echoGuard()) emit(LiveSignal.UserPartial(event.text))
-            is LiveEvent.UserFinal -> emit(LiveSignal.UserFinal(event.text, event.lang))
-            LiveEvent.Ignored -> emit(LiveSignal.Ignored)
-            LiveEvent.Thinking -> emit(LiveSignal.Thinking)
+            LiveEvent.UserSpeaking -> if (!echoGuard()) {
+                levels?.reportVoice(true) // VAD сервера: лицо «слушает»
+                emit(LiveSignal.UserSpeaking)
+            }
+            is LiveEvent.UserPartial -> if (!echoGuard()) {
+                levels?.reportVoice(true)
+                emit(LiveSignal.UserPartial(event.text))
+            }
+            is LiveEvent.UserFinal -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.UserFinal(event.text, event.lang))
+            }
+            LiveEvent.Ignored -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.Ignored)
+            }
+            LiveEvent.Thinking -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.Thinking)
+            }
             is LiveEvent.TurnStart -> {
                 currentTurn = event.turnId
                 dropping = false
@@ -297,6 +312,7 @@ class LiveSession(
     }
 
     private fun shutdown() {
+        levels?.reportVoice(false)
         readyJob?.cancel()
         micJob?.cancel()
         connection?.close()

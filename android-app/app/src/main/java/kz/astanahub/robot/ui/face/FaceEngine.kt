@@ -13,8 +13,10 @@ import kz.astanahub.robot.ui.face.FaceParam as P
 class FacePose {
     val v = FloatArray(P.COUNT)
 
-    /** Время лица, с (анимации украшений: «z», капля, «?»). */
-    var time: Float = 0f
+    /** Фазы украшений (копятся по dt — не зависят от аптайма): покачивание «?» (рад), капля и «z» (0..1). */
+    var wobble: Float = 0f
+    var sweatPhase: Float = 0f
+    var zPhase: Float = 0f
 
     /** Растяжение глаз по горизонтали от скорости саккады (0..0.08) — «смаз движения». */
     var eyeStretch: Float = 0f
@@ -101,7 +103,8 @@ class FaceEngine(
         // Звук → огибающие.
         val mic = audio.micLevel()
         micEnv.step(mic, dt)
-        director.update(inputs, micEnv.value, nowMs)
+        // «Слушает» — по VAD (не по громкости: шум зала), громкость — только сила реакции.
+        director.update(inputs, audio.voiceActive(), nowMs)
         val mood = director.mood
         if (director.moodChanged || first) onMoodEnter(mood, first)
         if (director.emotionChanged && !first) onEmotionEnter(director.emotion)
@@ -195,7 +198,9 @@ class FaceEngine(
 
         clamp(o)
         pose.eyeStretch = if (reducedMotion) 0f else (abs(springs.velocity[P.GAZE_X]) * 0.02f).coerceAtMost(0.08f)
-        pose.time = nowMs / 1000f
+        pose.wobble = (pose.wobble + WOBBLE_RATE * dt) % TWO_PI
+        pose.sweatPhase = (pose.sweatPhase + SWEAT_RATE * dt) % 1f
+        pose.zPhase = (pose.zPhase + dt / Z_PERIOD_SEC) % 1f
         pose.talk = env
         pose.listen = heard
         pose.mood = director.mood
@@ -249,7 +254,8 @@ class FaceEngine(
             FaceMood.ERROR -> kick(P.SHAKE, 450f)
             FaceMood.ACK -> kick(P.SQUASH, 0.6f)
             FaceMood.PETTED -> kick(P.SQUASH, 0.5f)
-            FaceMood.LISTENING -> kick(P.POP, 0.4f)
+            // Встрепенуться — только когда пошёл текст посетителя, не на каждое включение VAD.
+            FaceMood.LISTENING -> if (inputs.userSpeaking) kick(P.POP, 0.4f)
             else -> Unit
         }
     }
@@ -307,6 +313,12 @@ class FaceEngine(
 
         private const val MAX_KICKS = 4
         private const val TALK_SLOW_SEC = 0.25f
+        private const val TWO_PI = (2.0 * Math.PI).toFloat()
+
+        /** Покачивание «?» (рад/с), сползание капли (раз/с), период «z» (с). */
+        private const val WOBBLE_RATE = 2.6f
+        private const val SWEAT_RATE = 0.6f
+        private const val Z_PERIOD_SEC = 3.2f
 
         /** Рот при полной громкости речи раскрыт на эту долю. */
         private const val TALK_OPEN = 0.85f

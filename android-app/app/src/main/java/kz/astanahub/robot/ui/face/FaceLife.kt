@@ -73,10 +73,11 @@ class FaceLife(private val random: Random) {
         breathPhase = (breathPhase + TWO_PI * breathRate * dt) % TWO_PI
         breath = sin(breathPhase)
 
-        val t = nowMs / 1000f
-        microX = 0.6f * sin(TWO_PI * 0.23f * t + microPhase[0]) + 0.4f * sin(TWO_PI * 0.61f * t + microPhase[1])
-        microY = 0.6f * sin(TWO_PI * 0.31f * t + microPhase[2]) + 0.4f * sin(TWO_PI * 0.53f * t + microPhase[3])
-        microTilt = 0.7f * sin(TWO_PI * 0.17f * t + microPhase[4]) + 0.3f * sin(TWO_PI * 0.43f * t + microPhase[5])
+        // Фазы копятся по dt (а не от абсолютного времени во float): киоск работает неделями, точность не падает.
+        for (i in 0 until MICRO_FREQ.size) microPhase[i] = (microPhase[i] + TWO_PI * MICRO_FREQ[i] * dt) % TWO_PI
+        microX = 0.6f * sin(microPhase[0]) + 0.4f * sin(microPhase[1])
+        microY = 0.6f * sin(microPhase[2]) + 0.4f * sin(microPhase[3])
+        microTilt = 0.7f * sin(microPhase[4]) + 0.3f * sin(microPhase[5])
     }
 
     private fun blinksAllowed(m: FaceMood) =
@@ -209,6 +210,9 @@ class FaceLife(private val random: Random) {
         const val BLINK_MS = BLINK_CLOSE_MS + BLINK_HOLD_MS + BLINK_OPEN_MS
 
         private const val TWO_PI = (2.0 * PI).toFloat()
+
+        /** Частоты микродвижений (Гц): x — 0.23 и 0.61, y — 0.31 и 0.53, наклон — 0.17 и 0.43. */
+        private val MICRO_FREQ = floatArrayOf(0.23f, 0.61f, 0.31f, 0.53f, 0.17f, 0.43f)
 
         /** Кривая моргания по времени от начала (мс): 0 → 1 → 0, плавно. */
         fun blinkCurve(ms: Float): Float = when {

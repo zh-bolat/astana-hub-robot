@@ -59,6 +59,17 @@ class FaceAudioEnvelopeTest {
     }
 
     @Test
+    fun `mic envelope subtracts a steady hall noise but still hears speech over it`() {
+        val env = FaceAudioEnvelope.mic()
+        env.feed(0.03f, 10_000)
+        assertTrue("noise alone: ${env.value}", env.value < 0.05f)
+        // Речь поверх гула: слоги 150 мс через 100 мс пауз.
+        var max = 0f
+        repeat(120) { i -> max = maxOf(max, env.step(if (i % 15 < 9) 0.12f else 0.03f, dt)) }
+        assertTrue("speech over noise: $max", max > 0.5f)
+    }
+
+    @Test
     fun `zero dt changes nothing`() {
         val env = FaceAudioEnvelope.playback()
         env.feed(0.2f, 100)

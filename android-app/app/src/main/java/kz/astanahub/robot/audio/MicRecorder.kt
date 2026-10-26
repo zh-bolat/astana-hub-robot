@@ -63,6 +63,7 @@ class MicRecorder(
                         filled += n
                     }
                     val event = vad.accept(leftChannel(raw, channels))
+                    speaking = vad.isSpeaking && !vad.finished
                     onLevel(vad.level)
                     when (event) {
                         VadEvent.SPEECH_ENDED, VadEvent.MAX_LENGTH -> return@withContext Result.Speech(vad.utterance(), event)
@@ -72,11 +73,19 @@ class MicRecorder(
                 }
                 Result.NoSpeech
             } finally {
+                speaking = false
                 runCatching { record.stop() }
                 record.release()
                 onLevel(0f)
             }
         }
+
+    /**
+     * Адаптивный VAD ([EnergyVad]) текущей записи [recordUtterance] сейчас слышит речь (порог — по шумовому фону).
+     * Читается из колбэка уровня (тот же поток).
+     */
+    @Volatile var speaking: Boolean = false
+        private set
 
     /**
      * Live-распознавание: отдаёт звук кусками по [chunkMillis] (PCM16 LE, mono), пока корутина не отменена.

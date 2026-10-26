@@ -11,17 +11,17 @@ class FaceDirectorTest {
     private val director = FaceDirector()
     private var now = 10_000L
 
-    private fun tick(ms: Long = 16, mic: Float = 0f): FaceMood {
+    private fun tick(ms: Long = 16, voice: Boolean = false): FaceMood {
         now += ms
-        director.update(inputs, mic, now)
+        director.update(inputs, voice, now)
         return director.mood
     }
 
     /** Прогнать [ms] миллисекунд кадрами по 16 мс. */
-    private fun advance(ms: Long, mic: Float = 0f): FaceMood {
+    private fun advance(ms: Long, voice: Boolean = false): FaceMood {
         var left = ms
         while (left > 0) {
-            tick(minOf(16, left), mic)
+            tick(minOf(16, left), voice)
             left -= 16
         }
         return director.mood
@@ -53,23 +53,21 @@ class FaceDirectorTest {
     }
 
     @Test
-    fun `loud voice turns listening on after 100 ms and off after silence with hysteresis`() {
+    fun `vad voice turns listening on at once and holds it over short pauses`() {
         inputs.activity = FaceActivity.IDLE
-        assertEquals(FaceMood.IDLE, tick(16, mic = 0.5f))
-        assertEquals(FaceMood.LISTENING, advance(120, mic = 0.5f))
-        // Короткая пауза между словами не выключает.
-        assertEquals(FaceMood.LISTENING, advance(300, mic = 0.05f))
-        // Средний уровень — между порогами — ничего не меняет.
-        assertEquals(FaceMood.LISTENING, advance(1_000, mic = 0.15f))
-        // Тишина дольше 650 мс — выключает.
-        assertEquals(FaceMood.IDLE, advance(700, mic = 0.0f))
+        assertEquals(FaceMood.LISTENING, tick(voice = true))
+        // Пауза между словами короче удержания — всё ещё слушает.
+        assertEquals(FaceMood.LISTENING, advance(400, voice = false))
+        assertEquals(FaceMood.LISTENING, tick(voice = true))
+        // Замолчал дольше удержания — покой.
+        assertEquals(FaceMood.IDLE, advance(600, voice = false))
     }
 
     @Test
-    fun `short noise does not trigger listening`() {
-        inputs.activity = FaceActivity.IDLE
-        assertEquals(FaceMood.IDLE, advance(64, mic = 0.9f))
-        assertEquals(FaceMood.IDLE, advance(500, mic = 0f))
+    fun `no vad - no listening, whatever the room loudness`() {
+        // Громкость в директор не входит вовсе: только VAD и текст посетителя.
+        inputs.activity = FaceActivity.LISTENING
+        assertEquals(FaceMood.IDLE, advance(10_000, voice = false))
     }
 
     @Test

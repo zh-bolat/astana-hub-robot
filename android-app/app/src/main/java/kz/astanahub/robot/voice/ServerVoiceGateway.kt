@@ -198,8 +198,15 @@ class ServerVoiceGateway(
         _activity.value = VoiceActivity.LISTENING
         val vad = vadConfig()
         val result = try {
-            cancelOnSpeech { recorder.recordUtterance(vad) { onMicLevel(it) } }
+            cancelOnSpeech {
+                recorder.recordUtterance(vad) { level ->
+                    onMicLevel(level)
+                    // VAD записи (адаптивный порог по шуму) — для лица «посетитель говорит».
+                    levels?.reportVoice(recorder.speaking)
+                }
+            }
         } finally {
+            levels?.reportVoice(false)
             _micLevel.value = 0f
             if (_activity.value == VoiceActivity.LISTENING) _activity.value = VoiceActivity.IDLE
         }
@@ -298,6 +305,8 @@ class ServerVoiceGateway(
         val mic = launch {
             val error = recorder.stream(vad.sampleRate, LIVE_CHUNK_MS, onLevel = ::onMicLevel) { chunk ->
                 val event = endpointer.feed(chunk)
+                // VAD live STT (адаптивный порог по шуму) — для лица «посетитель говорит».
+                levels?.reportVoice(endpointer.started && !endpointer.ended && !endpointer.finished)
                 if (endpointer.shortSounds > shortSounds) {
                     shortSounds = endpointer.shortSounds
                     NoiseStats.shortSoundCancelled(endpointer.lastShortSoundMillis)
@@ -396,6 +405,7 @@ class ServerVoiceGateway(
                 else -> null // соединение закрылось без ответа
             }
         } finally {
+            levels?.reportVoice(false)
             muteWatcher.cancel()
             mic.cancel()
             session?.cancel()
