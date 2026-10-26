@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -338,6 +339,21 @@ class MainViewModelLiveTest {
         coEvery { robot.getPosition() } returns RobotPose(5.0, 5.0, 0.0)
         advanceTimeBy(60_000); runCurrent()
         assertEquals(3, directionFrames().size)
+    }
+
+    @Test
+    fun `turn_end without an answer in the knowledge base makes the face confused`() = runTest(dispatcher) {
+        val vm = vm()
+        val cues = mutableListOf<kz.astanahub.robot.ui.face.FaceCue>()
+        backgroundScope.launch { vm.faceCues.collect { cues += it } }
+        runCurrent()
+        conn.server(LiveEvent.UserFinal("Сколько звёзд на небе?", Lang.RU))
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Phrase("Не знаю, спросите на ресепшене."))
+        conn.server(LiveEvent.Audio(pcm(300)))
+        conn.server(LiveEvent.TurnEnd("t1", Lang.RU, false))
+        runCurrent()
+        assertEquals(listOf(kz.astanahub.robot.ui.face.FaceCue.CONFUSED), cues)
     }
 
     /** Ход сервера, как его шлёт настоящий сервер: turn_start → phrase → звук → turn_end. */

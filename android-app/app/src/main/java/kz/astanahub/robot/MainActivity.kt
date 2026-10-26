@@ -276,6 +276,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setUpFaceScreen() {
         face = FaceController(container.audioLevels, reducedMotion = !ValueAnimator.areAnimatorsEnabled())
+        // Шрифт острова грузится заранее и не на главном потоке: первая поездка не теряет кадр на чтении .ttf.
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            for (font in FACE_FONTS) runCatching { ResourcesCompat.getFont(this@MainActivity, font) }
+        }
         windowBackground = window.decorView.background
         rootBackground = binding.root.background
         binding.faceScreen.setContent {
@@ -789,6 +793,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
+        /** Начертания Inter экрана 1 (остров поездки). */
+        val FACE_FONTS = intArrayOf(R.font.inter_regular, R.font.inter_medium, R.font.inter_semibold)
         const val DIAG_HOLD_MILLIS = 3_000L
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"

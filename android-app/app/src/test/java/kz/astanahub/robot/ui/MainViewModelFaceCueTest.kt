@@ -1,6 +1,7 @@
 package kz.astanahub.robot.ui
 
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -26,6 +28,9 @@ import kz.astanahub.robot.backend.FakeBackendApi
 import kz.astanahub.robot.backend.PlacesResult
 import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.camera.CameraGateway
+import kz.astanahub.robot.chat.ChatEvent
+import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.chat.ChatRequest
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.core.Phrases
 import kz.astanahub.robot.places.PlaceRepository
@@ -87,6 +92,7 @@ class MainViewModelFaceCueTest {
     private fun TestScope.createVm(
         robot: RobotGateway? = null,
         presence: Flow<PresenceEvent>? = null,
+        chatMode: ChatMode = ChatMode.LEGACY,
     ): MainViewModel {
         val wf = robot?.let {
             val file = java.io.File.createTempFile("places", ".json").apply { delete(); deleteOnExit() }
@@ -94,7 +100,7 @@ class MainViewModelFaceCueTest {
         }
         val vm = MainViewModel(
             backend, voice, camera, phrases, clock = { testScheduler.currentTime },
-            wayFinder = wf, robot = robot, presence = presence,
+            wayFinder = wf, robot = robot, presence = presence, chatMode = { chatMode },
         )
         backgroundScope.launch { vm.faceCues.collect { cues += it } }
         advanceUntilIdle()
@@ -133,6 +139,28 @@ class MainViewModelFaceCueTest {
             ApiResult.Success(Answer("r2", "Технопарк.", listOf("Технопарк."), Lang.RU, found = true))
         val vm = createVm()
         vm.submit("Что такое Astana Hub?")
+        advanceUntilIdle()
+        assertEquals(emptyList<FaceCue>(), cues)
+        vm.submit("Сколько звёзд на небе?")
+        advanceUntilIdle()
+        assertEquals(listOf(FaceCue.CONFUSED), cues)
+    }
+
+    @Test
+    fun `agent turn without an answer is confused, ignored turn is not`() = runTest(dispatcher) {
+        every { backend.chat(any()) } answers {
+            val q = firstArg<ChatRequest>().question
+            flow {
+                if (q == "шум") {
+                    emit(ChatEvent.Done("r0", Lang.RU, found = false, ignored = true))
+                } else {
+                    emit(ChatEvent.Phrase("Не знаю, спросите на ресепшене."))
+                    emit(ChatEvent.Done("r1", Lang.RU, found = false))
+                }
+            }
+        }
+        val vm = createVm(chatMode = ChatMode.AGENT)
+        vm.submit("шум")
         advanceUntilIdle()
         assertEquals(emptyList<FaceCue>(), cues)
         vm.submit("Сколько звёзд на небе?")
