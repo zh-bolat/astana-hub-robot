@@ -57,6 +57,7 @@ import kz.astanahub.robot.ui.TileIcons
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.ui.face.FaceController
 import kz.astanahub.robot.ui.face.FaceDebug
+import kz.astanahub.robot.ui.face.FaceInputMapper
 import kz.astanahub.robot.ui.face.FaceScreen
 import kz.astanahub.robot.ui.setOnHoldListener
 
@@ -288,6 +289,7 @@ class MainActivity : AppCompatActivity() {
                 renderer = face.renderer,
                 state = face.screen,
                 onSwipeToMenu = { viewModel.openMenu() },
+                onTap = ::onFaceTap,
                 onStop = { viewModel.stop() },
                 onShown = { setLegacyCovered(true) },
                 onHidden = { binding.faceScreen.isVisible = false },
@@ -295,6 +297,18 @@ class MainActivity : AppCompatActivity() {
         }
         if (BuildConfig.DEBUG && !BuildConfig.IS_ROBOT) {
             faceDebug = FaceDebug(face, viewModel, container.audioLevels, container.presenceSimulator).also { it.register(this) }
+        }
+    }
+
+    /** Тап по лицу: спит — проснуться, говорит — замолчать и слушать (tap-to-interrupt). */
+    private fun onFaceTap() {
+        when (FaceInputMapper.tap(viewModel.state.value)) {
+            FaceInputMapper.Tap.WAKE -> viewModel.wake()
+            FaceInputMapper.Tap.STOP -> {
+                viewModel.stop()
+                showSubtitles(false)
+            }
+            FaceInputMapper.Tap.NONE -> Unit
         }
     }
 

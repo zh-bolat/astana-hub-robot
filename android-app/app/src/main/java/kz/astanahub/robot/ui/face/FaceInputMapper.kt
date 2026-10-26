@@ -29,6 +29,19 @@ object FaceInputMapper {
         Emotion.EXCITED -> FaceEmotion.EXCITED
     }
 
+    /** Что сделать по тапу по лицу. */
+    enum class Tap { WAKE, STOP, NONE }
+
+    /**
+     * Тап по лицу: спит — разбудить; говорит — перебить (тот же путь, что «Стоп» / `interrupt` в live), но не в
+     * поездке — её останавливает только кнопка «Стоп» на острове. Остальное (моргнуть / удивиться) — M2.
+     */
+    fun tap(state: MainUiState): Tap = when {
+        state.mode == ScreenMode.SLEEP -> Tap.WAKE
+        state.phase == Phase.SPEAKING && state.guidingTo == null -> Tap.STOP
+        else -> Tap.NONE
+    }
+
     fun apply(state: MainUiState, inputs: FaceInputs) {
         inputs.awake = state.mode != ScreenMode.SLEEP
         inputs.activity = activity(state.phase)

@@ -54,6 +54,20 @@ class FaceInputMapperTest {
     }
 
     @Test
+    fun `tap wakes a sleeping robot and interrupts speech, but never stops a trip`() {
+        assertEquals(FaceInputMapper.Tap.WAKE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.SLEEP)))
+        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING)))
+        // В поездке робот говорит фразы пути — тап их не обрывает (поездку останавливает только «Стоп» на острове).
+        assertEquals(
+            FaceInputMapper.Tap.NONE,
+            FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING, guidingTo = "Кафе")),
+        )
+        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")))
+        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.IDLE)))
+        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.THINKING)))
+    }
+
+    @Test
     fun `full state is applied`() {
         FaceInputMapper.apply(MainUiState(phase = Phase.SPEAKING, emotion = Emotion.EXCITED, mode = ScreenMode.FACE), inputs)
         assertEquals(FaceActivity.SPEAKING, inputs.activity)

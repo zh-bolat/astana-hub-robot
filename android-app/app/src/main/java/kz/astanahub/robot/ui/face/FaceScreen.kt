@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -42,6 +43,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import kotlin.math.abs
+import kotlin.math.min
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.ui.design.HubColors
 import kz.astanahub.robot.ui.design.HubMotion
@@ -61,7 +63,8 @@ class FaceScreenState {
 /**
  * Экран 1: только лицо на весь экран; во время поездки внизу — «остров» с местом и кнопкой «Стоп».
  * Свайп влево — к прежнему экрану с функциями (временный путь до экрана 2 в M3): лицо следует за пальцем
- * с сопротивлением (rubber-band 0.55), решение — по направлению скорости и проекции импульса.
+ * с сопротивлением (rubber-band 0.55), решение — по направлению скорости и проекции импульса; засчитанный
+ * свайп лицо продолжает влево со скоростью пальца ([SwipeToMenu]). Тап — [onTap] (разбудить / перебить).
  */
 @Composable
 fun FaceScreen(
@@ -69,6 +72,7 @@ fun FaceScreen(
     renderer: FaceRenderer,
     state: FaceScreenState,
     onSwipeToMenu: () -> Unit,
+    onTap: () -> Unit,
     onStop: () -> Unit,
     onShown: () -> Unit,
     onHidden: () -> Unit,
@@ -79,6 +83,8 @@ fun FaceScreen(
     val drag = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val swipe by rememberUpdatedState(onSwipeToMenu)
+    val tap by rememberUpdatedState(onTap)
+    val visibleNow by rememberUpdatedState(state.visible)
 
     LaunchedEffect(state.visible) {
         if (state.visible) drag.snapTo(0f)
@@ -116,14 +122,25 @@ fun FaceScreen(
                     },
                     onDragEnd = {
                         val v = tracker.calculateVelocity().x
-                        val projected = dx + project(v)
-                        val commit = v < -SWIPE_MIN_VELOCITY || (abs(v) < SWIPE_MIN_VELOCITY && projected < -size.width * 0.25f)
-                        if (commit) swipe()
-                        scope.launch { drag.animateTo(0f, HubMotion.Momentum.compose(), initialVelocity = v) }
+                        val release = SwipeToMenu.release(dx, drag.value, v, size.width.toFloat(), MIN_EXIT_DP.dp.toPx())
+                        if (release.commit) {
+                            // Засчитан: лицо продолжает влево со скоростью пальца и гаснет — не возвращается назад.
+                            swipe()
+                            scope.launch {
+                                drag.animateTo(release.target, HubMotion.Gentle.compose(), initialVelocity = release.velocity)
+                                // Экран лица остался (идёт поездка — лицо обязано быть на экране): вернуться на место.
+                                if (visibleNow) drag.animateTo(0f, HubMotion.Default.compose())
+                            }
+                        } else {
+                            // Не засчитан: возврат на место с передачей скорости (лёгкий отскок — жест с импульсом).
+                            scope.launch { drag.animateTo(0f, HubMotion.Momentum.compose(), initialVelocity = release.velocity) }
+                        }
                     },
                     onDragCancel = { scope.launch { drag.animateTo(0f, HubMotion.Default.compose()) } },
                 )
-            },
+            }
+            // Тап отдельно от свайпа: сдвиг дальше порога касания тап отменяет (Compose разводит жесты сам).
+            .pointerInput(Unit) { detectTapGestures(onTap = { tap() }) },
     ) {
         TravelIsland(
             title = state.travelTitle,
@@ -141,9 +158,10 @@ fun FaceScreen(
  */
 @Composable
 fun TravelIsland(title: String?, stopLabel: String, onStop: () -> Unit, modifier: Modifier = Modifier) {
-    // Пока остров уходит, title уже null — показываем последнее место.
-    val last = remember { TitleHolder() }
-    if (title != null) last.text = title
+    // Пока остров уходит, title уже null — показываем последнее место (запоминаем после композиции).
+    val last = remember { mutableStateOf(title.orEmpty()) }
+    SideEffect { if (title != null) last.value = title }
+    val text = title ?: last.value
     val origin = TransformOrigin(0.5f, 1f)
     AnimatedVisibility(
         visible = title != null,
@@ -162,7 +180,7 @@ fun TravelIsland(title: String?, stopLabel: String, onStop: () -> Unit, modifier
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
-                text = "\u2192  " + last.text,
+                text = "\u2192  " + text,
                 style = HubType.Headline.copy(color = HubColors.Label),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -172,10 +190,6 @@ fun TravelIsland(title: String?, stopLabel: String, onStop: () -> Unit, modifier
             PillButton(label = stopLabel, onClick = onStop)
         }
     }
-}
-
-private class TitleHolder {
-    var text: String = ""
 }
 
 /** Белая кнопка-пилюля: отклик сразу на касание (scale 0.97), действие — на отпускании. */
@@ -219,5 +233,27 @@ fun project(velocity: Float, decelerationRate: Float = 0.998f): Float =
     (velocity / 1000f) * decelerationRate / (1f - decelerationRate)
 
 const val RUBBER_BAND = 0.55f
-private const val SWIPE_MIN_VELOCITY = 700f
 private const val EXIT_SHIFT_DP = 80
+private const val MIN_EXIT_DP = 120
+
+/** Отпускание свайпа к меню: засчитан ли, куда и с какой скоростью уходит лицо. */
+data class SwipeRelease(val commit: Boolean, val target: Float, val velocity: Float)
+
+/**
+ * Решение по отпусканию (чистая функция — тест): по знаку скорости (> [MIN_VELOCITY] px/с), а медленный жест — по
+ * проекции импульса Apple за четверть ширины. Засчитан — цель левее точки отпускания (проекция, но не меньше
+ * [minExit] px), скорость не направлена вправо: лицо продолжает движение пальца, без отката.
+ */
+object SwipeToMenu {
+    const val MIN_VELOCITY = 700f
+
+    fun release(fingerDx: Float, shown: Float, velocity: Float, width: Float, minExit: Float): SwipeRelease {
+        val projected = fingerDx + project(velocity)
+        val commit = velocity < -MIN_VELOCITY || (abs(velocity) < MIN_VELOCITY && projected < -width * 0.25f)
+        return if (commit) {
+            SwipeRelease(true, min(shown + project(velocity), shown - minExit), min(velocity, 0f))
+        } else {
+            SwipeRelease(false, 0f, velocity)
+        }
+    }
+}
