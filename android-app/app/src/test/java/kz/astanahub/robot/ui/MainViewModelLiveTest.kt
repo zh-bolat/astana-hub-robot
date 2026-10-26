@@ -342,7 +342,7 @@ class MainViewModelLiveTest {
     }
 
     @Test
-    fun `turn_end without an answer in the knowledge base makes the face confused`() = runTest(dispatcher) {
+    fun `turn_end with found false gives no face reaction`() = runTest(dispatcher) {
         val vm = vm()
         val cues = mutableListOf<kz.astanahub.robot.ui.face.FaceCue>()
         backgroundScope.launch { vm.faceCues.collect { cues += it } }
@@ -353,7 +353,8 @@ class MainViewModelLiveTest {
         conn.server(LiveEvent.Audio(pcm(300)))
         conn.server(LiveEvent.TurnEnd("t1", Lang.RU, false))
         runCurrent()
-        assertEquals(listOf(kz.astanahub.robot.ui.face.FaceCue.CONFUSED), cues)
+        // `found: false` — и отказ, и ответ из общих знаний (ANSWER_MODE=open): растерянность передаёт эмоция сервера.
+        assertEquals(emptyList<kz.astanahub.robot.ui.face.FaceCue>(), cues)
     }
 
     /** Ход сервера, как его шлёт настоящий сервер: turn_start → phrase → звук → turn_end. */

@@ -939,8 +939,8 @@ class MainViewModel(
         setBusy(null)
     }
 
-    /** Отладка на эмуляторе (adb broadcast, docs/ui-redesign/DESIGN.md): уснуть сейчас, не дожидаясь таймера. */
-    fun sleepNow() {
+    /** Только отладка на эмуляторе (FaceDebug, adb broadcast): уснуть сейчас, не дожидаясь таймера. */
+    internal fun sleepNow() {
         if (_state.value.mode != ScreenMode.SLEEP) goIdle()
     }
 
@@ -1198,8 +1198,6 @@ class MainViewModel(
             streaming = false
             steps.close()
         }
-        // В базе ответа нет (вежливый отказ) — лицо растерянное, пока робот это говорит.
-        if (outcome is TurnOutcome.Completed && !outcome.done.ignored && !outcome.done.found) cue(FaceCue.CONFUSED)
         if (outcome is TurnOutcome.Fallback) {
             speaker.cancel()
             look?.cancel()
@@ -1460,7 +1458,6 @@ class MainViewModel(
             }
             is LiveSignal.Action -> onLiveAction(signal)
             is LiveSignal.TurnEnd -> {
-                if (signal.found == false) cue(FaceCue.CONFUSED)
                 val doneLang = signal.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1888,7 +1885,6 @@ class MainViewModel(
                 }
                 _state.update { it.copy(answer = answer.text, subtitle = null, offline = false) }
                 if (!quickFromServer) loadQuickQuestions()
-                if (!answer.found) cue(FaceCue.CONFUSED)
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
             is ApiResult.Failure -> {

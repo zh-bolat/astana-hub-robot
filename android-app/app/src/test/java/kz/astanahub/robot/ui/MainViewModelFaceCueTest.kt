@@ -132,7 +132,7 @@ class MainViewModelFaceCueTest {
     }
 
     @Test
-    fun `answer not found in the knowledge base is confused, found answer is quiet`() = runTest(dispatcher) {
+    fun `found false is not a reaction - open answers and noise carry it too`() = runTest(dispatcher) {
         coEvery { backend.ask("Сколько звёзд на небе?", any()) } returns
             ApiResult.Success(Answer("r1", "Не знаю, спросите на ресепшене.", listOf("Не знаю."), Lang.RU, found = false))
         coEvery { backend.ask("Что такое Astana Hub?", any()) } returns
@@ -143,11 +143,11 @@ class MainViewModelFaceCueTest {
         assertEquals(emptyList<FaceCue>(), cues)
         vm.submit("Сколько звёзд на небе?")
         advanceUntilIdle()
-        assertEquals(listOf(FaceCue.CONFUSED), cues)
+        assertEquals(emptyList<FaceCue>(), cues)
     }
 
     @Test
-    fun `agent turn without an answer is confused, ignored turn is not`() = runTest(dispatcher) {
+    fun `agent turn with found false gives no reaction - the server sends an emotion if it is sad`() = runTest(dispatcher) {
         every { backend.chat(any()) } answers {
             val q = firstArg<ChatRequest>().question
             flow {
@@ -165,7 +165,7 @@ class MainViewModelFaceCueTest {
         assertEquals(emptyList<FaceCue>(), cues)
         vm.submit("Сколько звёзд на небе?")
         advanceUntilIdle()
-        assertEquals(listOf(FaceCue.CONFUSED), cues)
+        assertEquals(emptyList<FaceCue>(), cues)
     }
 
     @Test
