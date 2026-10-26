@@ -266,9 +266,14 @@ def _slash(m: re.Match[str], lang: str) -> str:
     return f"{m['a']}, {m['b']}" if lang == "kk" else f"{m['a']} дробь {m['b']}"
 
 
+# Павильон: «C4.6» (латиница или кириллица) → «Цэ четыре шесть», как говорят в хабе
+_PAVILION = re.compile(r"(?<![\w.])[CСcс](?P<a>\d)\.(?P<b>\d)(?![\d])")
+
+
 def _numbers_special(text: str, lang: str) -> str:
-    """ru/kk до основных чисел: телефон, версии и номера комнат, дроби, «55/8» и «24/7»."""
+    """ru/kk до основных чисел: павильон, телефон, версии и номера комнат, дроби, «55/8» и «24/7»."""
     card = _kk_card if lang == "kk" else _ru_card
+    text = _PAVILION.sub(lambda m: f"Цэ {card(int(m['a']))} {card(int(m['b']))}", text)
     text = _PHONE.sub(lambda m: _phone(m, card), text)
     text = _DOTTED.sub(lambda m: _dotted(m, card), text)
     text = _GROUPED.sub(lambda m: re.sub(r"\s", "", m.group(0)), text)
@@ -562,6 +567,7 @@ def normalize_for_tts(text: str, lang: Lang, pronunciations: Path | None = None)
         text = _cap_first(stripped)
     text = apply_pronunciations(text, lang, pronunciations)
     if lang == "en":
+        text = _PAVILION.sub(lambda m: f"C {num2words(int(m['a']))} {num2words(int(m['b']))}", text)
         text = _GROUPED.sub(lambda m: re.sub(r"\s", ",", m.group(0)), text)
     try:
         if lang in ("ru", "kk"):
