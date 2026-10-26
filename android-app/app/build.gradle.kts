@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.compose)
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +132,8 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+        // UI-слой нового интерфейса (docs/ui-redesign/DESIGN.md, «Стек»): Compose поверх прежних XML-экранов.
+        compose = true
     }
 }
 
@@ -204,6 +207,19 @@ dependencies {
     implementation(libs.retrofit.kotlinx.serialization)
     implementation(libs.okhttp)
     implementation(libs.timber)
+
+    // Compose: экран лица (M1), дальше экран 2 (M3). Версии — из BOM.
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.runtime)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.text)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.animation)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
