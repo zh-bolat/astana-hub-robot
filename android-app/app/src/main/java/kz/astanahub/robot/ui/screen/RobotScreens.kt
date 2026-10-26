@@ -182,6 +182,11 @@ fun RobotScreens(
         val menuOpenNow by rememberUpdatedState(screen.menuOpen)
         val blur by animateFloatAsState(if (two.exitConfirm) 1f else 0f, HubMotion.Default.compose(), label = "exitBlur")
         val morph = remember { FloatArray(3) }
+        val miniPress by animateFloatAsState(
+            if (two.miniPressed.value) MINI_PRESS_SCALE else 1f,
+            HubMotion.Press.compose(),
+            label = "miniPress",
+        )
 
         // Экран 2: левая кромка — за пальцем; закрытие — свайп вправо (горизонтальный, чат прокручивается по вертикали).
         ScreenTwo(
@@ -229,8 +234,8 @@ fun RobotScreens(
                 .fillMaxSize()
                 .graphicsLayer {
                     FaceMorph.compute(visual(), w, h, slotCx, slotCy, slotH, morph)
-                    scaleX = morph[0]
-                    scaleY = morph[0]
+                    scaleX = morph[0] * miniPress
+                    scaleY = morph[0] * miniPress
                     translationX = morph[1]
                     translationY = morph[2]
                     transformOrigin = TransformOrigin.Center
@@ -306,6 +311,9 @@ fun RobotScreens(
         }
     }
 }
+
+/** Мини-лицо под пальцем (тап по нему — к лицу): сжимается, как кнопка (apple-design: отклик на touch-down). */
+private const val MINI_PRESS_SCALE = 0.9f
 
 /** Размытие экрана под диалогом выхода (API 31+). */
 private const val EXIT_BLUR_DP = 24

@@ -42,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kz.astanahub.robot.core.Lang
@@ -199,7 +200,7 @@ fun CircleButton(@DrawableRes glyph: Int, onClick: () -> Unit, modifier: Modifie
 fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier) {
     val items = Tiles.languages
     val index = items.indexOfFirst { it.first == selected }.coerceAtLeast(0)
-    val thumb by animateDpAsState(SEGMENT_WIDTH * index, HubMotion.Snappy.compose(), label = "langThumb")
+    val thumb = animateDpAsState(SEGMENT_WIDTH * index, HubMotion.Snappy.compose(), label = "langThumb")
     val shape = RoundedCornerShape(percent = 50)
     Box(
         modifier
@@ -210,7 +211,7 @@ fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier 
     ) {
         Box(
             Modifier
-                .offset(x = thumb)
+                .offset { IntOffset(thumb.value.roundToPx(), 0) }
                 .width(SEGMENT_WIDTH)
                 .fillMaxHeight()
                 .background(HubColors.White, shape),

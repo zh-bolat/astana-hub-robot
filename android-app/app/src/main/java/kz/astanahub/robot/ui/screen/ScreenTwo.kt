@@ -1,6 +1,16 @@
 package kz.astanahub.robot.ui.screen
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -149,6 +159,9 @@ class ScreenTwoState {
     var buildLabel by mutableStateOf("")
     var diagnosticsHold by mutableStateOf(false)
     var reducedMotion by mutableStateOf(false)
+
+    /** Палец на мини-лице в шапке: отклик на touch-down рисует слой лица (сжимается), сам слот пустой. */
+    val miniPressed = mutableStateOf(false)
 }
 
 /** Действия экрана 2 → MainViewModel (прежнее поведение кнопок старого экрана). */
@@ -242,6 +255,7 @@ private fun Header(state: ScreenTwoState, actions: ScreenTwoActions) {
         // Место мини-лица: само лицо рисует слой лица поверх экрана; тап — назад к лицу.
         Pressable(
             onClick = actions::onClose,
+            pressed = state.miniPressed,
             modifier = Modifier.size(ScreenTwoLayout.SlotWidth, ScreenTwoLayout.SlotHeight),
         ) {}
         Spacer(Modifier.width(24.dp))
@@ -387,7 +401,12 @@ private fun RobotLine(
     val caption = remember(item.citations, texts) {
         Tiles.sourceCaption(item.citations, { texts.sourceOne.format(it) }, { texts.sourceMany.format(it) })
     }
-    Column(Modifier.fillMaxWidth().padding(end = 80.dp).animateContentSize(HubMotion.Default.compose())) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(end = 80.dp)
+            .then(if (speaking) Modifier.animateContentSize(HubMotion.Default.compose()) else Modifier),
+    ) {
         BasicText(text, style = HubType.Body.copy(color = HubColors.Label))
         if (caption != null) {
             Spacer(Modifier.height(10.dp))
@@ -475,10 +494,21 @@ private fun Composer(state: ScreenTwoState, actions: ScreenTwoActions, modifier:
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state.busy) {
-                HubPill(texts.stop, actions::onStop, glyph = R.drawable.ic_m_stop)
-            } else {
-                HubPill(texts.askVoice, actions::onAskVoice, glyph = R.drawable.ic_m_mic)
+            AnimatedContent(
+                targetState = state.busy,
+                transitionSpec = {
+                    (fadeIn(HubMotion.Default.compose()) + scaleIn(HubMotion.Default.compose(), initialScale = 0.94f))
+                        .togetherWith(fadeOut(HubMotion.Snappy.compose()) + scaleOut(HubMotion.Snappy.compose(), targetScale = 0.94f))
+                        .using(SizeTransform(clip = false) { _, _ -> spring(1f, HubMotion.Default.stiffness, IntSize.VisibilityThreshold) })
+                },
+                contentAlignment = Alignment.CenterStart,
+                label = "askStop",
+            ) { busy ->
+                if (busy) {
+                    HubPill(texts.stop, actions::onStop, glyph = R.drawable.ic_m_stop)
+                } else {
+                    HubPill(texts.askVoice, actions::onAskVoice, glyph = R.drawable.ic_m_mic)
+                }
             }
             if (state.textInput) {
                 Spacer(Modifier.width(16.dp))
@@ -690,7 +720,12 @@ private fun FaqRow(
 @Composable
 fun ExitDialog(texts: ScreenTexts, actions: ScreenTwoActions, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Pressable(onClick = actions::onExitCancel, modifier = Modifier.fillMaxSize().background(HubColors.Scrim)) {}
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(HubColors.Scrim)
+                .pointerInput(Unit) { detectTapGestures(onTap = { actions.onExitCancel() }) },
+        )
         val shape = RoundedCornerShape(44.dp)
         Column(
             Modifier
