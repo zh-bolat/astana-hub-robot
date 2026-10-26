@@ -27,6 +27,7 @@ import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.AskContext
 import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.Citation
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.LocalMessage
 import kz.astanahub.robot.backend.Place
@@ -108,6 +109,10 @@ data class MainUiState(
     val faqPage: Int = 0,
     /** Раскрытый вопрос в списке частых вопросов (id), null — все свёрнуты. */
     val faqOpenId: String? = null,
+    /** Источники текущего ответа (`citations`, v1.3) — подпись под ответом на экране 2; старый сервер не шлёт. */
+    val citations: List<Citation> = emptyList(),
+    /** Номер разговора: меняется с session_id (новый посетитель) — экран 2 начинает чат с чистого листа. */
+    val conversation: Int = 0,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -220,6 +225,7 @@ class MainViewModel(
         set(value) {
             field = value
             voice.setSessionId(value)
+            _state.update { it.copy(conversation = it.conversation + 1) }
         }
     private var lastInteraction = clock()
 
@@ -591,7 +597,7 @@ class MainViewModel(
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
                 guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
-                screen = Screen.HOME, faqPage = 0, faqOpenId = null,
+                screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(),
             )
         }
         history.clear()
@@ -653,7 +659,12 @@ class MainViewModel(
         turn = clockForTurn
         requestJob = viewModelScope.launch {
             try {
-                _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null, wayHint = null) }
+                _state.update {
+                    it.copy(
+                        question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
+                        wayHint = null, citations = emptyList(),
+                    )
+                }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
                 if (chatMode().usesAgent && !_state.value.offline && !chatUnsupported) {
                     handleAgent(question, lang ?: _state.value.lang)
@@ -1256,7 +1267,7 @@ class MainViewModel(
                 }
             } else {
                 clockForTurn?.requestId = outcome.done.requestId
-                _state.update { it.copy(offline = false) }
+                _state.update { it.copy(offline = false, citations = outcome.done.citations) }
                 val doneLang = outcome.done.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1488,6 +1499,7 @@ class MainViewModel(
             }
             is LiveSignal.Action -> onLiveAction(signal)
             is LiveSignal.TurnEnd -> {
+                if (signal.citations.isNotEmpty()) _state.update { it.copy(citations = signal.citations) }
                 val doneLang = signal.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1558,7 +1570,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
-                answer = null, subtitle = null, guideTarget = null, wayHint = null,
+                answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -1913,7 +1925,7 @@ class MainViewModel(
                     voice.setLanguage(answer.lang)
                     loadQuickQuestions()
                 }
-                _state.update { it.copy(answer = answer.text, subtitle = null, offline = false) }
+                _state.update { it.copy(answer = answer.text, subtitle = null, offline = false, citations = answer.citations) }
                 if (!quickFromServer) loadQuickQuestions()
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
