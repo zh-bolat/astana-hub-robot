@@ -10,7 +10,7 @@ enum class FaceActivity { IDLE, LISTENING, THINKING, LOOKING, SPEAKING, TRAVELIN
 enum class FaceCue {
     /** Сбой: сервер / камера / связь. */
     ERROR,
-    /** Не понял: не расслышал, места нет на карте, ответа в базе нет (`found: false`). */
+    /** Не понял: не расслышал (400), места нет на карте. (`found: false` — не реакция: так помечены и ответы из общих знаний.) */
     CONFUSED,
     /** Подошёл посетитель — приветствие. */
     GREET,
@@ -70,7 +70,7 @@ class VoiceHold(private val holdMillis: Long = 500) {
  *
  * Приоритет (сверху — сильнее): отладочное [forcedMood] → сон (зевок [YAWN_MS] → сон) → пробуждение ([WAKE_MS]) →
  * поглаживание → реакция ([REACTIONS], пока не истекла или не началось новое дело) → поездка → думает → смотрит →
- * говорит → слушает (голос посетителя) → покой.
+ * говорит → слушает (текст посетителя или VAD — не громкость) → покой.
  */
 class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
 
