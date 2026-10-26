@@ -46,4 +46,8 @@
     <string name="action_menu">Мәзір</string>
     <string name="action_face">Роботқа</string>
     <string name="face_hint">Сұрағыңызды айтыңыз, тыңдап тұрмын</string>
+    <string name="exit_pin_sub">Тек қызметкер ғана шыға алады. PIN енгізіңіз.</string>
+    <string name="exit_pin_wrong">PIN қате. Қалған әрекет саны: %1$d</string>
+    <string name="exit_pin_locked">Әрекет тым көп. %1$d мин кейін қайталаңыз.</string>
+    <string name="exit_pin_erase">Өшіру</string>
 </resources>

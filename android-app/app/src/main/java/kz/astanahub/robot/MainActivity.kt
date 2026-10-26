@@ -43,6 +43,9 @@ import kz.astanahub.robot.databinding.ItemFaqRowBinding
 import kz.astanahub.robot.databinding.ItemTileBinding
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.security.DiagAccess
+import kz.astanahub.robot.security.DiagPinGuard
+import kz.astanahub.robot.security.ExitMode
+import kz.astanahub.robot.security.PinBuffer
 import kz.astanahub.robot.ui.DiagPinDialog
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
@@ -160,6 +163,9 @@ class MainActivity : AppCompatActivity() {
         binding.langKk.setOnClickListener { viewModel.selectLanguage(Lang.KK) }
         binding.langEn.setOnClickListener { viewModel.selectLanguage(Lang.EN) }
         binding.exitButton.setOnClickListener { askExit() }
+        // Выход только по PIN сотрудника. На роботе без PIN выйти с экрана нельзя — крестик скрыт.
+        binding.exitButton.isVisible = exitMode != ExitMode.HIDDEN
+        if (exitMode == ExitMode.PIN) buildExitPad()
         // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
         if (container.diagnostics.access != DiagAccess.DISABLED) {
             binding.brandLogo.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
@@ -214,7 +220,8 @@ class MainActivity : AppCompatActivity() {
             if (ev.actionMasked == MotionEvent.ACTION_UP) v.performClick()
             swipe.onTouchEvent(ev)
         }
-        binding.bigFace.setOnClickListener { binding.bigFace.wink() }
+        // Касание лица — обратно на привычную страницу; если робот говорит, он договаривает.
+        binding.bigFace.setOnClickListener { viewModel.openMenu() }
         binding.saverFace.sleeping = true
 
         // Слои поверх экрана.
@@ -222,7 +229,7 @@ class MainActivity : AppCompatActivity() {
         binding.screensaver.setOnClickListener { viewModel.wake() }
         binding.exitOverlay.setOnClickListener { stayIn() } // касание мимо карточки = «Остаться»
         binding.exitNoButton.setOnClickListener { stayIn() }
-        binding.exitYesButton.setOnClickListener { exitApp() }
+        binding.exitYesButton.setOnClickListener { if (exitMode == ExitMode.PIN) checkExitPin() else exitApp() }
 
         // Системная «Назад»: закрыть подтверждение выхода или вернуться на экран назад. На приветствии — ничего (киоск).
         onBackPressedDispatcher.addCallback(this) {
@@ -631,28 +638,126 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Выход: крестик → подтверждение. Никто не ответил за 15 с — окно закрывается, робот работает дальше.
+    // Выход: крестик → PIN сотрудника (или подтверждение на эмуляторе без PIN).
+    // Никто ничего не нажимает 15 с — окно закрывается, робот работает дальше. «Назад» выйти не даёт.
     // ---------------------------------------------------------------------------------------------
 
+    private val exitMode by lazy { ExitMode.of(container.diagnostics.access) }
+    private val exitPin = PinBuffer()
     private val exitTimeout = Runnable { stayIn() }
 
     private fun askExit() {
+        if (exitMode == ExitMode.HIDDEN) return
         viewModel.stop()
+        exitPin.clear()
+        binding.exitPinError.text = null
+        binding.exitPinBox.isVisible = exitMode == ExitMode.PIN
         renderExitTexts(viewModel.state.value.lang)
+        renderExitPin()
         binding.exitOverlay.isVisible = true
+        restartExitTimeout()
+    }
+
+    private fun restartExitTimeout() {
         handler.removeCallbacks(exitTimeout)
         handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
     }
 
     private fun renderExitTexts(lang: Lang) {
         binding.exitQuestion.text = str(R.string.exit_question, lang)
-        binding.exitSub.text = str(R.string.exit_sub, lang)
+        binding.exitSub.text = str(if (exitMode == ExitMode.PIN) R.string.exit_pin_sub else R.string.exit_sub, lang)
         binding.exitNoButton.text = str(R.string.exit_no, lang)
         binding.exitYesButton.text = str(R.string.exit_yes, lang)
+        exitPadErase?.contentDescription = str(R.string.exit_pin_erase, lang)
+    }
+
+    private var exitPadErase: View? = null
+    private val exitPadKeys = mutableListOf<View>()
+
+    /** Экранная клавиатура 3×4: крупные кнопки, системная клавиатура не нужна. */
+    private fun buildExitPad() {
+        val pad = binding.exitPad
+        val size = resources.getDimensionPixelSize(R.dimen.btn_height)
+        val gap = (16 * resources.displayMetrics.density).toInt()
+        val rows = listOf("123", "456", "789", "_0<") // «_» — пустое место, ⌫ справа от нуля, как на телефоне
+        rows.forEachIndexed { r, row ->
+            val line = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER
+                clipChildren = false
+            }
+            row.forEachIndexed { c, ch ->
+                val lp = android.widget.LinearLayout.LayoutParams(size * 3 / 2, size)
+                if (c > 0) lp.marginStart = gap
+                if (ch == '_') {
+                    line.addView(android.widget.Space(this), lp)
+                    return@forEachIndexed
+                }
+                val key = TextView(this, null, 0, R.style.Hub_Btn).apply {
+                    setPadding(0, 0, 0, 0)
+                    if (ch == '<') {
+                        text = "⌫"
+                        setOnClickListener { exitPin.backspace(); onExitPinChanged() }
+                        exitPadErase = this
+                    } else {
+                        text = ch.toString()
+                        textSize = 36f
+                        setOnClickListener { if (exitPin.append(ch)) onExitPinChanged() }
+                    }
+                }
+                exitPadKeys += key
+                line.addView(key, lp)
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            if (r > 0) lp.topMargin = gap
+            pad.addView(line, lp)
+        }
+    }
+
+    private fun onExitPinChanged() {
+        binding.exitPinError.text = null
+        renderExitPin()
+        restartExitTimeout()
+    }
+
+    private fun renderExitPin() {
+        if (exitMode != ExitMode.PIN) {
+            setEnabled(binding.exitYesButton, true)
+            return
+        }
+        val lock = container.diagnostics.guard.lockRemainingMillis()
+        if (lock > 0) showExitLocked(lock)
+        binding.exitPinDots.text = exitPin.masked()
+        setEnabled(binding.exitYesButton, lock <= 0 && exitPin.isComplete)
+        exitPadKeys.forEach { setEnabled(it, lock <= 0) }
+    }
+
+    private fun showExitLocked(remainingMillis: Long) {
+        val minutes = ((remainingMillis + 59_999) / 60_000).toInt()
+        binding.exitPinError.text = container.text.get(R.string.exit_pin_locked, viewModel.state.value.lang, minutes)
+    }
+
+    private fun checkExitPin() {
+        restartExitTimeout()
+        val pin = exitPin.value
+        exitPin.clear()
+        when (val r = container.diagnostics.guard.check(pin)) {
+            DiagPinGuard.Result.Ok -> { exitApp(); return }
+            is DiagPinGuard.Result.Wrong -> {
+                timber.log.Timber.w("exit: wrong PIN")
+                binding.exitPinError.text =
+                    container.text.get(R.string.exit_pin_wrong, viewModel.state.value.lang, r.attemptsLeft)
+            }
+            is DiagPinGuard.Result.Locked -> timber.log.Timber.w("exit: PIN locked")
+        }
+        renderExitPin()
     }
 
     private fun stayIn(wake: Boolean = true) {
         handler.removeCallbacks(exitTimeout)
+        exitPin.clear()
         binding.exitOverlay.isVisible = false
         if (wake) viewModel.wake()
     }
