@@ -631,6 +631,7 @@ class MainViewModelLiveTest {
         advanceTimeBy(100); runCurrent()
         assertTrue(vm.state.value.wayHint.orEmpty(), vm.state.value.wayHint.orEmpty().contains("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
+        assertEquals("island where_is", "Кафе", vm.state.value.whereIs?.place)
         assertTrue(voice.spoken.isEmpty())
     }
 

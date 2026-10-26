@@ -52,7 +52,9 @@ import kz.astanahub.robot.core.NoiseContext
 import kz.astanahub.robot.core.NoiseStats
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kz.astanahub.robot.places.Directions
 import kz.astanahub.robot.places.OfflineQuickButtons
+import kz.astanahub.robot.places.WayAnswer
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.places.WayPhrases
 import kz.astanahub.robot.presence.PresenceEvent
@@ -81,6 +83,19 @@ enum class Phase { IDLE, LISTENING, THINKING, LOOKING, SPEAKING, NAVIGATING }
 
 /** Что показано в правой части экрана: приветствие с плитками, ответ или список частых вопросов. */
 enum class Screen { HOME, ANSWER, FAQ }
+
+/**
+ * Ответ «где X» для острова на экране лица (бриф, «Остров where_is»): место, расстояние (м) и угол на место от
+ * посетителя (рад., против часовой от его «вперёд»; [kz.astanahub.robot.places.Directions.visitorAngle]), можно ли
+ * проводить. [seq] растёт с каждым новым ответом — тот же вопрос ещё раз снова показывает остров.
+ */
+data class WhereIsHint(
+    val place: String,
+    val distanceM: Double,
+    val visitorAngleRad: Double,
+    val canGuide: Boolean,
+    val seq: Int,
+)
 
 data class MainUiState(
     val lang: Lang = Lang.RU,
@@ -113,6 +128,8 @@ data class MainUiState(
     val citations: List<Citation> = emptyList(),
     /** Номер разговора: меняется с session_id (новый посетитель) — экран 2 начинает чат с чистого листа. */
     val conversation: Int = 0,
+    /** Последний ответ «где X» с направлением по карте — остров where_is на экране лица; null — не было. */
+    val whereIs: WhereIsHint? = null,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -281,6 +298,9 @@ class MainViewModel(
     private var liveActiveTurn: String? = null
     /** Live: когда робот показал предложение проводить (where_is → кнопка «Проводить»). */
     private var guideOfferedAt = Long.MIN_VALUE / 2
+
+    /** Номер последнего ответа «где» (остров where_is показывается заново на каждый). */
+    private var whereSeq = 0
     /** Live: посетитель сказал «да» на предложение — поехали сами; ответный `guide_to` сервера к этой точке — дубликат. */
     private var localGuideConfirm: Pair<String, Long>? = null
     /** Фразы текущего хода live (текст ответа на экране). */
@@ -597,7 +617,7 @@ class MainViewModel(
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
                 guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
-                screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(),
+                screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
             )
         }
         history.clear()
@@ -737,6 +757,7 @@ class MainViewModel(
             ?: return handleAsk(question)
         setBusy(null)
         _state.update { it.copy(answer = answer.text, subtitle = null, guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
         postLocal(LocalMessage.KIND_WHERE_IS, question, answer.text, answer.place?.id)
         speakPhrases(PhraseSplitter.split(answer.text), _state.value.lang)
     }
@@ -1300,6 +1321,7 @@ class MainViewModel(
         }
         val answer = wf.describe(place, lang)
         _state.update { it.copy(guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
         PhraseSplitter.split(answer.text).forEach { say(it, lang) }
     }
 
@@ -1653,6 +1675,25 @@ class MainViewModel(
         val answer = wf.describe(place, lang)
         if (answer.guideTarget != null) guideOfferedAt = clock()
         _state.update { it.copy(wayHint = answer.text, guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
+    }
+
+    /**
+     * Остров where_is на экране лица: место, расстояние и стрелка от посетителя. Без направления (позы нет, места нет
+     * на карте) острова нет — показывать нечего.
+     */
+    private fun showWhereIs(answer: WayAnswer) {
+        val place = answer.place ?: return
+        val bearing = answer.bearing ?: return
+        val name = WayFinder.displayName(place, _state.value.lang)
+        val hint = WhereIsHint(
+            place = name,
+            distanceM = bearing.distanceM,
+            visitorAngleRad = Directions.visitorAngle(bearing.relativeAngleRad),
+            canGuide = answer.guideTarget != null,
+            seq = ++whereSeq,
+        )
+        _state.update { it.copy(whereIs = hint) }
     }
 
     /**
