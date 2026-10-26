@@ -40,6 +40,13 @@ class SwipeToMenuTest {
     }
 
     @Test
+    fun `during a trip the swipe never commits - the face must stay`() {
+        val r = SwipeToMenu.release(fingerDx = -800f, shown = -150f, velocity = -3_000f, width = width, minExit = minExit, allowed = false)
+        assertFalse(r.commit)
+        assertEquals(0f, r.target, 0f)
+    }
+
+    @Test
     fun `projection is Apple's exponential decay form`() {
         assertEquals(499f, project(1_000f), 0.5f)
         assertEquals(0f, project(0f), 0f)

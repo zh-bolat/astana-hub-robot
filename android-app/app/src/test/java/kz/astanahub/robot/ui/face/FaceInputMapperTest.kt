@@ -54,17 +54,17 @@ class FaceInputMapperTest {
     }
 
     @Test
-    fun `tap wakes a sleeping robot and interrupts speech, but never stops a trip`() {
+    fun `tap wakes, interrupts speech, in a trip cuts only the speech, otherwise a reflex`() {
         assertEquals(FaceInputMapper.Tap.WAKE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.SLEEP)))
         assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING)))
-        // В поездке робот говорит фразы пути — тап их не обрывает (поездку останавливает только «Стоп» на острове).
+        // В поездке тап обрывает только речь; поездку останавливает лишь «Стоп» на острове.
         assertEquals(
-            FaceInputMapper.Tap.NONE,
+            FaceInputMapper.Tap.INTERRUPT_SPEECH,
             FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING, guidingTo = "Кафе")),
         )
-        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")))
-        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.IDLE)))
-        assertEquals(FaceInputMapper.Tap.NONE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.THINKING)))
+        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")))
+        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.IDLE)))
+        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.THINKING)))
     }
 
     @Test

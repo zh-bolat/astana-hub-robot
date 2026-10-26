@@ -30,16 +30,26 @@ object FaceInputMapper {
     }
 
     /** Что сделать по тапу по лицу. */
-    enum class Tap { WAKE, STOP, NONE }
+    enum class Tap {
+        /** Спит — проснуться. */
+        WAKE,
+        /** Говорит — замолчать и слушать (как «Стоп» / `interrupt` в live). */
+        STOP,
+        /** Говорит в поездке — оборвать только речь, поездка продолжается. */
+        INTERRUPT_SPEECH,
+        /** Молчит — рефлекс: моргнуть или слегка вздрогнуть. */
+        REFLEX,
+    }
 
     /**
-     * Тап по лицу: спит — разбудить; говорит — перебить (тот же путь, что «Стоп» / `interrupt` в live), но не в
-     * поездке — её останавливает только кнопка «Стоп» на острове. Остальное (моргнуть / удивиться) — M2.
+     * Тап по лицу: спит — разбудить; говорит — перебить. В поездке тап обрывает только речь (фразы пути), поездку
+     * останавливает лишь «Стоп» на острове. Молчит (в том числе в поездке) — рефлекс лица.
      */
     fun tap(state: MainUiState): Tap = when {
         state.mode == ScreenMode.SLEEP -> Tap.WAKE
-        state.phase == Phase.SPEAKING && state.guidingTo == null -> Tap.STOP
-        else -> Tap.NONE
+        state.phase == Phase.SPEAKING && state.guidingTo != null -> Tap.INTERRUPT_SPEECH
+        state.phase == Phase.SPEAKING -> Tap.STOP
+        else -> Tap.REFLEX
     }
 
     fun apply(state: MainUiState, inputs: FaceInputs) {

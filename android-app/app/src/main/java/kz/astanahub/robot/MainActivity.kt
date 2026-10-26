@@ -91,6 +91,7 @@ class MainActivity : AppCompatActivity() {
                     liveFactory = container.liveFactory,
                     foreground = container.appForeground,
                     liveDirectionsPeriodMillis = LiveDirectionsReporter.PERIOD_MILLIS,
+                    visitorVoice = container.audioLevels.voice,
                 )
             }
         }
@@ -288,8 +289,11 @@ class MainActivity : AppCompatActivity() {
                 engine = face.engine,
                 renderer = face.renderer,
                 state = face.screen,
+                // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе жест отключён, как и раньше.
+                holdEnabled = container.diagnostics.access != DiagAccess.DISABLED,
                 onSwipeToMenu = { viewModel.openMenu() },
                 onTap = ::onFaceTap,
+                onHold = ::openDiagnostics,
                 onStop = { viewModel.stop() },
                 onShown = { setLegacyCovered(true) },
                 onHidden = { binding.faceScreen.isVisible = false },
@@ -300,7 +304,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Тап по лицу: спит — проснуться, говорит — замолчать и слушать (tap-to-interrupt). */
+    /**
+     * Тап по лицу: спит — проснуться; говорит — замолчать и слушать (tap-to-interrupt); говорит в поездке — замолчать,
+     * поездка продолжается; молчит — рефлекс (моргнуть / слегка вздрогнуть).
+     */
     private fun onFaceTap() {
         when (FaceInputMapper.tap(viewModel.state.value)) {
             FaceInputMapper.Tap.WAKE -> viewModel.wake()
@@ -308,7 +315,8 @@ class MainActivity : AppCompatActivity() {
                 viewModel.stop()
                 showSubtitles(false)
             }
-            FaceInputMapper.Tap.NONE -> Unit
+            FaceInputMapper.Tap.INTERRUPT_SPEECH -> viewModel.interruptSpeech()
+            FaceInputMapper.Tap.REFLEX -> face.engine.reflex()
         }
     }
 
@@ -333,6 +341,7 @@ class MainActivity : AppCompatActivity() {
         }
         screen.travelTitle = state.guidingTo?.let { container.text.get(R.string.guide_title, state.lang, it) }
         screen.stopLabel = str(R.string.action_stop, state.lang)
+        screen.asleep = state.mode == ScreenMode.SLEEP
     }
 
     private fun openDiagnostics() {
