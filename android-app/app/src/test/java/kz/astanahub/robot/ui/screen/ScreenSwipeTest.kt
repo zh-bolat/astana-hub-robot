@@ -110,8 +110,11 @@ class ScreenSwipeTest {
         val left = FaceMorph.transform(-0.05f, w, h, 144f, 77f, 86f)
         assertEquals(1f, left.scale, 0f)
         assertTrue(left.translationX > 0f) // за пальцем вправо
+        // Тянут экран 2 дальше открытого: мини-лицо остаётся в слоте шапки и едет вместе с экраном.
+        val docked = FaceMorph.transform(1f, w, h, 144f, 77f, 86f)
         val over = FaceMorph.transform(1.1f, w, h, 144f, 77f, 86f)
-        assertTrue(over.scale < FaceMorph.transform(1f, w, h, 144f, 77f, 86f).scale)
-        assertTrue(over.scale > 0f)
+        assertEquals(docked.scale, over.scale, 0f)
+        assertEquals(docked.translationX - 0.1f * w, over.translationX, 0.01f)
+        assertEquals(docked.translationY, over.translationY, 0f)
     }
 }

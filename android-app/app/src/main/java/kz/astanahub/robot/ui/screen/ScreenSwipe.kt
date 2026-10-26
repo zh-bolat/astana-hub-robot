@@ -71,14 +71,18 @@ object FaceMorph {
     }
 
     /**
-     * Преобразование слоя лица (во весь экран, transformOrigin — центр) при прогрессе [p]. За краями (rubber-band):
-     * p < 0 — лицо чуть едет вправо за пальцем, p > 1 — чуть меньше мини-размера.
+     * Преобразование слоя лица (во весь экран, transformOrigin — центр) при прогрессе [p]. За краями (rubber-band) лицо
+     * едет вместе с экраном под пальцем: p < 0 — полноразмерное вправо, p > 1 — мини-лицо в слоте шапки влево.
      */
     fun transform(p: Float, width: Float, height: Float, slotCx: Float, slotCy: Float, slotHeight: Float): Transform {
         val u = min(width / FaceLayout.WIDTH, height / FaceLayout.HEIGHT)
         val faceCy0 = height * 0.5f + CONTENT_CENTER_Y * u
         if (p < 0f) return Transform(1f, -p * width, 0f)
-        val t = min(p, 1.2f)
+        if (p > 1f) {
+            val docked = transform(1f, width, height, slotCx, slotCy, slotHeight)
+            return docked.copy(translationX = docked.translationX - (p - 1f) * width)
+        }
+        val t = p
         val scale = miniScale(width, height, slotHeight).pow(t)
         val cx = width * 0.5f + (slotCx - width * 0.5f) * t
         val cy = faceCy0 + (slotCy - faceCy0) * t
