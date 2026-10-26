@@ -13,9 +13,9 @@ from app.knowledge.models import KnowledgeBase, Place
 from app.lang import Lang, lang_instruction
 
 REFUSALS: dict[str, str] = {
-    "ru": "К сожалению, у меня нет ответа на этот вопрос. Пожалуйста, обратитесь на ресепшен.",
-    "kk": "Өкінішке қарай, бұл сұраққа жауабым жоқ. Ресепшенге хабарласыңыз.",
-    "en": "Sorry, I don't have an answer to that. Please ask at the reception desk.",
+    "ru": "Этого я, увы, не знаю. Загляните на ресепшен, там подскажут!",
+    "kk": "Өкінішке қарай, мұны білмеймін. Ресепшенге барыңыз, сонда көмектеседі!",
+    "en": "Sorry, that one's beyond me. The reception desk can help you with it!",
 }
 
 LOOK_REFUSALS: dict[str, str] = {

@@ -43,6 +43,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.frames import Close
 
+from app.agent import fastpath
 from app.agent.service import LiveTurn
 from app.config import Settings
 from app.live.conversation import (
@@ -70,6 +71,12 @@ LONG = (
     "Работает с восьми утра до восьми вечера без выходных и перерывов на обед. "
     "Ещё рядом есть зона отдыха с диванами, где можно спокойно поработать."
 )
+
+
+@pytest.fixture(autouse=True)
+def _first_template(monkeypatch):
+    """Шаблоны быстрого пути — первый вариант: фразы в проверках известны заранее."""
+    monkeypatch.setattr(fastpath._RNG, "choice", lambda seq: seq[0])
 
 
 # ---------- фейковые сервисы ----------
@@ -690,7 +697,7 @@ async def _turn(c: LiveClient, n: int, seconds: float = 0.5) -> tuple[dict, dict
     [
         ("Где здесь кафе?", "ru", "where_is", "cafe", "Проводить вас?"),
         ("Подскажите, где находится туалет?", "ru", "where_is", "restroom", "Проводить вас?"),
-        ("Проводите меня до лифта", "ru", "guide_to", "lift", "до лифта!"),
+        ("Проводите меня до лифта", "ru", "guide_to", "lift", "Провожу до лифта."),
         ("Дәретхана қайда?", "kk", "where_is", "restroom", "Апарып салайын ба?"),
         ("Мені кафеге апарыңызшы", "kk", "guide_to", "cafe", "кафеге"),
         ("Where is the elevator?", "en", "where_is", "lift", "Want me to take you there?"),
@@ -770,11 +777,8 @@ def test_doubtful_place_question_goes_to_agent(live_server):
     assert len(model.requests) == 1
 
 
-def test_template_phrase_audio_comes_from_cache_second_time(live_server, monkeypatch):
+def test_template_phrase_audio_comes_from_cache_second_time(live_server):
     """Шаблонная фраза: первый раз — синтез + фоновое заполнение кеша, второй — звук из кеша без TTS."""
-    from app.agent import fastpath
-
-    monkeypatch.setattr(fastpath._RNG, "choice", lambda seq: seq[0])
     url, _, fakes = live_server(
         FakeModel(), script=["Проводите меня до лифта", "Проводите меня до лифта"]
     )
@@ -783,19 +787,19 @@ def test_template_phrase_audio_comes_from_cache_second_time(live_server, monkeyp
         async with session(url) as c:
             await _turn(c, 1)
             for _ in range(100):  # кеш заполняется в фоне
-                if fakes.synth and any(t.startswith("Пойдёмте") for t, _ in fakes.synth):
+                if fakes.synth and any(t.startswith("Поехали") for t, _ in fakes.synth):
                     break
                 await asyncio.sleep(0.02)
             await asyncio.sleep(0.2)
             await _turn(c, 2)
             phrases = [p["text"] for p in c.events("phrase")]
-            assert phrases == ["Пойдёмте, провожу до лифта!"] * 2
+            assert phrases == ["Поехали! Провожу до лифта."] * 2
             assert sum(i for i in c.items if isinstance(i, int)) >= 24_000 * 2  # звук из кеша дошёл
 
     run(scenario())
     tts = fakes.tts[0].texts
-    assert tts.count("Пойдёмте, провожу до лифта!") == 1  # второй раз — без синтеза
-    assert ("Пойдёмте, провожу до лифта!", "ru") in fakes.synth
+    assert tts.count("Поехали! Провожу до лифта.") == 1  # второй раз — без синтеза
+    assert ("Поехали! Провожу до лифта.", "ru") in fakes.synth
 
 
 # ---------- направление от робота: state.directions ----------
@@ -969,6 +973,28 @@ def test_voice_follows_each_phrase_and_v3_tag_only_in_tts(live_server):
     with app.state.engine.connect() as conn:
         answer = conn.execute(text("SELECT answer FROM question_log")).scalar_one()
     assert "cheerfully" not in answer
+
+
+def test_stage_directions_are_cut_from_streamed_phrases(live_server):
+    """Игривая модель «играет» текстом: ремарки и смех не уходят ни в синтез, ни на экран, ни в журнал."""
+    model = FakeModel(
+        say("[happy] Ха-ха, конечно! *подмигивает* Кафе справа. (улыбается) Проводить вас?")
+    )
+    url, app, fakes = live_server(model, script=["Ты смешной! Где кафе?"], live_fast_places=False)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            phrases = [p["text"] for p in c.events("phrase")]
+            assert phrases == ["Конечно!", "Кафе справа.", "Проводить вас?"]
+
+    run(scenario())
+    spoken = " ".join(fakes.tts[0].texts)
+    assert not any(w in spoken for w in ("Ха", "подмиг", "улыба"))
+    assert messages_of(app)[1] == ("assistant", "Конечно! Кафе справа. Проводить вас?", None)
 
 
 def test_tts_text_is_normalized_but_subtitle_is_not(live_server):

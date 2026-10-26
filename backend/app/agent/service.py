@@ -57,12 +57,12 @@ from app.agent.fastpath import (
 )
 from app.agent.prompts import (
     EMOTIONS,
-    GREETINGS,
     LOOKING,
     VISITOR_ARRIVED_NOTE,
     agent_greeting_turn,
     agent_instructions,
     agent_turn,
+    ready_greeting,
     reference_block,
 )
 from app.agent.tools import SEARCH_TOOLS, STOP_TOOLS, TOOLS, ChatContext, find_parts
@@ -178,6 +178,8 @@ _META_PREFIX = re.compile(
     r"^\s*(translat(e|ion)(\s+(to|into)\s+\w+)?|answer|ответ|перевод(\s+на\s+\w+(\s+язык)?)?|аударма(сы)?)\s*:\s*",
     re.IGNORECASE,
 )
+# Во фразе есть хоть одно слово (ремарки clean_for_tts вырезает, от «*смеётся*.» остаётся одна точка)
+_WORD = re.compile(r"\w")
 
 
 # Тег эмоции в начале ответа модели: «[happy] Здравствуйте!» (v1.1). Сервер его вырезает и отдаёт
@@ -660,7 +662,7 @@ class ChatService:
         out: list[str] = []
         for phrase in split_phrases(clean_for_tts(text)):
             phrase = _META_PREFIX.sub("", phrase)
-            if not phrase.strip():
+            if not _WORD.search(phrase):  # пусто или одни знаки
                 continue
             if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
                 logger.info("agent_filler_dropped", extra={"chars": len(phrase)})
@@ -1132,7 +1134,7 @@ class ChatService:
         """visitor_arrived без ответа модели: готовое приветствие на языке lang."""
         st.provider = st.provider or "local:greeting"
         st.emotion = "happy"
-        st.emitted = split_phrases(GREETINGS[st.lang])
+        st.emitted = split_phrases(ready_greeting(st.lang))
         done = await self._finish(req, request_id, st, started)
         for phrase in st.emitted:
             for event in _phrase_events(st, phrase):

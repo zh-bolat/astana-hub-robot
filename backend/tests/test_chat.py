@@ -14,12 +14,13 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agent.prompts import LOOKING
+from app.agent.prompts import GREETINGS, LOOKING
 from app.agent.service import build_chat_client
 from app.config import Settings
 from app.db.models import MessageRow
 from app.prompts import REFUSALS
 from app.schemas import ChatRequest
+from app.text import split_phrases
 from tests.conftest import AUTH, SESSION, ask_body, logged
 
 SSE = {**AUTH, "Accept": "text/event-stream"}
@@ -463,17 +464,48 @@ def test_reasoning_about_the_base_is_not_spoken(make_client):
     ]
 
 
-# ---------- v1.1: эмоции ----------
+# ---------- характер: ремарки и смех текстом не озвучиваются ----------
 
 
-def test_emotion_tag_is_cut_and_sent_before_first_phrase(make_client):
-    model = FakeModel(say("[happy] Рада помочь! Кафе на первом этаже."))
+def test_stage_directions_and_laughter_are_not_spoken(make_client):
+    model = FakeModel(
+        say("[happy] *смеётся* Конечно! Кафе — справа от вас. (подмигивает) Ха-ха, проводить вас?")
+    )
     client = chat_client(make_client, model)
 
     evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
 
     assert evs[0] == ("emotion", {"name": "happy"})
-    assert [d["text"] for e, d in evs if e == "phrase"] == ["Рада помочь!", "Кафе на первом этаже."]
+    assert [d["text"] for e, d in evs if e == "phrase"] == [
+        "Конечно!",
+        "Кафе — справа от вас.",
+        "Проводить вас?",
+    ]
+    answer = logged(client)[0].answer
+    assert "смеётся" not in answer and "подмигивает" not in answer and "Ха" not in answer
+
+
+def test_remark_only_reply_is_not_spoken(make_client):
+    model = FakeModel(say("[happy] *laughs* [winks]"))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "You are funny", lang="en")
+
+    # от ответа ничего не осталось — как молчание модели: готовый отказ, а не «*laughs*»
+    assert [d["text"] for e, d in evs if e == "phrase"] == split_phrases(REFUSALS["en"])
+
+
+# ---------- v1.1: эмоции ----------
+
+
+def test_emotion_tag_is_cut_and_sent_before_first_phrase(make_client):
+    model = FakeModel(say("[happy] Рад помочь! Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "happy"})
+    assert [d["text"] for e, d in evs if e == "phrase"] == ["Рад помочь!", "Кафе на первом этаже."]
     assert [e for e, _ in evs].count("emotion") == 1
     assert "[happy]" not in logged(client)[0].answer
 
@@ -558,7 +590,8 @@ def test_visitor_arrived_without_agent_uses_ready_greeting(client):
     evs = events(client, "", lang="kk", event="visitor_arrived", with_emotion=True)
 
     assert evs[0] == ("emotion", {"name": "happy"})
-    assert evs[1][1]["text"].startswith("Сәлеметсіз бе")
+    said = " ".join(d["text"] for e, d in evs if e == "phrase")
+    assert said in GREETINGS["kk"]
     assert evs[-1][1]["lang"] == "kk" and evs[-1][1]["actions"] == []
     assert logged(client) == []
 
@@ -569,7 +602,8 @@ def test_visitor_arrived_slow_model_uses_ready_greeting(make_client):
 
     evs = events(client, "", lang="en", event="visitor_arrived")
 
-    assert evs[0] == ("phrase", {"text": "Hi there!"})
+    assert evs[0][0] == "phrase"
+    assert " ".join(d["text"] for e, d in evs if e == "phrase") in GREETINGS["en"]
     assert evs[-1][0] == "done"
 
 

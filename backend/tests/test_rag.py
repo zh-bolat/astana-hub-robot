@@ -932,7 +932,7 @@ def test_prefetch_skips_noise_small_talk_greeting_one_word_places_and_consent(
         say("[happy] Здравствуйте! Что ищете?"),  # visitor_arrived
         say("[thinking] Что про Орбиту подсказать?"),  # «Орбита?»
         call("where_is", {"place_id": "place:cafe"}),
-        say("[happy] Показала на экране, куда идти. Проводить вас?"),
+        say("[happy] Показал на экране, куда идти. Проводить вас?"),
         call("guide_to", {"place_id": "place:cafe"}),
         say("[excited] Идите за мной, провожаю в кафе!"),
         say("[happy] Программа «Орбита» длится девятнадцать недель."),

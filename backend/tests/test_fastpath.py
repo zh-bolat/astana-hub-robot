@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.agent.fastpath import (
+    OFFERS,
     _kk_dative,
     _ru_genitive,
     direction_phrase,
@@ -93,24 +94,24 @@ def test_ambiguous_alias_goes_to_agent():
 
 def test_replies_are_short_and_in_the_language_of_the_request(kb):
     rng = random.Random(0)
-    for text, lang, expected in [
-        ("Где кафе?", "ru", "Проводить вас?"),
-        ("Дәретхана қайда?", "kk", "Апарып салайын ба?"),
-        ("Where is the cafe?", "en", "Want me to take you there?"),
+    for text, lang in [
+        ("Где кафе?", "ru"),
+        ("Дәретхана қайда?", "kk"),
+        ("Where is the cafe?", "en"),
     ]:
         intent = match_place_intent(text, kb)
         assert intent is not None and intent.lang == lang
         emotion, phrases = place_reply(intent, rng)
-        assert emotion == "happy" and phrases[-1] == expected
+        assert emotion == "happy" and phrases[-1] in OFFERS[lang]
         assert len(phrases[0].split()) <= 9  # первая фраза короткая: TTS начинает сразу
         assert not any(m in " ".join(phrases) for m in ("…", "...", "ммм", "Хм"))
     intent = match_place_intent("Проводите меня до лифта", kb)
     assert intent is not None
     emotion, [phrase] = place_reply(intent, rng)
-    assert emotion == "excited" and "до лифта!" in phrase
+    assert emotion == "excited" and "до лифта" in phrase
     intent = match_place_intent("Мені кафеге апарыңызшы", kb)
     assert intent is not None
-    assert "кафеге" in place_reply(intent, rng)[1][0]
+    assert "кафеге" in place_reply(intent, rng)[1][0].lower()
 
 
 def test_where_is_uses_direction_from_description():
@@ -126,7 +127,8 @@ def test_where_is_uses_direction_from_description():
     kb = KnowledgeBase(places=[place])
     intent = match_place_intent("Где кафе?", kb)
     assert intent is not None
-    assert place_reply(intent)[1] == ["Кафе на первом этаже, справа от входа.", "Проводить вас?"]
+    first, offer = place_reply(intent)[1]
+    assert first == "Кафе на первом этаже, справа от входа." and offer in OFFERS["ru"]
     lift = Place(id="lift", map_name="lift", names=LocalizedText(ru="Лифт"), floor=2)
     intent = match_place_intent("Где лифт?", KnowledgeBase(places=[lift]))
     assert intent is not None
@@ -197,22 +199,17 @@ DIRECTIONS = {
 @pytest.mark.parametrize(
     ("text", "spoken"),
     [
-        ("Где кафе?", ["Кафе — справа от вас, примерно в 15 метрах.", "Проводить вас?"]),
-        (
-            "Кафе қайда?",
-            ["Кафе сіздің оң жағыңызда, шамамен 15 метр жерде.", "Апарып салайын ба?"],
-        ),
-        (
-            "Where is the cafe?",
-            ["Cafe is on your right, about 15 meters away.", "Want me to take you there?"],
-        ),
+        ("Где кафе?", "Кафе — справа от вас, примерно в 15 метрах."),
+        ("Кафе қайда?", "Кафе сіздің оң жағыңызда, шамамен 15 метр жерде."),
+        ("Where is the cafe?", "Cafe is on your right, about 15 meters away."),
     ],
 )
 def test_where_is_says_robot_direction(kb, text, spoken):
     intent = match_place_intent(text, kb)
     assert intent is not None
     direction = direction_phrase(DIRECTIONS, intent.place, intent.lang)
-    assert place_reply(intent, direction=direction) == ("happy", spoken)
+    emotion, [said, offer] = place_reply(intent, direction=direction)
+    assert (emotion, said) == ("happy", spoken) and offer in OFFERS[intent.lang]
 
 
 def test_direction_wins_over_description_and_is_not_used_for_guide_to():
