@@ -443,6 +443,25 @@ def test_translate_prefix_is_cut_answer_is_kept(make_client):
     assert [d["text"] for e, d in evs if e == "phrase"] == ["EXPO жерасты паркингі, шамамен 3000 орын.", "Келіңіз!"]
 
 
+def test_reasoning_about_the_base_is_not_spoken(make_client):
+    # Haiku на проде рассуждал вслух про поиск и базу — эти фразы не озвучиваем, ответ — да
+    model = FakeModel(
+        say(
+            "Это вопрос о хабе, нужно поискать в базе. Вопрос: часы работы. Факт есть в базе: 9:00–18:30. "
+            "В базе данных о камере хранения нет. Администрация работает по будням с 9:00 до 18:30. "
+            "Интернет на базе Технопарка входит в пакет."
+        )
+    )
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Во сколько работает хаб?", lang="ru")
+
+    assert [d["text"] for e, d in evs if e == "phrase"] == [
+        "Администрация работает по будням с 9:00 до 18:30.",
+        "Интернет на базе Технопарка входит в пакет.",
+    ]
+
+
 # ---------- v1.1: эмоции ----------
 
 
