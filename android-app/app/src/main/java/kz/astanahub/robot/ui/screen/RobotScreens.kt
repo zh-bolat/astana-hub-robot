@@ -60,6 +60,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -457,13 +458,31 @@ private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Color(0xFF1B2440), Color(0xFF0B1022)), radius = 1600f))
+                // Прототип `.closed-layer`: графитовое радиальное свечение (центр на 40 % высоты), заголовок 72sp.
+                .drawWithCache {
+                    val brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                        0f to Color(0xFF2A3142),
+                        0.7f to Color(0xFF151A24),
+                        1f to Color(0xFF0D1017),
+                        center = Offset(size.width * 0.5f, size.height * 0.4f),
+                        radius = 900.dp.toPx(),
+                    )
+                    onDrawBehind { drawRect(brush) }
+                }
                 .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false).consume() } },
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                BasicText(two.texts.closed, style = HubType.Display.copy(color = Color.White))
-                Spacer(Modifier.height(36.dp))
+                BasicText(
+                    two.texts.closed,
+                    style = HubType.Display.copy(
+                        color = Color(0xFFE8ECF4),
+                        fontSize = 72.sp,
+                        lineHeight = 83.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    ),
+                )
+                Spacer(Modifier.height(40.dp))
                 HubPill(two.texts.reopen, actions::onReopen, primary = false, takeTouch = true)
             }
         }
