@@ -3,6 +3,24 @@ package kz.astanahub.robot.ui.face
 import androidx.compose.runtime.Immutable
 import kz.astanahub.robot.ui.WhereIsHint
 
+/**
+ * Направление на место от посетителя ([WhereIsHint.visitorAngleRad], против часовой от его «вперёд») → стрелка и
+ * взгляд на экране (экран смотрит на посетителя: «вверх» — вперёд от посетителя, «вправо» — его правая сторона).
+ */
+object IslandGeometry {
+    /** Поворот стрелки «вверх» по часовой, градусы (Compose `rotationZ`). */
+    fun arrowRotationDeg(visitorAngleRad: Double): Float = (-Math.toDegrees(visitorAngleRad)).toFloat()
+
+    /** Взгляд по горизонтали: вправо — +. */
+    fun gazeX(visitorAngleRad: Double): Float = (-kotlin.math.sin(visitorAngleRad) * GAZE_X).toFloat()
+
+    /** Взгляд по вертикали: вниз — +. «За спиной посетителя» — чуть вниз (на него), «впереди» — чуть вверх. */
+    fun gazeY(visitorAngleRad: Double): Float = (-kotlin.math.cos(visitorAngleRad) * GAZE_Y).toFloat()
+
+    private const val GAZE_X = 0.9
+    private const val GAZE_Y = 0.45
+}
+
 /** Чем закончилась поездка (короткое состояние острова и реакция лица). */
 enum class TripOutcome { ARRIVED, FAILED, STOPPED }
 

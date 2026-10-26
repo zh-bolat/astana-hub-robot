@@ -412,6 +412,25 @@ class FaceEngineTest {
     }
 
     @Test
+    fun `where_is island - eyes look toward the place, touch still wins`() {
+        val e = engine()
+        e.frames(60)
+        e.inputs.looking = true
+        e.inputs.lookX = 0.9f
+        e.inputs.lookY = -0.2f
+        e.frames(30)
+        assertTrue("gaze ${e.pose[P.GAZE_X]}", e.pose[P.GAZE_X] > 0.6f)
+        // Палец на лице — глаза на палец.
+        e.inputs.touching = true
+        e.inputs.touchX = -0.8f
+        e.inputs.touchY = 0f
+        e.frames(20)
+        assertTrue(e.pose[P.GAZE_X] < -0.4f)
+        e.inputs.touching = false
+        e.inputs.looking = false
+    }
+
+    @Test
     fun `petting closes the eyes happily and the head leans with the hand`() {
         val e = engine()
         e.frames(30)

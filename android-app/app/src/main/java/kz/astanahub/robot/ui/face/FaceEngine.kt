@@ -187,6 +187,11 @@ class FaceEngine(
             // Отклик на касание: глаза сразу на палец (саккада), голова — за ними.
             t[P.GAZE_X] = (inputs.touchX * TOUCH_GAZE_X).coerceIn(-1f, 1f)
             t[P.GAZE_Y] = (inputs.touchY * TOUCH_GAZE_Y).coerceIn(-1f, 1f)
+        } else if (inputs.looking && eyesOpen) {
+            // Остров where_is: глаза — в сторону места (туда же, куда стрелка), голова — за ними; микросаккады
+            // «жизни» остаются, но втрое тише — взгляд держится направления.
+            t[P.GAZE_X] = (inputs.lookX + life.gazeOffsetX * LOOK_LIFE).coerceIn(-1f, 1f)
+            t[P.GAZE_Y] = (inputs.lookY + life.gazeOffsetY * LOOK_LIFE).coerceIn(-1f, 1f)
         } else {
             t[P.GAZE_X] = (t[P.GAZE_X] + life.gazeOffsetX).coerceIn(-1f, 1f)
             t[P.GAZE_Y] = (t[P.GAZE_Y] + life.gazeOffsetY).coerceIn(-1f, 1f)
@@ -411,6 +416,7 @@ class FaceEngine(
         private const val STARTLE_CHANCE = 0.4f
 
         /** Взгляд на палец: доля от положения пальца. */
+        private const val LOOK_LIFE = 0.3f
         private const val TOUCH_GAZE_X = 0.9f
         private const val TOUCH_GAZE_Y = 0.8f
 

@@ -53,6 +53,11 @@ class FaceInputs {
     /** Скорость пальца при поглаживании, px/с — голова льнёт к руке. */
     var strokeVx: Float = 0f
     var strokeVy: Float = 0f
+
+    /** Остров where_is: глаза смотрят в сторону места (−1..1 по экрану), пока остров на экране. */
+    var looking: Boolean = false
+    var lookX: Float = 0f
+    var lookY: Float = 0f
 }
 
 /**

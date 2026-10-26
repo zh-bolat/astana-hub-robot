@@ -111,6 +111,20 @@ class IslandModelTest {
     }
 
     @Test
+    fun `arrow and gaze point the same way as the words`() {
+        // Справа от посетителя (−90°): стрелка повёрнута вправо, глаза — вправо.
+        assertEquals(90f, IslandGeometry.arrowRotationDeg(-Math.PI / 2), 1e-4f)
+        assertTrue(IslandGeometry.gazeX(-Math.PI / 2) > 0.8f)
+        // Слева (+90°): влево.
+        assertEquals(-90f, IslandGeometry.arrowRotationDeg(Math.PI / 2), 1e-4f)
+        assertTrue(IslandGeometry.gazeX(Math.PI / 2) < -0.8f)
+        // Прямо вперёд от посетителя (за роботом): стрелка вверх, взгляд чуть вверх; за спиной — вниз.
+        assertEquals(0f, IslandGeometry.arrowRotationDeg(0.0), 1e-4f)
+        assertTrue(IslandGeometry.gazeY(0.0) < 0f)
+        assertTrue(IslandGeometry.gazeY(Math.PI) > 0f)
+    }
+
+    @Test
     fun `failed trip shows its own outcome, sleep clears the island at once`() {
         m.update("Ресепшен", null, now)
         m.update(null, null, now + 10)
