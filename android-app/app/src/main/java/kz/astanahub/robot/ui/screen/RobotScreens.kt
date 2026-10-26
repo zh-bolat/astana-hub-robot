@@ -133,6 +133,7 @@ fun RobotScreens(
         }
         val menuOpenNow by rememberUpdatedState(screen.menuOpen)
         val blur by animateFloatAsState(if (two.exitConfirm) 1f else 0f, HubMotion.Default.compose(), label = "exitBlur")
+        val morph = remember { FloatArray(3) }
 
         // Экран 2: левая кромка — за пальцем; закрытие — свайп вправо (горизонтальный, чат прокручивается по вертикали).
         ScreenTwo(
@@ -173,11 +174,11 @@ fun RobotScreens(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val t = FaceMorph.transform(visual(), w, h, slotCx, slotCy, slotH)
-                    scaleX = t.scale
-                    scaleY = t.scale
-                    translationX = t.translationX
-                    translationY = t.translationY
+                    FaceMorph.compute(visual(), w, h, slotCx, slotCy, slotH, morph)
+                    scaleX = morph[0]
+                    scaleY = morph[0]
+                    translationX = morph[1]
+                    translationY = morph[2]
                     transformOrigin = TransformOrigin.Center
                     // Под диалогом выхода — тоже за «стеклом».
                     alpha = 1f - 0.6f * blur

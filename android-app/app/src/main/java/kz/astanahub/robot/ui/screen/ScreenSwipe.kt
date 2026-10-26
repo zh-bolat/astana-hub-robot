@@ -75,21 +75,28 @@ object FaceMorph {
      * едет вместе с экраном под пальцем: p < 0 — полноразмерное вправо, p > 1 — мини-лицо в слоте шапки влево.
      */
     fun transform(p: Float, width: Float, height: Float, slotCx: Float, slotCy: Float, slotHeight: Float): Transform {
+        val out = FloatArray(3)
+        compute(p, width, height, slotCx, slotCy, slotHeight, out)
+        return Transform(out[0], out[1], out[2])
+    }
+
+    /** То же без аллокаций (кадр перехода): [out] = scale, translationX, translationY. */
+    fun compute(p: Float, width: Float, height: Float, slotCx: Float, slotCy: Float, slotHeight: Float, out: FloatArray) {
+        if (p < 0f) {
+            out[0] = 1f
+            out[1] = -p * width
+            out[2] = 0f
+            return
+        }
+        val t = min(p, 1f)
         val u = min(width / FaceLayout.WIDTH, height / FaceLayout.HEIGHT)
         val faceCy0 = height * 0.5f + CONTENT_CENTER_Y * u
-        if (p < 0f) return Transform(1f, -p * width, 0f)
-        if (p > 1f) {
-            val docked = transform(1f, width, height, slotCx, slotCy, slotHeight)
-            return docked.copy(translationX = docked.translationX - (p - 1f) * width)
-        }
-        val t = p
         val scale = miniScale(width, height, slotHeight).pow(t)
         val cx = width * 0.5f + (slotCx - width * 0.5f) * t
         val cy = faceCy0 + (slotCy - faceCy0) * t
-        return Transform(
-            scale = scale,
-            translationX = cx - width * 0.5f,
-            translationY = cy - height * 0.5f - (faceCy0 - height * 0.5f) * scale,
-        )
+        out[0] = scale
+        // Дальше открытого — мини-лицо в слоте едет вместе с экраном под пальцем.
+        out[1] = cx - width * 0.5f - (p - t) * width
+        out[2] = cy - height * 0.5f - (faceCy0 - height * 0.5f) * scale
     }
 }
