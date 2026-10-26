@@ -137,6 +137,8 @@ data class MainUiState(
     val answerOnFace: Boolean = false,
     /** Места карты (чипы мест под ответом «где», прототип mynbay). */
     val mapPlaces: List<Place> = emptyList(),
+    /** Снимок «Что это?» (прототип: кадр в карточке ответа); null — новый вопрос, сон, новый разговор. */
+    val lookPhoto: LookPhoto? = null,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -686,6 +688,7 @@ class MainViewModel(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
                 guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
+                lookPhoto = null,
             )
         }
         history.clear()
@@ -765,7 +768,7 @@ class MainViewModel(
                 _state.update {
                     it.copy(
                         question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
-                        wayHint = null, citations = emptyList(),
+                        wayHint = null, citations = emptyList(), lookPhoto = null,
                     )
                 }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
@@ -1456,7 +1459,7 @@ class MainViewModel(
     private suspend fun captureFrame(quality: Int = CameraGateway.DEFAULT_JPEG_QUALITY): ByteArray? {
         head?.setCameraBusy(true)
         return try {
-            camera.captureJpeg(quality)
+            camera.captureJpeg(quality)?.also { jpeg -> _state.update { it.copy(lookPhoto = LookPhoto(jpeg)) } }
         } finally {
             head?.setCameraBusy(false)
         }
@@ -1678,6 +1681,7 @@ class MainViewModel(
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
                 answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
+                lookPhoto = null,
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -2288,3 +2292,6 @@ class MainViewModel(
             this is ApiResult.Failure && error.kind == ErrorKind.RATE_LIMITED
     }
 }
+
+/** Кадр «Что это?» для экрана (JPEG). Не data class: сравнение по ссылке — новый снимок = новый объект. */
+class LookPhoto(val jpeg: ByteArray)

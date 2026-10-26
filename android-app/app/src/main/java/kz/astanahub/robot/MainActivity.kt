@@ -13,6 +13,7 @@ import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.res.ResourcesCompat
@@ -458,20 +459,60 @@ class MainActivity : AppCompatActivity() {
         override fun onPinCancel() = closePin()
     }
 
-    /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип). */
-    private var homeChatSize = 0
+    /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип): id последней реплики
+     *  на момент «В начало» (id в чате только растут — и после сброса чата, и когда старые реплики уходят за лимит). */
+    private var homeLastId = 0L
     private var placeChipTargets: List<kz.astanahub.robot.backend.Place> = emptyList()
 
     private fun showHomeView() {
-        homeChatSize = chatLog.items.size
+        homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
         renderScreenTwo(viewModel.state.value)
     }
+
+    /** Снимок «Что это?» на экране: декодируем уменьшенным в фоне; карточка — первый ответ робота после снимка. */
+    private var photoSrc: kz.astanahub.robot.ui.LookPhoto? = null
+    private var photoFrom = 0L
+
+    private fun bindLookPhoto(p: kz.astanahub.robot.ui.LookPhoto?) {
+        if (p !== photoSrc) {
+            photoSrc = p
+            photoFrom = chatLog.items.lastOrNull()?.id ?: 0L
+            two.photo = null
+            two.photoItemId = -1L
+            if (p != null) {
+                lifecycleScope.launch {
+                    val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { decodeThumb(p.jpeg) }
+                    if (photoSrc === p) two.photo = bmp
+                }
+            }
+        }
+        if (p != null && two.photoItemId < 0) {
+            chatLog.items.firstOrNull { it.id > photoFrom && it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }
+                ?.let { two.photoItemId = it.id }
+        }
+    }
+
+    private fun decodeThumb(jpeg: ByteArray): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= LOOK_THUMB_WIDTH) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)?.asImageBitmap()
+    }.onFailure { timber.log.Timber.w(it, "look photo decode") }.getOrNull()
 
     /** Смена костюма (точки, свайп по роботу): робот «собирается», лицо радуется (как setSkin в прототипе). */
     private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
         if (c == container.costume.costume.value) return
         container.costume.set(c)
-        face.onCue(kz.astanahub.robot.ui.face.FaceCue.ARRIVED)
+        // Прототип: обычный / казахский — радость, айтишник / космонавт — широко раскрытые глаза (звёзды-глаза
+        // космонавта в нашем лице не нарисованы — ближайшее «удивление»).
+        face.onCue(
+            when (c) {
+                kz.astanahub.robot.ui.screen.Costume.BUSINESS, kz.astanahub.robot.ui.screen.Costume.GALAXY -> kz.astanahub.robot.ui.face.FaceCue.SURPRISE
+                else -> kz.astanahub.robot.ui.face.FaceCue.ARRIVED
+            },
+        )
     }
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -529,7 +570,9 @@ class MainActivity : AppCompatActivity() {
         if (chatLog.update(state)) two.chat = chatLog.items
         two.partial = ScreenTwoMapper.partial(state)
         two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
-        two.phrase = state.subtitle
+        // Локальные ответы («где X», нет связи) звучат целиком без потока фраз — субтитры по всему ответу
+        // (прототип: субтитры у любой речи робота).
+        two.phrase = state.subtitle ?: state.answer?.takeIf { state.phase == Phase.SPEAKING && it.isNotBlank() }
         two.thinking = state.processing
         two.busy = ScreenTwoMapper.busy(state)
         two.tilesEnabled = !state.processing
@@ -548,6 +591,7 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
+        two.tapToMenu = state.answerOnFace
         // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
         two.pose = when (state.phase) {
             Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
@@ -555,10 +599,11 @@ class MainActivity : AppCompatActivity() {
             Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
             else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
         }
-        if (chatLog.items.size < homeChatSize) homeChatSize = chatLog.items.size // новый посетитель — чат с нуля
-        val home = state.screen == Screen.HOME && chatLog.items.size <= homeChatSize &&
+        val home = state.screen == Screen.HOME && (chatLog.items.lastOrNull()?.id ?: 0L) <= homeLastId &&
             state.partialQuestion.isNullOrBlank() && !state.processing
         two.homeView = home
+        two.chatFrom = homeLastId
+        bindLookPhoto(state.lookPhoto)
         two.canGoBack = !home || state.screen != Screen.HOME
         // Чипы мест под ответом «где» (кроме места из ответа).
         placeChipTargets = if (!home && (state.whereIs != null || state.guideTarget != null)) {
@@ -605,7 +650,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun islandTexts(lang: Lang) = IslandTexts(
         tripTitle = str(R.string.guide_title, lang),
-        stopTrip = str(R.string.action_stop_trip, lang),
+        stopTrip = str(R.string.action_stop, lang), // прототип: «Стоп» и на слое поездки
         guide = str(R.string.action_guide_short, lang),
         arrived = str(R.string.island_arrived, lang),
         failed = str(R.string.island_failed, lang),
@@ -628,6 +673,7 @@ class MainActivity : AppCompatActivity() {
         showLess = str(R.string.action_show_less, lang),
         guideShort = str(R.string.action_guide_short, lang),
         offline = str(R.string.offline_badge, lang),
+        offlineBar = str(R.string.offline_bar, lang),
         micOff = str(R.string.mic_off_badge, lang),
         exitQuestion = str(R.string.exit_question, lang),
         exitSub = str(R.string.exit_sub, lang),
@@ -642,6 +688,7 @@ class MainActivity : AppCompatActivity() {
         menu = str(R.string.action_menu, lang),
         look = str(R.string.action_look, lang),
         faceHint = str(R.string.face_hint, lang),
+        tapHint = str(R.string.tap_hint, lang),
         costumes = listOf(
             str(R.string.costume_default, lang),
             str(R.string.costume_kazakh, lang),
@@ -743,6 +790,7 @@ class MainActivity : AppCompatActivity() {
         /** Начертания Inter экранов 1 и 2. */
         const val PIN_TIMEOUT_MS = 60_000L
         const val MAX_PLACE_CHIPS = 5
+        const val LOOK_THUMB_WIDTH = 480
         const val CLOSE_DELAY_MS = 1_500L
         val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"

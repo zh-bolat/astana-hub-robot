@@ -32,13 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kz.astanahub.robot.R
@@ -66,11 +62,13 @@ fun FaceOverlay(state: ScreenTwoState, actions: ScreenTwoActions, onMenu: () -> 
                     .padding(horizontal = 18.dp, vertical = 6.dp)
                     .holdToActivate(state.diagnosticsHold, DIAG_HOLD_MILLIS, actions::onDiagnostics),
             ) {
-                Image(painterResource(R.drawable.mf_brand_astana_hub), texts.title, Modifier.height(48.dp).width(180.dp))
+                Image(painterResource(R.drawable.mf_brand_astana_hub), texts.title, Modifier.height(54.dp).width(220.dp))
             }
             Spacer(Modifier.weight(1f))
             LanguageSwitch(state.lang, actions::onLanguage, takeTouch = true)
             if (state.exitVisible) {
+                Spacer(Modifier.width(28.dp))
+                Box(Modifier.width(2.dp).height(44.dp).background(Color.White.copy(alpha = 0.25f)))
                 Spacer(Modifier.width(28.dp))
                 Pressable(
                     onClick = actions::onExit,
@@ -102,15 +100,16 @@ fun FaceOverlay(state: ScreenTwoState, actions: ScreenTwoActions, onMenu: () -> 
             Box(Modifier.widthIn(max = 1240.dp).heightIn(min = 126.dp), contentAlignment = Alignment.TopCenter) {
                 if (phrase != null) {
                     val spoken = spokenWords(phrase)
-                    val text = remember(phrase, spoken) { faceSubText(phrase, spoken) }
+                    val text = remember(phrase, spoken) { SubtitleWindow.text(phrase, spoken, Color.White.copy(alpha = 0.35f)) }
                     BasicText(
                         text,
                         style = HubType.Display.copy(fontSize = 48.sp, lineHeight = 62.sp, fontWeight = FontWeight.SemiBold, color = Color.White, textAlign = TextAlign.Center),
-                        maxLines = 3,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 } else if (!state.busy && state.partial == null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    // Прототип: чипы на 16 dp ниже верха субтитров (min-height 126, margin-top −110).
+                    Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         state.tiles.filter { it.action is TileAction.Ask }.take(3).forEach { tile ->
                             androidx.compose.runtime.key(tile.key) {
                                 val shape = RoundedCornerShape(percent = 50)
@@ -203,6 +202,16 @@ fun FaceOverlay(state: ScreenTwoState, actions: ScreenTwoActions, onMenu: () -> 
                         }
                     }
                 }
+                // Прототип: «Коснитесь экрана, чтобы открыть меню» — только когда касание правда ведёт в меню
+                // (ответ на вопрос из приложения идёт на лице); в остальное время касание — наше (разбудить, перебить).
+                if (state.tapToMenu) {
+                    BasicText(
+                        texts.tapHint,
+                        style = HubType.Caption.copy(color = Color.White.copy(alpha = 0.45f), textAlign = TextAlign.End),
+                        maxLines = 2,
+                        modifier = Modifier.align(Alignment.CenterEnd).widthIn(max = 420.dp),
+                    )
+                }
             }
         }
     }
@@ -234,18 +243,6 @@ fun SwipeChevrons(modifier: Modifier = Modifier) {
                 },
             )
         }
-    }
-}
-
-/** Субтитры на лице: сказанные слова — белые, ещё не сказанные — 35 %. */
-private fun faceSubText(phrase: String, spoken: Int): AnnotatedString = buildAnnotatedString {
-    val words = phrase.split(' ')
-    var count = 0
-    words.forEachIndexed { i, w ->
-        if (i > 0) append(' ')
-        if (w.isEmpty()) return@forEachIndexed
-        if (count < spoken) append(w) else withStyle(SpanStyle(color = Color.White.copy(alpha = 0.35f))) { append(w) }
-        count++
     }
 }
 

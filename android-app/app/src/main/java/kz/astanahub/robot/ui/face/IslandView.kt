@@ -2,7 +2,13 @@ package kz.astanahub.robot.ui.face
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -39,9 +45,11 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kz.astanahub.robot.R
 import kz.astanahub.robot.places.Directions
 import kz.astanahub.robot.ui.design.HubColors
@@ -173,8 +181,22 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                 label = "guide",
             ) { c ->
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Image(painterResource(R.drawable.mf_guide_arrow), contentDescription = null, modifier = Modifier.size(150.dp))
-                    Spacer(Modifier.height(28.dp))
+                    // Прототип: стрелка 220 × 220 «кивает» вверх на 14 dp (1,6 с), между строками — 40 dp.
+                    val nudge = rememberInfiniteTransition(label = "nudge")
+                    val dy by nudge.animateFloat(
+                        0f,
+                        1f,
+                        infiniteRepeatable(tween(NUDGE_MS / 2, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                        label = "nudgeDy",
+                    )
+                    Image(
+                        painterResource(R.drawable.mf_guide_arrow),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(220.dp)
+                            .graphicsLayer { translationY = -NUDGE_DP.dp.toPx() * dy },
+                    )
+                    Spacer(Modifier.height(40.dp))
                     val (title, sub) = when (c) {
                         is IslandContent.Trip -> texts.tripTitle.format(c.place) to texts.follow
                         is IslandContent.Outcome -> when (c.kind) {
@@ -186,17 +208,23 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                     }
                     BasicText(
                         title,
-                        style = HubType.Display.copy(color = HubColors.Navy, textAlign = TextAlign.Center),
+                        style = HubType.Display.copy(
+                            color = HubColors.Navy,
+                            fontSize = 72.sp,
+                            lineHeight = 83.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                        ),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.widthIn(max = 1300.dp),
                     )
                     if (sub.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        BasicText(sub, style = HubType.Body.copy(color = HubColors.Muted, textAlign = TextAlign.Center))
+                        Spacer(Modifier.height(40.dp))
+                        BasicText(sub, style = HubType.Body.copy(color = HubColors.Muted, fontSize = 34.sp, lineHeight = 44.sp, textAlign = TextAlign.Center))
                     }
                     if (c is IslandContent.Trip) {
-                        Spacer(Modifier.height(36.dp))
+                        Spacer(Modifier.height(60.dp))
                         HubPill(texts.stopTrip, onStop, glyph = R.drawable.ic_m_stop, kind = PillKind.STOP, takeTouch = true)
                     }
                 }
@@ -204,3 +232,7 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
         }
     }
 }
+
+/** Стрелка поездки «кивает» (прототип `nudge`): период и высота. */
+private const val NUDGE_MS = 1600
+private const val NUDGE_DP = 14

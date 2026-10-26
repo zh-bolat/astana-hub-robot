@@ -9,6 +9,7 @@
     <string name="action_guide">Take me there: %1$s</string>
     <string name="status_speaking">Speaking…</string>
     <string name="offline_badge">No connection to the server</string>
+    <string name="offline_bar">No connection to the server. I can still show you the way.</string>
     <string name="input_hint">Type a question (instead of voice)</string>
     <string name="action_send">Ask</string>
     <string name="action_look">What is this?</string>
@@ -46,6 +47,7 @@
     <string name="action_menu">Menu</string>
     <string name="action_face">Back to robot</string>
     <string name="face_hint">Just ask, I am listening</string>
+    <string name="tap_hint">Tap the screen to open the menu</string>
     <string name="chat_source">Source: %1$s</string>
     <string name="chat_sources">Sources: %1$s</string>
     <string name="action_ask_voice">Ask by voice</string>
@@ -56,7 +58,6 @@
     <string name="island_stopped">Stopped</string>
     <string name="island_meters">%1$d m</string>
     <string name="island_near">nearby</string>
-    <string name="action_stop_trip">Stop</string>
     <string name="exit_pin_sub">Only staff can exit. Enter the password.</string>
     <string name="exit_pin_wrong">Wrong password. Attempts left: %1$d</string>
     <string name="exit_pin_locked">Too many attempts. Try again in %1$d min.</string>

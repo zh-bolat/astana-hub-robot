@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Экран 2: «Назад» — монохромная линия (белый штрих; цвет задаёт tint), сетка 24. -->
+<!-- Экран 2: «Назад» — стрелка влево, как в прототипе; монохромная линия (белый штрих; цвет задаёт tint), сетка 24. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
     <path
-        android:pathData="M14.5,5.5l-6.5,6.5l6.5,6.5"
+        android:pathData="M19,12H5.5M11.5,6l-6,6l6,6"
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="1.7"

@@ -75,7 +75,7 @@ interface RobotScreensHost {
     /** Удержание по лицу 3 с — PIN → админка. */
     fun onFaceHold()
 
-    /** «Остановить» на острове поездки. */
+    /** «Стоп» на слое поездки. */
     fun onTravelStop()
 
     /** «Проводить» на острове where_is. */
@@ -229,6 +229,9 @@ fun RobotScreens(
         // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
         // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
         val settled by remember { derivedStateOf { visual() >= 0.98f && !progress.isRunning } }
+        // Лицо на месте (не едет и не тянется пальцем): только тогда его подписи и кнопки (прототип: на время
+        // перехода `.face-layer.morphing` прячет всё, кроме глаз).
+        val faceSettled by remember { derivedStateOf { visual() <= 0.02f && !progress.isRunning } }
         ScreenTwo(
             state = two,
             actions = actions,
@@ -378,7 +381,7 @@ fun RobotScreens(
             }
             // Экран лица прототипа: логотип, язык, выход, состояние, субтитры, чипы, «Меню», «Спросить голосом» / «Стоп».
             AnimatedVisibility(
-                visible = faceUi && screenOne,
+                visible = faceUi && screenOne && faceSettled,
                 enter = fadeIn(HubMotion.Default.compose()),
                 exit = fadeOut(HubMotion.Snappy.compose()),
             ) {
@@ -498,7 +501,7 @@ private fun SleepGreeting(visible: Boolean, modifier: Modifier = Modifier) {
             Column(Modifier.padding(bottom = 54.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 BasicText(SLEEP_LINES[k].first, style = HubType.Display.copy(color = Color.White, fontSize = 56.sp))
                 Spacer(Modifier.height(10.dp))
-                BasicText(SLEEP_LINES[k].second, style = HubType.Callout.copy(color = Color.White.copy(alpha = 0.55f)))
+                BasicText(SLEEP_LINES[k].second, style = HubType.Callout.copy(color = Color.White.copy(alpha = 0.55f), fontSize = 30.sp, lineHeight = 40.sp))
             }
         }
     }
