@@ -150,20 +150,28 @@ object FaceMorph {
         return Transform(out[0], out[1], out[2])
     }
 
-    /** То же без аллокаций (кадр перехода): [out] = scale, translationX, translationY. */
-    fun compute(p: Float, width: Float, height: Float, slotCx: Float, slotCy: Float, slotHeight: Float, out: FloatArray) {
+    /**
+     * То же без аллокаций (кадр перехода): [out] = scale, translationX, translationY. [startScale], [startDy] — лицо на
+     * экране 1 не на весь экран (прототип v8: глаза поменьше и выше — под ними подписи); по умолчанию — во весь экран.
+     */
+    fun compute(
+        p: Float, width: Float, height: Float, slotCx: Float, slotCy: Float, slotHeight: Float, out: FloatArray,
+        startScale: Float = 1f, startDy: Float = 0f,
+    ) {
         if (p < 0f) {
-            out[0] = 1f
+            out[0] = startScale
             out[1] = -p * width
-            out[2] = 0f
+            out[2] = startDy
             return
         }
         val t = min(p, 1f)
         val u = min(width / FaceLayout.WIDTH, height / FaceLayout.HEIGHT)
         val faceCy0 = height * 0.5f + CONTENT_CENTER_Y * u
-        val scale = miniScale(width, height, slotHeight).pow(t)
+        val mini = miniScale(width, height, slotHeight)
+        val scale = startScale * (mini / startScale).pow(t)
         val cx = width * 0.5f + (slotCx - width * 0.5f) * t
-        val cy = faceCy0 + (slotCy - faceCy0) * t
+        val start = faceCy0 + startDy
+        val cy = start + (slotCy - start) * t
         out[0] = scale
         // Дальше открытого — мини-лицо в слоте едет вместе с экраном под пальцем.
         out[1] = cx - width * 0.5f - (p - t) * width

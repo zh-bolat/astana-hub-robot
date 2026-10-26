@@ -71,6 +71,8 @@ fun Pressable(
     takeTouch: Boolean = false,
     /** Своё состояние нажатия (кто-то ещё показывает отклик — мини-лицо в шапке); null — внутреннее. */
     pressed: MutableState<Boolean>? = null,
+    /** Защита от двойного нажатия; клавиатура пароля — без неё (одинаковые знаки подряд). */
+    repeatGuard: Boolean = true,
     contentAlignment: Alignment = Alignment.Center,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -80,7 +82,7 @@ fun Pressable(
     val lastClick = remember { longArrayOf(Long.MIN_VALUE / 2) }
     val clickOnce: () -> Unit = {
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastClick[0] >= REPEAT_GUARD_MS) {
+        if (!repeatGuard || now - lastClick[0] >= REPEAT_GUARD_MS) {
             lastClick[0] = now
             onClick()
         }
@@ -248,7 +250,7 @@ fun BackPill(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) 
  * (пружина Snappy), подпись выбранного — белая. Сегмент 84 × 50 dp, отступ 4 dp.
  */
 @Composable
-fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier) {
+fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier, takeTouch: Boolean = false) {
     val items = Tiles.languages
     val index = items.indexOfFirst { it.first == selected }.coerceAtLeast(0)
     val thumb = animateDpAsState(SEGMENT_WIDTH * index, HubMotion.Snappy.compose(), label = "langThumb")
@@ -277,6 +279,7 @@ fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier 
                 )
                 Pressable(
                     onClick = { onSelect(lang) },
+                    takeTouch = takeTouch,
                     modifier = Modifier
                         .width(SEGMENT_WIDTH)
                         .fillMaxHeight(),
@@ -291,17 +294,20 @@ fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier 
 /** Полоса предупреждения под верхней панелью (прототип `.offline`): янтарная, значок и текст. */
 @Composable
 fun NoticeBar(text: String, modifier: Modifier = Modifier) {
+    // Прототип `.offline`: янтарный градиент, низ скруглён (28), мягкая тень, значок «!» в круге, 26sp 500.
+    val shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
     Row(
         modifier
             .fillMaxWidth()
             .height(NOTICE_HEIGHT)
-            .background(HubColors.AmberBg)
+            .softShadow(shape, 4.dp, 0.10f, HubColors.AmberFg)
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFFFFF7E3), Color(0xFFFFEFCB))), shape)
             .padding(horizontal = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(14.dp).background(HubColors.AmberFg, CircleShape))
+        Glyph(R.drawable.ic_m_notice, 32.dp, HubColors.AmberFg)
         Spacer(Modifier.width(16.dp))
-        BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

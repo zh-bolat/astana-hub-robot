@@ -13,6 +13,7 @@ import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.res.ResourcesCompat
@@ -33,6 +34,10 @@ import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.security.DiagAccess
 import kz.astanahub.robot.ui.screen.PinPadActions
 import kz.astanahub.robot.ui.screen.PinPadState
+import kz.astanahub.robot.ui.screen.PinPurpose
+import kz.astanahub.robot.ui.screen.PinTexts
+import kz.astanahub.robot.security.ExitMode
+import kz.astanahub.robot.security.PinBuffer
 import kz.astanahub.robot.security.DiagPinGuard
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
@@ -287,6 +292,8 @@ class MainActivity : AppCompatActivity() {
 
         override fun onExitConfirm() = exitApp()
 
+        override fun onReopen() = reopen()
+
         override fun onExitCancel() = stayIn()
 
         override fun onDiagnostics() = openDiagnostics()
@@ -294,6 +301,28 @@ class MainActivity : AppCompatActivity() {
         override fun onClose() {
             viewModel.showFace()
         }
+
+        // --- кнопки прототипа ---
+
+        override fun onBack() {
+            // Наш «Назад» (история экранов ViewModel); разговор без экрана ответа (live) — к приветствию.
+            if (viewModel.state.value.screen != Screen.HOME) viewModel.back() else showHomeView()
+        }
+
+        override fun onHome() {
+            viewModel.goHome()
+            showHomeView()
+        }
+
+        override fun onLook() = viewModel.lookAround()
+
+        override fun onPlace(index: Int) {
+            placeChipTargets.getOrNull(index)?.let(viewModel::askWhere)
+        }
+
+        override fun onCostume(c: kz.astanahub.robot.ui.screen.Costume) = setCostume(c)
+
+        override fun onCostumeSwipe(step: Int) = setCostume(container.costume.costume.value.next(step))
     }
 
     /**
@@ -308,6 +337,10 @@ class MainActivity : AppCompatActivity() {
             FaceInputMapper.Tap.STOP -> viewModel.stop()
             FaceInputMapper.Tap.INTERRUPT_SPEECH -> viewModel.interruptSpeech()
             FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
+            FaceInputMapper.Tap.OPEN_MENU -> {
+                viewModel.openMenu()
+                refreshMenuOpen()
+            }
         }
     }
 
@@ -316,23 +349,44 @@ class MainActivity : AppCompatActivity() {
         when (gate.access) {
             DiagAccess.DISABLED -> Unit
             DiagAccess.OPEN -> startActivity(Intent(this, DiagnosticsActivity::class.java))
-            DiagAccess.PIN -> showPin()
+            DiagAccess.PIN -> showPin(PinPurpose.DIAGNOSTICS)
         }
     }
 
     // ---------------------------------------------------------------------------------------------
-    // PIN диагностики — панель в виде прототипа (наша логика: DiagPinGuard, блокировка, минута без ввода — закрыть).
+    // Пароль сотрудника — панель прототипа (цифры и латиница, регистр не важен). Два назначения:
+    // диагностика (наша админка: удержание логотипа / лица) и выход (крестик, функция mynbay). Проверка —
+    // DiagPinGuard, счётчик попыток общий (пароль нельзя подобрать через окно выхода), минута без ввода — закрыть.
     // ---------------------------------------------------------------------------------------------
 
     private val pin = PinPadState()
+    private val pinBuffer = PinBuffer()
     private val pinTimeout = Runnable { closePin() }
 
-    private fun showPin() {
+    private fun showPin(purpose: PinPurpose) {
         if (pin.visible) return
-        pin.pin = ""
+        pin.purpose = purpose
+        val lang = viewModel.state.value.lang
+        pin.texts = when (purpose) {
+            PinPurpose.DIAGNOSTICS -> PinTexts(
+                title = "Диагностика",
+                sub = "Только для сотрудников. Введите пароль.",
+                ok = "Открыть",
+                cancel = "Отмена",
+            )
+            PinPurpose.EXIT -> PinTexts(
+                title = str(R.string.exit_question, lang),
+                sub = str(R.string.exit_pin_sub, lang),
+                ok = str(R.string.exit_yes, lang),
+                cancel = str(R.string.exit_no, lang),
+            )
+        }
+        pinBuffer.clear()
+        pin.length = 0
+        pin.message = ""
         renderPinLock()
-        if (!pin.locked) pin.message = ""
         pin.visible = true
+        if (purpose == PinPurpose.EXIT) viewModel.stop()
         handler.removeCallbacks(pinTimeout)
         handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
     }
@@ -340,46 +394,125 @@ class MainActivity : AppCompatActivity() {
     private fun renderPinLock(): Boolean {
         val lock = container.diagnostics.guard.lockRemainingMillis()
         pin.locked = lock > 0
-        if (pin.locked) pin.message = "Слишком много попыток. Попробуйте через ${(lock + 59_999) / 60_000} мин."
+        if (pin.locked) {
+            val minutes = (lock + 59_999) / 60_000
+            pin.message = if (pin.purpose == PinPurpose.EXIT) {
+                str(R.string.exit_pin_locked, viewModel.state.value.lang).format(minutes)
+            } else {
+                "Слишком много попыток. Попробуйте через $minutes мин."
+            }
+        }
         return pin.locked
     }
 
     private fun closePin() {
         handler.removeCallbacks(pinTimeout)
+        val wasExit = pin.visible && pin.purpose == PinPurpose.EXIT
         pin.visible = false
-        pin.pin = ""
+        pinBuffer.clear()
+        pin.length = 0
+        if (wasExit) viewModel.wake()
     }
 
     private val pinActions = object : PinPadActions {
-        override fun onPinDigit(d: Char) {
-            if (pin.locked || pin.pin.length >= MAX_PIN) return
-            pin.pin += d
+        override fun onPinKey(c: Char) {
+            if (pin.locked || !pinBuffer.append(c)) return
+            pin.length = pinBuffer.length
             pin.message = ""
             handler.removeCallbacks(pinTimeout)
             handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
         }
 
         override fun onPinErase() {
-            pin.pin = pin.pin.dropLast(1)
+            pinBuffer.backspace()
+            pin.length = pinBuffer.length
         }
 
         override fun onPinSubmit() {
-            if (renderPinLock()) return
-            val entered = pin.pin
-            pin.pin = ""
+            if (renderPinLock() || !pinBuffer.isComplete) return
+            val entered = pinBuffer.value
+            pinBuffer.clear()
+            pin.length = 0
             val gate = container.diagnostics
             when (val r = gate.guard.check(entered)) {
                 DiagPinGuard.Result.Ok -> {
-                    closePin()
-                    gate.session.unlock()
-                    startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                    val purpose = pin.purpose
+                    handler.removeCallbacks(pinTimeout)
+                    pin.visible = false
+                    when (purpose) {
+                        PinPurpose.DIAGNOSTICS -> {
+                            gate.session.unlock()
+                            startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                        }
+                        PinPurpose.EXIT -> exitApp()
+                    }
                 }
-                is DiagPinGuard.Result.Wrong -> pin.message = "Неверный PIN. Осталось попыток: ${r.attemptsLeft}"
+                is DiagPinGuard.Result.Wrong -> pin.message = if (pin.purpose == PinPurpose.EXIT) {
+                    str(R.string.exit_pin_wrong, viewModel.state.value.lang).format(r.attemptsLeft)
+                } else {
+                    "Неверный пароль. Осталось попыток: ${r.attemptsLeft}"
+                }
                 is DiagPinGuard.Result.Locked -> renderPinLock()
             }
         }
 
         override fun onPinCancel() = closePin()
+    }
+
+    /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип): id последней реплики
+     *  на момент «В начало» (id в чате только растут — и после сброса чата, и когда старые реплики уходят за лимит). */
+    private var homeLastId = 0L
+    private var placeChipTargets: List<kz.astanahub.robot.backend.Place> = emptyList()
+
+    private fun showHomeView() {
+        homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
+        renderScreenTwo(viewModel.state.value)
+    }
+
+    /** Снимок «Что это?» на экране: декодируем уменьшенным в фоне; карточка — первый ответ робота после снимка. */
+    private var photoSrc: kz.astanahub.robot.ui.LookPhoto? = null
+    private var photoFrom = 0L
+
+    private fun bindLookPhoto(p: kz.astanahub.robot.ui.LookPhoto?) {
+        if (p !== photoSrc) {
+            photoSrc = p
+            photoFrom = chatLog.items.lastOrNull()?.id ?: 0L
+            two.photo = null
+            two.photoItemId = -1L
+            if (p != null) {
+                lifecycleScope.launch {
+                    val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { decodeThumb(p.jpeg) }
+                    if (photoSrc === p) two.photo = bmp
+                }
+            }
+        }
+        if (p != null && two.photoItemId < 0) {
+            chatLog.items.firstOrNull { it.id > photoFrom && it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }
+                ?.let { two.photoItemId = it.id }
+        }
+    }
+
+    private fun decodeThumb(jpeg: ByteArray): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= LOOK_THUMB_WIDTH) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)?.asImageBitmap()
+    }.onFailure { timber.log.Timber.w(it, "look photo decode") }.getOrNull()
+
+    /** Смена костюма (точки, свайп по роботу): робот «собирается», лицо радуется (как setSkin в прототипе). */
+    private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
+        if (c == container.costume.costume.value) return
+        container.costume.set(c)
+        // Прототип: обычный / казахский — радость, айтишник / космонавт — широко раскрытые глаза (звёзды-глаза
+        // космонавта в нашем лице не нарисованы — ближайшее «удивление»).
+        face.onCue(
+            when (c) {
+                kz.astanahub.robot.ui.screen.Costume.BUSINESS, kz.astanahub.robot.ui.screen.Costume.GALAXY -> kz.astanahub.robot.ui.face.FaceCue.SURPRISE
+                else -> kz.astanahub.robot.ui.face.FaceCue.ARRIVED
+            },
+        )
     }
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -437,7 +570,9 @@ class MainActivity : AppCompatActivity() {
         if (chatLog.update(state)) two.chat = chatLog.items
         two.partial = ScreenTwoMapper.partial(state)
         two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
-        two.phrase = state.subtitle
+        // Локальные ответы («где X», нет связи) звучат целиком без потока фраз — субтитры по всему ответу
+        // (прототип: субтитры у любой речи робота).
+        two.phrase = state.subtitle ?: state.answer?.takeIf { state.phase == Phase.SPEAKING && it.isNotBlank() }
         two.thinking = state.processing
         two.busy = ScreenTwoMapper.busy(state)
         two.tilesEnabled = !state.processing
@@ -456,7 +591,29 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
+        two.tapToMenu = state.answerOnFace
+        // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
+        two.pose = when (state.phase) {
+            Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
+            Phase.THINKING, Phase.LOOKING -> kz.astanahub.robot.ui.screen.CompanionPose.THINK
+            Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
+            else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
+        }
+        val home = state.screen == Screen.HOME && (chatLog.items.lastOrNull()?.id ?: 0L) <= homeLastId &&
+            state.partialQuestion.isNullOrBlank() && !state.processing
+        two.homeView = home
+        two.chatFrom = homeLastId
+        bindLookPhoto(state.lookPhoto)
+        two.canGoBack = !home || state.screen != Screen.HOME
+        // Чипы мест под ответом «где» (кроме места из ответа).
+        placeChipTargets = if (!home && (state.whereIs != null || state.guideTarget != null)) {
+            state.mapPlaces.filter { it.id != state.guideTarget?.id }.take(MAX_PLACE_CHIPS)
+        } else {
+            emptyList()
+        }
+        two.placeChips = placeChipTargets.map { WayFinder.displayName(it, lang) }
         two.faceAvailable = container.chatSettings.mode.value.usesAgent
+        two.exitVisible = exitMode() != ExitMode.HIDDEN
     }
 
     /** Экран 2 открыт: режим MENU, не едем и остров не досказывает поездку. */
@@ -493,7 +650,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun islandTexts(lang: Lang) = IslandTexts(
         tripTitle = str(R.string.guide_title, lang),
-        stopTrip = str(R.string.action_stop_trip, lang),
+        stopTrip = str(R.string.action_stop, lang), // прототип: «Стоп» и на слое поездки
         guide = str(R.string.action_guide_short, lang),
         arrived = str(R.string.island_arrived, lang),
         failed = str(R.string.island_failed, lang),
@@ -516,6 +673,7 @@ class MainActivity : AppCompatActivity() {
         showLess = str(R.string.action_show_less, lang),
         guideShort = str(R.string.action_guide_short, lang),
         offline = str(R.string.offline_badge, lang),
+        offlineBar = str(R.string.offline_bar, lang),
         micOff = str(R.string.mic_off_badge, lang),
         exitQuestion = str(R.string.exit_question, lang),
         exitSub = str(R.string.exit_sub, lang),
@@ -524,6 +682,19 @@ class MainActivity : AppCompatActivity() {
         sourceOne = str(R.string.chat_source, lang),
         sourceMany = str(R.string.chat_sources, lang),
         back = str(R.string.action_back, lang),
+        closed = str(R.string.app_closed, lang),
+        reopen = str(R.string.app_reopen, lang),
+        home = str(R.string.action_home, lang),
+        menu = str(R.string.action_menu, lang),
+        look = str(R.string.action_look, lang),
+        faceHint = str(R.string.face_hint, lang),
+        tapHint = str(R.string.tap_hint, lang),
+        costumes = listOf(
+            str(R.string.costume_default, lang),
+            str(R.string.costume_kazakh, lang),
+            str(R.string.costume_business, lang),
+            str(R.string.costume_galaxy, lang),
+        ),
     )
 
     private fun statusRes(phase: Phase): Int = when (phase) {
@@ -536,16 +707,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Выход: крестик → подтверждение. Никто не ответил за 15 с — окно закрывается, робот работает дальше.
+    // Выход (крестик). Как у mynbay: на роботе с паролем — только сотрудник (панель пароля); без пароля на роботе
+    // крестика нет; на эмуляторе без пароля — прежнее подтверждение (наше, 15 с без ответа — остаёмся).
+    // Перед закрытием — слой прототипа «Приложение закрыто» с «Открыть снова» (1,5 с — передумать), затем
+    // приложение закрывается (на роботе — экран Android).
     // ---------------------------------------------------------------------------------------------
 
     private val exitTimeout = Runnable { stayIn() }
+    private val closeNow = Runnable { finishAndRemoveTask() }
+
+    private fun exitMode(): ExitMode = ExitMode.of(container.diagnostics.access)
 
     private fun askExit() {
-        viewModel.stop()
-        two.exitConfirm = true
-        handler.removeCallbacks(exitTimeout)
-        handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
+        when (exitMode()) {
+            ExitMode.HIDDEN -> return
+            ExitMode.PIN -> showPin(PinPurpose.EXIT)
+            ExitMode.CONFIRM -> {
+                viewModel.stop()
+                two.exitConfirm = true
+                handler.removeCallbacks(exitTimeout)
+                handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
+            }
+        }
     }
 
     private fun stayIn(wake: Boolean = true) {
@@ -557,8 +740,18 @@ class MainActivity : AppCompatActivity() {
     private fun exitApp() {
         handler.removeCallbacks(exitTimeout)
         timber.log.Timber.i("exit requested from the screen")
+        two.exitConfirm = false
         viewModel.stop()
-        finishAndRemoveTask()
+        two.closed = true
+        handler.removeCallbacks(closeNow)
+        handler.postDelayed(closeNow, CLOSE_DELAY_MS)
+    }
+
+    /** «Открыть снова» на слое «Приложение закрыто»: передумали — работаем дальше. */
+    private fun reopen() {
+        handler.removeCallbacks(closeNow)
+        two.closed = false
+        viewModel.wake()
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -596,7 +789,9 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
         const val PIN_TIMEOUT_MS = 60_000L
-        const val MAX_PIN = 12
+        const val MAX_PLACE_CHIPS = 5
+        const val LOOK_THUMB_WIDTH = 480
+        const val CLOSE_DELAY_MS = 1_500L
         val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"

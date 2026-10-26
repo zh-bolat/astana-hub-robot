@@ -130,6 +130,15 @@ data class MainUiState(
     val conversation: Int = 0,
     /** Последний ответ «где X» с направлением по карте — остров where_is на экране лица; null — не было. */
     val whereIs: WhereIsHint? = null,
+    /**
+     * Ответ на вопрос с экрана приложения звучит на лице (функция mynbay): лицо с крупными субтитрами, тап по лицу
+     * возвращает в приложение, речь продолжается.
+     */
+    val answerOnFace: Boolean = false,
+    /** Места карты (чипы мест под ответом «где», прототип mynbay). */
+    val mapPlaces: List<Place> = emptyList(),
+    /** Снимок «Что это?» (прототип: кадр в карточке ответа); null — новый вопрос, сон, новый разговор. */
+    val lookPhoto: LookPhoto? = null,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -348,6 +357,16 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        viewModelScope.launch {
+            var last = _state.value.phase
+            _state.collect { st ->
+                if (st.phase != last) {
+                    val from = last
+                    last = st.phase
+                    onPhaseChanged(from, st.phase)
+                }
+            }
+        }
         head?.let { h ->
             // Робот начинает говорить (после «слушает» / «думает») — лёгкое движение головой (редко, если свободна).
             viewModelScope.launch {
@@ -399,6 +418,8 @@ class MainViewModel(
         viewModelScope.launch {
             wf.refreshPlaces()
             placeWords = runCatching { wf.placeWords() }.getOrDefault(emptySet())
+            val places = runCatching { wf.quickPlaces().map { it.place } }.getOrDefault(emptyList())
+            _state.update { it.copy(mapPlaces = places) }
             // Live открылся раньше, чем пришли места: стартовый набор «где X» не ушёл — отправить сейчас.
             liveDirections?.tick()
         }
@@ -580,9 +601,38 @@ class MainViewModel(
 
     /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
+        // Касание лица во время ответа (mynbay): только меняем вид, речь не прерываем и обратно не перекидываем.
+        faceOnAnswer = false
         wake()
-        if (_state.value.mode != ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.MENU) }
+        if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
+            _state.update { it.copy(mode = ScreenMode.MENU, answerOnFace = false) }
+        }
         restartMenuTimer()
+    }
+
+    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; mynbay). */
+    private var faceOnAnswer = false
+
+    /**
+     * Смена фазы: робот заговорил в ответ на вопрос с экрана приложения — лицо на весь экран с крупными субтитрами
+     * (функция mynbay); договорил — в legacy, где «дом» — меню, назад в меню (в agent лицо и есть дом).
+     */
+    private fun onPhaseChanged(from: Phase, to: Phase) {
+        val s = _state.value
+        if (to == Phase.SPEAKING && faceOnAnswer) {
+            faceOnAnswer = false
+            if (s.mode == ScreenMode.MENU && s.guidingTo == null) {
+                menuJob?.cancel()
+                _state.update { it.copy(mode = ScreenMode.FACE, answerOnFace = true) }
+            }
+        } else if (from == Phase.SPEAKING && to != Phase.SPEAKING && s.answerOnFace) {
+            _state.update {
+                it.copy(
+                    answerOnFace = false,
+                    mode = if (awakeMode() == ScreenMode.MENU && it.mode == ScreenMode.FACE) ScreenMode.MENU else it.mode,
+                )
+            }
+        }
     }
 
     /** «К роботу»: из меню обратно к лицу (только agent). */
@@ -638,6 +688,7 @@ class MainViewModel(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
                 guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
+                lookPhoto = null,
             )
         }
         history.clear()
@@ -667,6 +718,19 @@ class MainViewModel(
     /** Плитка или кнопка частого вопроса. */
     fun submitButton(text: String) = submitInternal(text, faqId = null)
 
+    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой. */
+    fun askWhere(place: Place) {
+        val lang = _state.value.lang
+        val name = WayFinder.displayName(place, lang)
+        submitButton(
+            when (lang) {
+                Lang.KK -> "$name қайда?"
+                Lang.EN -> "Where is $name?"
+                else -> "Где $name?"
+            },
+        )
+    }
+
     private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false) {
         val question = text.trim()
         if (question.isEmpty()) {
@@ -682,6 +746,8 @@ class MainViewModel(
         touchSession()
         wake()
         voice.stopSpeaking()
+        // Ответ на этот вопрос покажем на лице, если вопрос задан с экрана приложения (mynbay).
+        faceOnAnswer = true
         // Вопрос кнопкой/текстом при живом режиме: звук live обрываем, отвечает agent (/v1/chat, та же сессия).
         live?.interrupt()
         requestJob?.cancel()
@@ -702,7 +768,7 @@ class MainViewModel(
                 _state.update {
                     it.copy(
                         question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
-                        wayHint = null, citations = emptyList(),
+                        wayHint = null, citations = emptyList(), lookPhoto = null,
                     )
                 }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
@@ -1393,7 +1459,7 @@ class MainViewModel(
     private suspend fun captureFrame(quality: Int = CameraGateway.DEFAULT_JPEG_QUALITY): ByteArray? {
         head?.setCameraBusy(true)
         return try {
-            camera.captureJpeg(quality)
+            camera.captureJpeg(quality)?.also { jpeg -> _state.update { it.copy(lookPhoto = LookPhoto(jpeg)) } }
         } finally {
             head?.setCameraBusy(false)
         }
@@ -1615,6 +1681,7 @@ class MainViewModel(
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
                 answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
+                lookPhoto = null,
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -2225,3 +2292,6 @@ class MainViewModel(
             this is ApiResult.Failure && error.kind == ErrorKind.RATE_LIMITED
     }
 }
+
+/** Кадр «Что это?» для экрана (JPEG). Не data class: сравнение по ссылке — новый снимок = новый объект. */
+class LookPhoto(val jpeg: ByteArray)

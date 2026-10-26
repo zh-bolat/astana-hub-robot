@@ -7,18 +7,32 @@ import kotlinx.coroutines.flow.StateFlow
 import kz.astanahub.robot.R
 
 /**
- * Костюм робота-компаньона на странице приложения — только вид (прототип: классика, космос, казахский, деловой).
- * Картинки отрисованы из прототипа (`docs/design/robot-mvp.html`) без глаз: глаза — живое лицо, оно садится в экран
- * головы ([CompanionLayout]). Выбирает сотрудник в диагностике.
+ * Костюм робота-компаньона (прототип mynbay: обычный, казахский, айтишник, космонавт — в этом порядке). Слои
+ * отрисованы из прототипа без глаз и без анимации (голова, тело, левая и правая рука): поворот рук, покачивание тела
+ * и голову двигает приложение ([Companion]). Глаза — живое лицо, оно садится в экран головы.
+ * Меняется свайпом по роботу или точками под ним (как в прототипе) и в диагностике.
  */
-enum class Costume(val code: String, val label: String, @DrawableRes val image: Int) {
-    CLASSIC("default", "Обычный", R.drawable.mf_robot_default),
-    GALAXY("galaxy", "Космос", R.drawable.mf_robot_galaxy),
-    KAZAKH("kazakh", "Казахский", R.drawable.mf_robot_kazakh),
-    BUSINESS("business", "Деловой", R.drawable.mf_robot_business),
+enum class Costume(
+    val code: String,
+    @DrawableRes val head: Int,
+    @DrawableRes val body: Int,
+    @DrawableRes val armL: Int,
+    @DrawableRes val armR: Int,
+) {
+    CLASSIC("default", R.drawable.mf_bot_head_default, R.drawable.mf_bot_body_default, R.drawable.mf_bot_arml_default, R.drawable.mf_bot_armr_default),
+    KAZAKH("kazakh", R.drawable.mf_bot_head_kazakh, R.drawable.mf_bot_body_kazakh, R.drawable.mf_bot_arml_kazakh, R.drawable.mf_bot_armr_kazakh),
+    BUSINESS("business", R.drawable.mf_bot_head_business, R.drawable.mf_bot_body_business, R.drawable.mf_bot_arml_business, R.drawable.mf_bot_armr_business),
+    GALAXY("galaxy", R.drawable.mf_bot_head_galaxy, R.drawable.mf_bot_body_galaxy, R.drawable.mf_bot_arml_galaxy, R.drawable.mf_bot_armr_galaxy),
     ;
 
+    /** Название по-русски (диагностика); на экране — из ресурсов на языке экрана ([ScreenTexts.costumes]). */
+    val label: String get() = LABELS[ordinal]
+
+    fun next(step: Int): Costume = entries[((ordinal + step) % entries.size + entries.size) % entries.size]
+
     companion object {
+        private val LABELS = listOf("Обычный", "Казахский", "Айтишник", "Космонавт")
+
         fun fromCode(code: String?): Costume = entries.firstOrNull { it.code == code } ?: CLASSIC
     }
 }

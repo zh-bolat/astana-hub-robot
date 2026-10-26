@@ -10,6 +10,7 @@
     <string name="action_guide">Апарып салу: %1$s</string>
     <string name="status_speaking">Сөйлеп тұрмын…</string>
     <string name="offline_badge">Сервермен байланыс жоқ</string>
+    <string name="offline_bar">Серверге қосылым жоқ. Жолды интернетсіз де көрсетемін.</string>
     <string name="input_hint">Сұрақты жазыңыз (дауыстың орнына)</string>
     <string name="action_send">Сұрау</string>
     <string name="action_look">Бұл не?</string>
@@ -47,6 +48,7 @@
     <string name="action_menu">Мәзір</string>
     <string name="action_face">Роботқа</string>
     <string name="face_hint">Сұрағыңызды айтыңыз, тыңдап тұрмын</string>
+    <string name="tap_hint">Мәзірді ашу үшін экранды түртіңіз</string>
     <string name="chat_source">Дереккөз: %1$s</string>
     <string name="chat_sources">Дереккөздер: %1$s</string>
     <string name="action_ask_voice">Дауыспен сұрау</string>
@@ -57,5 +59,13 @@
     <string name="island_stopped">Тоқтадық</string>
     <string name="island_meters">%1$d м</string>
     <string name="island_near">жақын</string>
-    <string name="action_stop_trip">Тоқтату</string>
+    <string name="exit_pin_sub">Тек қызметкер ғана шыға алады. Құпиясөзді енгізіңіз.</string>
+    <string name="exit_pin_wrong">Құпиясөз қате. Қалған әрекет саны: %1$d</string>
+    <string name="exit_pin_locked">Әрекет тым көп. %1$d мин кейін қайталаңыз.</string>
+    <string name="app_closed">Қолданба жабылды</string>
+    <string name="app_reopen">Қайта ашу</string>
+    <string name="costume_default">Әдеттегі</string>
+    <string name="costume_kazakh">Қазақша</string>
+    <string name="costume_business">IT-маман</string>
+    <string name="costume_galaxy">Ғарышкер</string>
 </resources>

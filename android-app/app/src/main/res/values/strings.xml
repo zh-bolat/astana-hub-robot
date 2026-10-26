@@ -15,6 +15,7 @@
     <string name="action_guide">Проводить: %1$s</string>
     <string name="status_speaking">Говорю…</string>
     <string name="offline_badge">Нет связи с сервером</string>
+    <string name="offline_bar">Нет связи с сервером. Дорогу подскажу и без интернета.</string>
     <string name="input_hint">Введите вопрос (вместо голоса)</string>
     <string name="action_send">Спросить</string>
     <string name="action_look">Что это?</string>
@@ -56,6 +57,7 @@
     <string name="action_menu">Меню</string>
     <string name="action_face">К роботу</string>
     <string name="face_hint">Скажите вопрос, я слушаю</string>
+    <string name="tap_hint">Коснитесь экрана, чтобы открыть меню</string>
     <!-- Экран 2 (M3): чат, подпись-источник, голос. -->
     <string name="chat_source">Источник: %1$s</string>
     <string name="chat_sources">Источники: %1$s</string>
@@ -68,5 +70,14 @@
     <string name="island_stopped">Остановились</string>
     <string name="island_meters">%1$d м</string>
     <string name="island_near">рядом</string>
-    <string name="action_stop_trip">Остановить</string>
+    <!-- MF2: прототип mynbay (лицо с подписями, выход по паролю, костюмы). -->
+    <string name="exit_pin_sub">Выйти может только сотрудник. Введите пароль.</string>
+    <string name="exit_pin_wrong">Неверный пароль. Осталось попыток: %1$d</string>
+    <string name="exit_pin_locked">Слишком много попыток. Попробуйте через %1$d мин.</string>
+    <string name="app_closed">Приложение закрыто</string>
+    <string name="app_reopen">Открыть снова</string>
+    <string name="costume_default">Обычный</string>
+    <string name="costume_kazakh">Казахский</string>
+    <string name="costume_business">Айтишник</string>
+    <string name="costume_galaxy">Космонавт</string>
 </resources>

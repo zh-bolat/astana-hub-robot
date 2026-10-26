@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,6 +67,7 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -109,6 +111,8 @@ data class ScreenTexts(
     val showLess: String = "",
     val guideShort: String = "",
     val offline: String = "",
+    /** Полоса «нет связи» на странице приложения (прототип: с подсказкой, что дорогу покажет и без сети). */
+    val offlineBar: String = "",
     val micOff: String = "",
     val exitQuestion: String = "",
     val exitSub: String = "",
@@ -118,6 +122,14 @@ data class ScreenTexts(
     val sourceOne: String = "%1\$s",
     val sourceMany: String = "%1\$s",
     val back: String = "",
+    val closed: String = "",
+    val reopen: String = "",
+    val home: String = "",
+    val menu: String = "",
+    val look: String = "",
+    val faceHint: String = "",
+    val tapHint: String = "",
+    val costumes: List<String> = emptyList(),
 )
 
 /** Частые вопросы (аккордеон по страницам, как на прежнем экране): что раскрыто и что в нём показать. */
@@ -173,11 +185,42 @@ class ScreenTwoState {
     var diagnosticsHold by mutableStateOf(false)
     var reducedMotion by mutableStateOf(false)
 
-    /** Костюм робота-компаньона (только вид). */
+    /** Костюм робота-компаньона (свайп по роботу / точки под ним / диагностика). */
     var costume by mutableStateOf(Costume.CLASSIC)
+
+    /** Что делает робот-компаньон (руки, тело — как в прототипе). */
+    var pose by mutableStateOf(CompanionPose.IDLE)
+
+    /** Сдвиг головы компаньона (dp): живые глаза в экране головы двигаются вместе с ней. */
+    val headBob = headBobState()
+
+    /** Справа — приветствие и плитки (иначе разговор или частые вопросы). */
+    var homeView by mutableStateOf(true)
+
+    /** Разговор на экране — с реплик после последнего «В начало» (id > [chatFrom]); раньше — история выше. */
+    var chatFrom by mutableLongStateOf(0L)
+
+    /** Снимок «Что это?» (прототип): в «думаю» и в карточке ответа [photoItemId] (−1 — ответа ещё нет). */
+    var photo by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    var photoItemId by mutableLongStateOf(-1L)
+
+    /** «Назад» в панели: есть куда вернуться (ответ, частые вопросы). */
+    var canGoBack by mutableStateOf(false)
+
+    /** Чипы мест под ответом «где» (прототип): подписи на языке экрана. */
+    var placeChips by mutableStateOf<List<String>>(emptyList())
 
     /** К лицу можно вернуться (режим agent / live); в legacy главный экран — меню, голова робота не кнопка. */
     var faceAvailable by mutableStateOf(true)
+
+    /** Крестик выхода есть (на роботе без пароля сотрудника — нет: выйти с экрана нельзя; mynbay). */
+    var exitVisible by mutableStateOf(true)
+
+    /** Слой «Приложение закрыто» (прототип) — 1,5 с до закрытия, «Открыть снова» — передумать. */
+    var closed by mutableStateOf(false)
+
+    /** Ответ на вопрос из приложения идёт на лице (mynbay): касание экрана вернёт в приложение — подсказка справа внизу. */
+    var tapToMenu by mutableStateOf(false)
 
     /** Палец на роботе-компаньоне: отклик на touch-down рисует слой лица (глаза сжимаются). */
     val miniPressed = mutableStateOf(false)
@@ -185,7 +228,7 @@ class ScreenTwoState {
     /** Есть полоса предупреждения под панелью (нет связи / микрофон) — основная зона ниже на её высоту. */
     val notice: String?
         get() = when {
-            offline -> texts.offline
+            offline -> texts.offlineBar.ifEmpty { texts.offline }
             micOff -> texts.micOff
             else -> null
         }
@@ -209,6 +252,25 @@ interface ScreenTwoActions {
 
     /** К лицу (тап по роботу-компаньону). */
     fun onClose()
+
+    /** «Открыть снова» на слое «Приложение закрыто». */
+    fun onReopen() {}
+
+    /** «Назад» в панели (история экранов, как в прототипе). */
+    fun onBack() = onFaqBack()
+
+    /** «В начало»: приветствие и плитки. */
+    fun onHome() {}
+
+    /** «Что это?» внизу (снимок камеры). */
+    fun onLook() {}
+
+    /** Чип места под ответом «где» ([ScreenTwoState.placeChips]). */
+    fun onPlace(index: Int) {}
+
+    /** Костюм: точка под роботом или свайп (+1 / −1). */
+    fun onCostume(c: Costume) {}
+    fun onCostumeSwipe(step: Int) {}
 }
 
 /**
@@ -220,26 +282,29 @@ object ScreenTwoLayout {
     val BottomBarHeight = 120.dp
     val LeftWidth = 560.dp
 
-    /** Картинка робота в левой колонке (от верха основной зоны). */
-    val RobotX = 20.dp
-    val RobotY = 2.dp
-    val RobotSize = 520.dp
+    /** Рамка слоёв робота (540 × 580) в левой колонке — от верха основной зоны (сцена: 10, 53). */
+    val RobotX = 10.dp
+    val RobotY = (-35).dp
 
-    /** Чёрный экран головы и область глаз в нём (от верха основной зоны). */
+    /** Чёрный экран головы и область глаз в нём (от верха основной зоны; сцена: 144, 193 и 165, 229). */
     val ScreenX = 144.dp
-    val ScreenY = 102.dp
+    val ScreenY = 105.dp
     val ScreenW = 272.dp
     val ScreenH = 186.dp
     val EyesX = 165.dp
-    val EyesY = 138.dp
+    val EyesY = 141.dp
     val EyesW = 230.dp
     val EyesH = 115.dp
 
     /** Голова целиком (касание — назад к лицу). */
     val HeadX = 124.dp
-    val HeadY = 82.dp
+    val HeadY = 85.dp
     val HeadW = 312.dp
     val HeadH = 232.dp
+
+    /** Под роботом: название костюма и точки (сцена 595), состояние / субтитры (сцена 644–648). */
+    val DotsY = 507.dp
+    val InfoY = 556.dp
 }
 
 /**
@@ -299,7 +364,7 @@ private fun ScreenTwoContent(state: ScreenTwoState, actions: ScreenTwoActions, p
                 val faq = state.faq
                 when {
                     faq != null -> FaqPanel(state, faq, actions)
-                    state.chat.isEmpty() && state.partial == null && !state.thinking -> Home(state, actions)
+                    state.homeView -> Home(state, actions)
                     else -> Conversation(state, actions)
                 }
             }
@@ -325,9 +390,9 @@ private fun TopBar(state: ScreenTwoState, actions: ScreenTwoActions) {
             .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // «Назад» — там, где есть куда вернуться внутри страницы (частые вопросы → плитки).
-        AnimatedVisibility(state.faq != null, enter = fadeIn(HubMotion.Snappy.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
-            BackPill(texts.back, actions::onFaqBack, Modifier.padding(end = 20.dp))
+        // «Назад» — везде, где есть куда вернуться (прототип: всё, кроме приветствия).
+        AnimatedVisibility(state.canGoBack, enter = fadeIn(HubMotion.Snappy.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
+            BackPill(texts.back, actions::onBack, Modifier.padding(end = 20.dp))
         }
         Image(
             painter = painterResource(R.drawable.mf_brand_astana_hub),
@@ -339,10 +404,13 @@ private fun TopBar(state: ScreenTwoState, actions: ScreenTwoActions) {
         )
         Spacer(Modifier.weight(1f))
         LanguageSwitch(state.lang, actions::onLanguage)
-        Spacer(Modifier.width(28.dp))
-        Box(Modifier.width(2.dp).height(44.dp).background(HubColors.Line))
-        Spacer(Modifier.width(28.dp))
-        CircleButton(R.drawable.ic_m_close, actions::onExit)
+        // Разделитель и «×» — только когда выход есть (на роботе без пароля его нет — и черта не висит).
+        if (state.exitVisible) {
+            Spacer(Modifier.width(28.dp))
+            Box(Modifier.width(2.dp).height(44.dp).background(HubColors.Line))
+            Spacer(Modifier.width(28.dp))
+            CircleButton(R.drawable.ic_m_close, actions::onExit)
+        }
     }
 }
 
@@ -357,12 +425,13 @@ private fun Modifier.bottomLine(color: Color): Modifier = drawBehind {
 @Composable
 private fun LeftColumn(state: ScreenTwoState, actions: ScreenTwoActions, modifier: Modifier = Modifier) {
     Box(modifier) {
-        Image(
-            painter = painterResource(state.costume.image),
-            contentDescription = null,
-            modifier = Modifier
-                .offset(ScreenTwoLayout.RobotX, ScreenTwoLayout.RobotY)
-                .size(ScreenTwoLayout.RobotSize),
+        Companion(
+            costume = state.costume,
+            pose = state.pose,
+            headBob = state.headBob,
+            onSwipeCostume = actions::onCostumeSwipe,
+            reducedMotion = state.reducedMotion,
+            modifier = Modifier.offset(ScreenTwoLayout.RobotX, ScreenTwoLayout.RobotY),
         )
         // Тап по голове робота — к лицу (на касание глаза сжимаются: их рисует слой лица).
         Pressable(
@@ -374,10 +443,21 @@ private fun LeftColumn(state: ScreenTwoState, actions: ScreenTwoActions, modifie
                 .size(ScreenTwoLayout.HeadW, ScreenTwoLayout.HeadH),
         ) {}
         val phrase = state.phrase.takeIf { state.speakingId != null }
+        // Прототип: пока звучат субтитры, точки костюмов и состояние уступают место пузырю.
+        AnimatedVisibility(
+            visible = phrase == null,
+            enter = fadeIn(HubMotion.Default.compose()),
+            exit = fadeOut(HubMotion.Snappy.compose()),
+            modifier = Modifier.fillMaxWidth().padding(top = ScreenTwoLayout.DotsY),
+        ) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                CostumeDots(state.costume, state.texts.costumes, actions::onCostume)
+            }
+        }
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(top = BELOW_ROBOT, start = 32.dp, end = 32.dp),
+                .padding(top = if (phrase != null) ScreenTwoLayout.DotsY + 30.dp else ScreenTwoLayout.InfoY + 4.dp, start = 32.dp, end = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             AnimatedContent(
@@ -400,11 +480,11 @@ private fun LeftColumn(state: ScreenTwoState, actions: ScreenTwoActions, modifie
                         )
                         val heard = state.partial
                         if (heard != null) {
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(12.dp))
                             BasicText(
                                 "«$heard»",
                                 style = HubType.Callout.copy(color = HubColors.Muted, textAlign = TextAlign.Center),
-                                maxLines = 3,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(max = 460.dp),
                             )
@@ -420,7 +500,7 @@ private fun LeftColumn(state: ScreenTwoState, actions: ScreenTwoActions, modifie
 @Composable
 private fun SubtitleBubble(phrase: String) {
     val spoken = spokenWords(phrase)
-    val text = remember(phrase, spoken) { liveText(phrase, phrase, spoken) }
+    val text = remember(phrase, spoken) { SubtitleWindow.text(phrase, spoken, HubColors.Faint) }
     val shape = RoundedCornerShape(22.dp)
     Box(contentAlignment = Alignment.TopCenter) {
         Box(
@@ -548,7 +628,11 @@ private fun glyphRes(g: TileGlyph): Int = when (g) {
  */
 @Composable
 private fun Conversation(state: ScreenTwoState, actions: ScreenTwoActions) {
-    val chat = state.chat
+    // Прототип: после «В начало» справа только новый вопрос и ответ. Если после черты пусто (вернулись «Назад»
+    // к старому ответу) — весь чат.
+    val all = state.chat
+    val from = state.chatFrom
+    val chat = remember(all, from) { all.filter { it.id > from }.ifEmpty { all } }
     val listState = rememberLazyListState()
     val lastId = chat.lastOrNull()?.id
     val tail = state.partial != null || state.thinking
@@ -563,13 +647,25 @@ private fun Conversation(state: ScreenTwoState, actions: ScreenTwoActions) {
                 reverseLayout = true,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp, start = 4.dp, end = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.Bottom),
+                // Как в прототипе: вопрос и ответ — сверху; когда разговор длиннее экрана, внизу — последнее.
+                verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.Top),
             ) {
                 if (tail) {
                     item(key = "tail") {
                         Box(Modifier.animateItem(fadeInSpec = HubMotion.Default.compose(), fadeOutSpec = HubMotion.Snappy.compose())) {
                             val partial = state.partial
-                            if (partial != null) QuestionLine("«$partial…»", live = true) else TypingDots()
+                            val photo = state.photo
+                            when {
+                                partial != null -> QuestionLine("«$partial…»", live = true)
+                                // Прототип «Что это?»: карточка со снимком и точками «думаю».
+                                photo != null && state.photoItemId < 0 -> Column(
+                                    Modifier.fillMaxWidth().card(RoundedCornerShape(28.dp)).padding(horizontal = 32.dp, vertical = 28.dp),
+                                ) {
+                                    LookPhotoImage(photo)
+                                    TypingDots()
+                                }
+                                else -> TypingDots()
+                            }
                         }
                     }
                 }
@@ -588,8 +684,9 @@ private fun Conversation(state: ScreenTwoState, actions: ScreenTwoActions) {
                                 speaking = item.id == state.speakingId,
                                 phrase = state.phrase,
                                 texts = state.texts,
-                                guideLabel = state.guideLabel.takeIf { item.id == lastRobotId },
-                                onGuide = actions::onGuide,
+                                last = item.id == lastRobotId,
+                                state = state,
+                                actions = actions,
                             )
                         }
                     }
@@ -604,8 +701,6 @@ private fun Conversation(state: ScreenTwoState, actions: ScreenTwoActions) {
                     .background(Brush.verticalGradient(listOf(HubColors.Background, HubColors.Background.copy(alpha = 0f)))),
             )
         }
-        Spacer(Modifier.height(16.dp))
-        TileChips(state, actions)
     }
 }
 
@@ -628,8 +723,9 @@ private fun AnswerCard(
     speaking: Boolean,
     phrase: String?,
     texts: ScreenTexts,
-    guideLabel: String?,
-    onGuide: () -> Unit,
+    last: Boolean,
+    state: ScreenTwoState,
+    actions: ScreenTwoActions,
 ) {
     val active = speaking && phrase != null && item.text.endsWith(phrase)
     val spoken = spokenWords(if (active) phrase else null)
@@ -641,16 +737,34 @@ private fun AnswerCard(
     val caption = remember(item.citations, texts) {
         Tiles.sourceCaption(item.citations, { texts.sourceOne.format(it) }, { texts.sourceMany.format(it) })
     }
+    // «Показать полностью / Свернуть» (прототип): длинный ответ свёрнут до 4 строк, пока не звучит.
+    var full by remember(item.id) { mutableStateOf(false) }
+    var overflow by remember(item.id) { mutableStateOf(false) }
     val shape = RoundedCornerShape(28.dp)
     Column(Modifier.fillMaxWidth()) {
-        Box(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .card(shape)
                 .then(if (speaking) Modifier.animateContentSize(HubMotion.Default.compose()) else Modifier)
                 .padding(horizontal = 32.dp, vertical = 28.dp),
         ) {
-            BasicText(text, style = HubType.Answer.copy(color = HubColors.Ink))
+            val photo = state.photo
+            if (photo != null && item.id == state.photoItemId) {
+                LookPhotoImage(photo)
+                Spacer(Modifier.height(20.dp))
+            }
+            BasicText(
+                text,
+                style = HubType.Answer.copy(color = HubColors.Ink),
+                maxLines = if (full || speaking) Int.MAX_VALUE else ANSWER_LINES,
+                overflow = TextOverflow.Ellipsis,
+                onTextLayout = { r -> if (!full && !speaking) overflow = r.hasVisualOverflow },
+            )
+            if ((overflow || full) && !speaking) {
+                Spacer(Modifier.height(10.dp))
+                LinkButton(if (full) texts.showLess else texts.showMore) { full = !full }
+            }
         }
         if (caption != null) {
             Spacer(Modifier.height(10.dp))
@@ -662,9 +776,53 @@ private fun AnswerCard(
                 modifier = Modifier.padding(horizontal = 8.dp).appear(),
             )
         }
-        if (guideLabel != null) {
-            Spacer(Modifier.height(18.dp))
-            HubPill(guideLabel, onGuide, glyph = R.drawable.ic_m_guide, modifier = Modifier.appear())
+        val way = state.wayHint
+        if (last && way != null) {
+            Spacer(Modifier.height(16.dp))
+            Chip(way, R.drawable.ic_m_guide, enabled = true, onClick = actions::onGuide, clickable = state.guideLabel != null)
+        }
+        if (last && state.placeChips.isNotEmpty() && !state.busy) {
+            Spacer(Modifier.height(24.dp))
+            FlowChips(state.placeChips, actions::onPlace)
+        }
+    }
+}
+
+/** Снимок «Что это?» в карточке (прототип: 312 × 190, скругление 14). */
+@Composable
+private fun LookPhotoImage(photo: androidx.compose.ui.graphics.ImageBitmap) {
+    val shape = RoundedCornerShape(14.dp)
+    Image(
+        bitmap = photo,
+        contentDescription = null,
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        modifier = Modifier
+            .size(LOOK_PHOTO_W, LOOK_PHOTO_H)
+            .clip(shape)
+            .border(1.dp, HubColors.Border, shape),
+    )
+}
+
+private val LOOK_PHOTO_W = 312.dp
+private val LOOK_PHOTO_H = 190.dp
+
+/** Текстовая ссылка прототипа (`.link-btn`): синяя, полужирная. */
+@Composable
+private fun LinkButton(label: String, onClick: () -> Unit) {
+    Pressable(onClick = onClick, modifier = Modifier.height(48.dp), contentAlignment = Alignment.CenterStart) {
+        BasicText(label, style = HubType.Callout.copy(color = HubColors.Blue, fontWeight = FontWeight.SemiBold))
+    }
+}
+
+/** Чипы мест (прототип `.chips`): переносятся строками, отступ 24 dp. */
+@Composable
+private fun FlowChips(labels: List<String>, onClick: (Int) -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        labels.forEachIndexed { i, label ->
+            Chip(label, R.drawable.ic_m_place, enabled = true, onClick = { onClick(i) })
         }
     }
 }
@@ -685,7 +843,7 @@ private val pacer = SubtitlePacer()
 
 /** Сколько слов фразы уже «сказано» (по темпу речи); null — фраза не звучит. Пересчёт — раз в ~50 мс. */
 @Composable
-private fun spokenWords(phrase: String?): Int {
+internal fun spokenWords(phrase: String?): Int {
     val plan = remember(phrase) { phrase?.let(pacer::plan).orEmpty() }
     var spoken by remember(phrase) { mutableIntStateOf(0) }
     LaunchedEffect(plan) {
@@ -737,11 +895,11 @@ private fun TileChips(state: ScreenTwoState, actions: ScreenTwoActions) {
 }
 
 @Composable
-private fun Chip(label: String, @DrawableRes glyph: Int, enabled: Boolean, onClick: () -> Unit) {
+private fun Chip(label: String, @DrawableRes glyph: Int, enabled: Boolean, onClick: () -> Unit, clickable: Boolean = true) {
     val shape = RoundedCornerShape(percent = 50)
     Pressable(
         onClick = onClick,
-        enabled = enabled,
+        enabled = enabled && clickable,
         modifier = Modifier
             .height(72.dp)
             .background(HubColors.ChipBg, shape)
@@ -792,11 +950,7 @@ private fun FaqPanel(state: ScreenTwoState, faq: FaqUi, actions: ScreenTwoAction
                 }
             }
         }
-        val more = faq.more
-        if (more != null) {
-            Spacer(Modifier.height(16.dp))
-            HubPill(more, actions::onFaqMore, primary = false, glyph = R.drawable.ic_m_chevron)
-        }
+
     }
 }
 
@@ -871,40 +1025,33 @@ private fun FaqRow(
 @Composable
 private fun BottomBar(state: ScreenTwoState, actions: ScreenTwoActions, modifier: Modifier = Modifier) {
     val texts = state.texts
+    val home = state.homeView && state.faq == null
     Box(
         modifier
             .fillMaxWidth()
             .height(ScreenTwoLayout.BottomBarHeight)
             .padding(horizontal = 40.dp),
     ) {
+        // Слева — «В начало» (всё, кроме приветствия).
         AnimatedVisibility(
-            visible = state.wayHint != null,
+            visible = !home,
             enter = fadeIn(HubMotion.Default.compose()),
             exit = fadeOut(HubMotion.Snappy.compose()),
             modifier = Modifier.align(Alignment.CenterStart),
         ) {
-            val shape = RoundedCornerShape(percent = 50)
-            Row(
-                Modifier
-                    .height(72.dp)
-                    .background(HubColors.ChipBg, shape)
-                    .border(1.dp, HubColors.ChipBorder, shape)
-                    .padding(horizontal = 26.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Glyph(R.drawable.ic_m_guide, 30.dp, HubColors.BlueText)
-                Spacer(Modifier.width(12.dp))
-                BasicText(
-                    state.wayHint.orEmpty(),
-                    style = HubType.Callout.copy(color = HubColors.BlueText, fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 480.dp),
-                )
-            }
+            HubPill(texts.home, actions::onHome, glyph = R.drawable.ic_m_home, primary = false)
+        }
+        // В центре — по состоянию: «Стоп» (думает / говорит), «Ещё вопросы» (частые вопросы), «Проводить: X»
+        // (ответ с местом), иначе — «Спросить голосом».
+        val faq = state.faq
+        val center = when {
+            state.busy -> 1
+            faq != null && faq.more != null -> 2
+            state.guideLabel != null && !home -> 3
+            else -> 0
         }
         AnimatedContent(
-            targetState = state.busy,
+            targetState = center,
             transitionSpec = {
                 (fadeIn(HubMotion.Default.compose()) + scaleIn(HubMotion.Default.compose(), initialScale = 0.94f))
                     .togetherWith(fadeOut(HubMotion.Snappy.compose()) + scaleOut(HubMotion.Snappy.compose(), targetScale = 0.94f))
@@ -912,19 +1059,32 @@ private fun BottomBar(state: ScreenTwoState, actions: ScreenTwoActions, modifier
             },
             contentAlignment = Alignment.Center,
             modifier = Modifier.align(Alignment.Center),
-            label = "askStop",
-        ) { busy ->
-            if (busy) {
-                HubPill(texts.stop, actions::onStop, glyph = R.drawable.ic_m_stop, kind = PillKind.STOP)
-            } else {
-                // Посетитель говорит — кнопка показывает, что робот слушает (не предлагает «спросить» ещё раз).
-                val hearing = state.partial != null
-                AskVoice(if (hearing) state.status else texts.askVoice, actions::onAskVoice, enabled = !state.micOff && !hearing, live = hearing)
+            label = "bottomCenter",
+        ) { c ->
+            when (c) {
+                1 -> HubPill(texts.stop, actions::onStop, glyph = R.drawable.ic_m_stop, kind = PillKind.STOP)
+                2 -> HubPill(faq?.more.orEmpty(), actions::onFaqMore, glyph = R.drawable.ic_m_chevron, primary = false)
+                3 -> HubPill(state.guideLabel.orEmpty(), actions::onGuide, glyph = R.drawable.ic_m_guide)
+                else -> {
+                    // Посетитель говорит — кнопка показывает, что робот слушает (не предлагает «спросить» ещё раз).
+                    val hearing = state.partial != null
+                    AskVoice(if (hearing) state.status else texts.askVoice, actions::onAskVoice, enabled = !state.micOff && !hearing, live = hearing)
+                }
             }
         }
-        Column(Modifier.align(Alignment.CenterEnd), horizontalAlignment = Alignment.End) {
+        // Справа — «Что это?» (на ответе, не занят) и поле ввода (только эмулятор).
+        Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+            val look = !home && faq == null && !state.busy
             if (state.textInput) {
-                TextInput(texts.inputHint, enabled = !state.thinking, onSend = actions::onSend, modifier = Modifier.width(470.dp))
+                // Поле (эмулятор) уже, когда рядом «Что это?»: не наезжает на кнопку в центре.
+                TextInput(texts.inputHint, enabled = !state.thinking, onSend = actions::onSend, modifier = Modifier.width(if (look) 280.dp else 400.dp))
+            }
+            AnimatedVisibility(
+                visible = look,
+                enter = fadeIn(HubMotion.Default.compose()),
+                exit = fadeOut(HubMotion.Snappy.compose()),
+            ) {
+                HubPill(texts.look, actions::onLook, glyph = R.drawable.ic_m_camera, primary = false, modifier = Modifier.padding(start = 16.dp))
             }
         }
         BasicText(
@@ -1063,6 +1223,7 @@ fun DialogCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
 }
 
 private val TILE_GAP = 24.dp
+private const val ANSWER_LINES = 4
 private val TILE_HEIGHT = 156.dp
 private const val TILE_COLUMNS = 3
 private val CHAT_FADE = 32.dp
