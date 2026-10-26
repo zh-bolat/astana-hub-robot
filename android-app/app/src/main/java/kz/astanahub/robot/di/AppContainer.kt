@@ -39,6 +39,7 @@ import kz.astanahub.robot.audio.VadConfig
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.voice.RoutingVoiceGateway
 import kz.astanahub.robot.voice.ServerVoiceGateway
@@ -141,10 +142,13 @@ class AppContainer(app: Application) {
     /** Один OkHttpClient на приложение: пул соединений и потоки общие; клиенты — через newBuilder() от него. */
     val httpClient: OkHttpClient = RetrofitBackendApi.defaultClient()
 
+    /** Голос серверного TTS (`X-TTS-Voice`): сменился — кеш готовых фраз синтезируется заново. */
+    val ttsVoice = kz.astanahub.robot.backend.TtsVoiceMonitor()
+
     /** Адрес сервера меняется на экране диагностики без пересборки; токен — из BuildConfig. */
     val backend: SwitchableBackendApi = SwitchableBackendApi(
         initialUrl = backendSettings.current(),
-        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient) },
+        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient, voiceMonitor = ttsVoice) },
         // Без адреса: эмулятор — заглушка, робот — честное «нет связи».
         fallback = { if (BuildConfig.IS_ROBOT) UnconfiguredBackendApi() else FakeBackendApi() },
     )
@@ -208,7 +212,11 @@ class AppContainer(app: Application) {
     }
 
     /** Синтез кеша фраз: при старте — недостающие, при смене сервера — все заново, при восстановлении связи — недостающие. */
-    val phraseCacheWarmer = PhraseCacheWarmer(backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val phraseCacheWarmer = PhraseCacheWarmer(
+        backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        voiceMonitor = ttsVoice,
+        voiceStamp = kz.astanahub.robot.backend.FileVoiceStamp(java.io.File(app.filesDir, "voice_cache.voice")),
+    )
 
     /**
      * Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики.
@@ -239,6 +247,10 @@ class AppContainer(app: Application) {
         }
         appScope.launch {
             voice.connection.filter { it }.collect { phraseCacheWarmer.warmUp(force = false) }
+        }
+        // Голос сервера сменился (`X-TTS-Voice` в любом ответе /v1/tts) — кеш фраз заново.
+        appScope.launch {
+            ttsVoice.voice.filterNotNull().distinctUntilChanged().collect { phraseCacheWarmer.onVoice(it) }
         }
     }
 }

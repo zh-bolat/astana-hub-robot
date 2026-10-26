@@ -106,4 +106,53 @@ class PhraseCacheTest {
         PhraseCacheWarmer(backend, cache, phrases, backgroundScope).run(force = false)
         assertFalse(cache.has("фраза прошлой версии", Lang.RU))
     }
+
+    @Test
+    fun `server voice changed - the phrase cache is dropped and synthesized again with the new voice`() = runTest {
+        val monitor = kz.astanahub.robot.backend.TtsVoiceMonitor()
+        var serverVoice = "alina"
+        val backend = mockk<BackendApi>()
+        coEvery { backend.tts(any(), any()) } answers {
+            monitor.seen(serverVoice) // как RetrofitBackendApi: заголовок X-TTS-Voice каждого ответа
+            ApiResult.Success("$serverVoice:${firstArg<String>()}".toByteArray())
+        }
+        val cache = PhraseAudioCache(MemoryAudioStore())
+        val stamp = kz.astanahub.robot.backend.MemoryVoiceStamp()
+        val total = Lang.entries.sumOf { CachedPhrases.units(phrases, it).size }
+        PhraseCacheWarmer(backend, cache, phrases, backgroundScope, voiceMonitor = monitor, voiceStamp = stamp).run(force = false)
+        assertEquals("alina", stamp.get())
+        assertEquals(total, cache.size())
+
+        // Перезапуск приложения: всё в кеше, но голос на сервере уже другой — проверка первым куском.
+        serverVoice = "dmitry"
+        val monitor2 = kz.astanahub.robot.backend.TtsVoiceMonitor()
+        coEvery { backend.tts(any(), any()) } answers {
+            monitor2.seen(serverVoice)
+            ApiResult.Success("$serverVoice:${firstArg<String>()}".toByteArray())
+        }
+        val warmer = PhraseCacheWarmer(backend, cache, phrases, backgroundScope, voiceMonitor = monitor2, voiceStamp = stamp)
+        warmer.run(force = false)
+        assertEquals("dmitry", stamp.get())
+        // Сброс запустил полный проход заново — дождаться его.
+        testScheduler.runCurrent()
+        assertEquals("status ${warmer.status.value}", total, cache.size())
+        assertArrayEquals("dmitry:GREETING ru.".toByteArray(), cache.get("GREETING ru.", Lang.RU))
+        assertFalse(warmer.onVoice("dmitry")) // тот же голос — ничего не трогаем
+    }
+
+    @Test
+    fun `same server voice - cached phrases stay, only one probe request`() = runTest {
+        val monitor = kz.astanahub.robot.backend.TtsVoiceMonitor()
+        val backend = mockk<BackendApi>()
+        coEvery { backend.tts(any(), any()) } answers {
+            monitor.seen("dmitry")
+            ApiResult.Success(byteArrayOf(1))
+        }
+        val cache = PhraseAudioCache(MemoryAudioStore())
+        Lang.entries.forEach { lang -> CachedPhrases.units(phrases, lang).forEach { cache.put(it, lang, byteArrayOf(2)) } }
+        val stamp = kz.astanahub.robot.backend.MemoryVoiceStamp("dmitry")
+        PhraseCacheWarmer(backend, cache, phrases, backgroundScope, voiceMonitor = monitor, voiceStamp = stamp).run(force = false)
+        coVerify(exactly = 1) { backend.tts(any(), any()) }
+        assertEquals("dmitry", stamp.get())
+    }
 }
