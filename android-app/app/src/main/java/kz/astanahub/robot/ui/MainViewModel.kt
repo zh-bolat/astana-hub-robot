@@ -163,6 +163,8 @@ class MainViewModel(
      * null — без периодической проверки (тесты); на старте сессии и после поездки фразы уходят всегда.
      */
     private val liveDirectionsPeriodMillis: Long? = null,
+    /** VAD: посетитель говорит (AudioLevels.voice) — голос будит из сна; null — нет (тесты). */
+    private val visitorVoice: Flow<Boolean>? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -320,6 +322,7 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        visitorVoice?.let { flow -> viewModelScope.launch { flow.collect { if (it) onVisitorVoice() } } }
         viewModelScope.launch {
             _state.map { it.answer }.distinctUntilChanged().collect { answerChangedAt = clock() }
         }
@@ -937,6 +940,27 @@ class MainViewModel(
         requestJob?.cancel()
         voice.stopSpeaking()
         setBusy(null)
+    }
+
+    /**
+     * Посетитель заговорил (VAD) — разбудить сразу, не дожидаясь первого распознанного слова. Те же правила, что у
+     * распознанной речи: спит, а PersonApi рядом никого не видит, — голос не будит (разговоры вдалеке).
+     */
+    private fun onVisitorVoice() {
+        if (_state.value.mode != ScreenMode.SLEEP || voiceIgnoredAsleep()) return
+        Timber.i("visitor voice (VAD) → wake")
+        wake()
+    }
+
+    /**
+     * Тап по лицу в поездке, пока робот говорит: замолчать (фраза пути, приезд), а поездка продолжается —
+     * её останавливает только «Стоп» на острове.
+     */
+    fun interruptSpeech() {
+        wake()
+        voice.stopSpeaking()
+        live?.interrupt()
+        if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
     }
 
     /** Только отладка на эмуляторе (FaceDebug, adb broadcast): уснуть сейчас, не дожидаясь таймера. */

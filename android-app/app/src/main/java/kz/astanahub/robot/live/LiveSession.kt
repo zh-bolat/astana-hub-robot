@@ -243,11 +243,11 @@ class LiveSession(
             }
             LiveEvent.Listening -> emit(LiveSignal.Listening)
             LiveEvent.UserSpeaking -> if (!echoGuard()) {
-                levels?.reportVoice(true) // VAD сервера: лицо «слушает»
+                levels?.reportVoice(true, sticky = true) // VAD сервера: лицо «слушает» до user_final
                 emit(LiveSignal.UserSpeaking)
             }
             is LiveEvent.UserPartial -> if (!echoGuard()) {
-                levels?.reportVoice(true)
+                levels?.reportVoice(true, sticky = true)
                 emit(LiveSignal.UserPartial(event.text))
             }
             is LiveEvent.UserFinal -> {

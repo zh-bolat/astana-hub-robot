@@ -113,6 +113,31 @@ class AudioLevelsTest {
     }
 
     @Test
+    fun `app vad goes stale in a second, server vad holds until its final`() {
+        levels.reportVoice(true)
+        now += AudioLevels.VOICE_STALE_FREQUENT_MS + 1
+        assertEquals("frequent source stopped reporting", false, levels.voiceActive())
+        levels.reportVoice(true, sticky = true)
+        now += 5_000
+        assertEquals("server said user_speaking once", true, levels.voiceActive())
+        now += AudioLevels.VOICE_STALE_MS
+        assertEquals(false, levels.voiceActive())
+    }
+
+    @Test
+    fun `voice flow follows reports and debug voice`() {
+        assertEquals(false, levels.voice.value)
+        levels.reportVoice(true)
+        assertEquals(true, levels.voice.value)
+        levels.reportVoice(false)
+        assertEquals(false, levels.voice.value)
+        levels.debugMic = true
+        assertEquals(true, levels.voice.value)
+        levels.debugMic = false
+        assertEquals(false, levels.voice.value)
+    }
+
+    @Test
     fun `debug hall noise is loud but not a voice`() {
         levels.debugNoise = true
         assertEquals(AudioLevels.DEBUG_NOISE_RMS, levels.micLevel(), 0f)

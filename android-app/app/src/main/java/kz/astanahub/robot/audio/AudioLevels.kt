@@ -2,6 +2,8 @@ package kz.astanahub.robot.audio
 
 import kotlin.math.sqrt
 import kotlin.random.Random
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kz.astanahub.robot.ui.face.FaceAudioSource
 import kz.astanahub.robot.ui.face.SpeechSynth
 
@@ -21,13 +23,26 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
     @Volatile private var micAt = Long.MIN_VALUE / 2
     @Volatile private var play = 0f
     @Volatile private var playAt = Long.MIN_VALUE / 2
-    @Volatile private var voice = false
+    @Volatile private var voiceNow = false
     @Volatile private var voiceAt = Long.MIN_VALUE / 2
+    @Volatile private var voiceStaleMs = VOICE_STALE_MS
+
+    private val _voice = MutableStateFlow(false)
+
+    /**
+     * VAD как поток (без устаревания) — для MainViewModel: голос будит из сна. Кадр лица читает [voiceActive]
+     * (с устареванием); поток меняется только на смене значения (StateFlow сам отбрасывает повторы).
+     */
+    val voice: StateFlow<Boolean> = _voice
 
     /** Речь live-режима: громкость по PCM в момент, который реально звучит из динамика. */
     val pcm = PcmPlaybackMeter(clockMs)
 
     @Volatile var debugMic: Boolean = false
+        set(value) {
+            field = value
+            _voice.value = value
+        }
     @Volatile var debugPlayback: Boolean = false
 
     /** Отладка: постоянный гул зала (громкость без речи — VAD молчит). */
@@ -46,14 +61,18 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
      * в ServerVoiceGateway) и `user_speaking` … `user_final` сервера (LiveSession). Не обновлялся [VOICE_STALE_MS] —
      * считается тишиной (источник оборвался, не сказав «замолчал»).
      */
-    fun reportVoice(active: Boolean) {
-        voice = active
+    fun reportVoice(active: Boolean, sticky: Boolean = false) {
+        voiceNow = active
         voiceAt = clockMs()
+        // Частые источники (VAD приложения — каждый кусок 40–100 мс) устаревают за секунду; редкие (сервер шлёт
+        // `user_speaking` раз, конец — `user_final`) держатся до [VOICE_STALE_MS].
+        voiceStaleMs = if (sticky) VOICE_STALE_MS else VOICE_STALE_FREQUENT_MS
+        _voice.value = active
     }
 
     override fun voiceActive(): Boolean {
         if (debugMic) return true
-        return voice && clockMs() - voiceAt <= VOICE_STALE_MS
+        return voiceNow && clockMs() - voiceAt <= voiceStaleMs
     }
 
     /** Уровень речи робота 0..1, измеренный не по PCM (Visualizer). */
@@ -81,8 +100,11 @@ class AudioLevels(private val clockMs: () -> Long = { System.nanoTime() / 1_000_
         /** Уровень старше — уже не «сейчас» (поток записи остановлен). */
         const val FRESH_MS = 250L
 
-        /** VAD без обновлений столько — тишина. Сервер шлёт `user_speaking` один раз, конец — `user_final`: до 8 с. */
+        /** VAD сервера без обновлений столько — тишина. Сервер шлёт `user_speaking` один раз, конец — `user_final`. */
         const val VOICE_STALE_MS = 8_000L
+
+        /** VAD приложения шлёт состояние на каждый кусок звука — оборвался, значит, через секунду тишина. */
+        const val VOICE_STALE_FREQUENT_MS = 1_000L
 
         /** Гул зала для отладки: −30 дБFS (вентиляция и толпа в атриуме). */
         const val DEBUG_NOISE_RMS = 0.03f
