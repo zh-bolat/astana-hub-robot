@@ -569,7 +569,7 @@ def test_visitor_arrived_slow_model_uses_ready_greeting(make_client):
 
     evs = events(client, "", lang="en", event="visitor_arrived")
 
-    assert evs[0] == ("phrase", {"text": "Hello!"})
+    assert evs[0] == ("phrase", {"text": "Hi there!"})
     assert evs[-1][0] == "done"
 
 
