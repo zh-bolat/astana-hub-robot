@@ -360,6 +360,37 @@ class FaceEngineTest {
     }
 
     @Test
+    fun `every tap in silence gets a visible reaction - a blink in progress counts, right after one blinks again`() {
+        // Ревью M2-r1, M1: тап сразу после моргания оставался без реакции (reflex NONE).
+        for (seed in 1L..6L) {
+            val e = engine(seed = seed)
+            e.frames(60)
+            repeat(40) { i ->
+                e.frames(22 + (i % 5)) // тапы раз в ~370–430 мс — чаще моргают сами
+                assertTrue("seed $seed tap $i", e.reflex() != FaceEngine.Reflex.NONE)
+            }
+        }
+    }
+
+    @Test
+    fun `petted while speaking - the happy mouth still moves with the speech`() {
+        // Ревью M2-r1, M3: у PETTED рот молчал во время речи.
+        val e = engine()
+        e.inputs.activity = FaceActivity.SPEAKING
+        e.inputs.petting = true
+        e.frames(60)
+        var lo = Float.MAX_VALUE
+        var hi = -Float.MAX_VALUE
+        e.frames(180) {
+            lo = minOf(lo, it.pose[P.MOUTH_OPEN])
+            hi = maxOf(hi, it.pose[P.MOUTH_OPEN])
+        }
+        assertEquals(FaceMood.PETTED, e.director.mood)
+        assertTrue("mouth moves with speech while petted: ${hi - lo}", hi - lo > 0.15f)
+        e.inputs.petting = false
+    }
+
+    @Test
     fun `no tap reflex while asleep or petted`() {
         val e = engine()
         e.director.forcedMood = FaceMood.SLEEP
