@@ -47,6 +47,25 @@ import kz.astanahub.robot.ui.face.SwipeHandle
 import kz.astanahub.robot.ui.face.Island
 import kz.astanahub.robot.ui.face.faceGestures
 import kz.astanahub.robot.ui.face.faceSurface
+import kz.astanahub.robot.ui.face.GuideLayer
+import kz.astanahub.robot.ui.design.HubType
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlin.math.pow
 
 /** Что экраны просят у MainActivity (кроме действий экрана 2). */
 interface RobotScreensHost {
@@ -87,6 +106,8 @@ fun RobotScreens(
     two: ScreenTwoState,
     actions: ScreenTwoActions,
     host: RobotScreensHost,
+    pin: PinPadState = remember { PinPadState() },
+    pinActions: PinPadActions? = null,
 ) {
     val screen = face.screen
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -167,17 +188,26 @@ fun RobotScreens(
         settle(from, to, r)
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(HubColors.Black)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(HubColors.Background)) {
         val density = LocalDensity.current
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
+        // Слот лица — экран головы робота-компаньона в левой колонке (ниже, если открыта полоса «нет связи»).
+        val mainTop = ScreenTwoLayout.TopBarHeight + if (two.notice != null) NOTICE_HEIGHT else 0.dp
         val slotCx: Float
         val slotCy: Float
         val slotH: Float
+        val screenRect = remember { FloatArray(4) }
+        val screenRadius: Float
         with(density) {
-            slotCx = (ScreenTwoLayout.SidePadding + ScreenTwoLayout.SlotWidth / 2).toPx()
-            slotCy = (ScreenTwoLayout.HeaderHeight / 2).toPx()
-            slotH = ScreenTwoLayout.MiniFaceHeight.toPx()
+            slotCx = (ScreenTwoLayout.EyesX + ScreenTwoLayout.EyesW / 2).toPx()
+            slotCy = (mainTop + ScreenTwoLayout.EyesY + ScreenTwoLayout.EyesH / 2).toPx()
+            slotH = ScreenTwoLayout.EyesH.toPx()
+            screenRect[0] = ScreenTwoLayout.ScreenX.toPx()
+            screenRect[1] = (mainTop + ScreenTwoLayout.ScreenY).toPx()
+            screenRect[2] = ScreenTwoLayout.ScreenW.toPx()
+            screenRect[3] = ScreenTwoLayout.ScreenH.toPx()
+            screenRadius = SCREEN_RADIUS.toPx()
         }
         val menuOpenNow by rememberUpdatedState(screen.menuOpen)
         val blur by animateFloatAsState(if (two.exitConfirm) 1f else 0f, HubMotion.Default.compose(), label = "exitBlur")
@@ -188,14 +218,17 @@ fun RobotScreens(
             label = "miniPress",
         )
 
-        // Экран 2: левая кромка — за пальцем; закрытие — свайп вправо (горизонтальный, чат прокручивается по вертикали).
+        // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
+        // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
+        val settled by remember { derivedStateOf { visual() >= 0.98f && !progress.isRunning } }
         ScreenTwo(
             state = two,
             actions = actions,
             progress = ::visual,
+            interactive = settled,
             modifier = Modifier
                 .graphicsLayer {
-                    translationX = w * (1f - visual())
+                    translationX = if (visual() > 1f) -(visual() - 1f) * w else 0f
                     // Материал диалога выхода: экран под ним размывается (API 31+); на старых — только затемнение.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blur > 0.01f) {
                         val r = blur * EXIT_BLUR_DP.dp.toPx()
@@ -227,6 +260,30 @@ fun RobotScreens(
                     onDragStopped = { velocity -> release(velocity, w, allowOpen = true) },
                 ),
         )
+
+        // Чёрный экран лица: от всего экрана к экрану головы робота (скругление растёт) — как в прототипе; в покое на
+        // странице приложения его нет (экран головы — на картинке робота).
+        Canvas(Modifier.fillMaxSize()) {
+            val p = visual()
+            if (p >= 1f) return@Canvas
+            val mini = FaceMorph.miniScale(w, h, slotH)
+            val pc = p.coerceIn(0f, 1f)
+            val s = mini.pow(pc)
+            val t = if (mini < 0.999f) ((1f - s) / (1f - mini)).coerceIn(0f, 1f) else pc
+            val shift = if (p < 0f) -p * w else 0f
+            val left = screenRect[0] * t + shift
+            val top = screenRect[1] * t
+            val right = w + (screenRect[0] + screenRect[2] - w) * t + shift
+            val bottom = h + (screenRect[1] + screenRect[3] - h) * t
+            val r = screenRadius * t
+            drawRoundRect(
+                color = Color.Black,
+                topLeft = Offset(left, top),
+                size = Size(right - left, bottom - top),
+                cornerRadius = CornerRadius(r * 1.2f, r),
+                alpha = 1f - 0.6f * blur,
+            )
+        }
 
         // Лицо: одна поверхность на оба экрана, преобразование — по прогрессу перехода.
         Box(
@@ -291,14 +348,29 @@ fun RobotScreens(
                 reducedMotion = reduced,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
             )
-            // Остров — только на экране лица (на экране 2 «где» и «Проводить» уже в чате).
+            // Нет связи — и на экране лица видно (не только тишина): янтарная плашка сверху.
+            AnimatedVisibility(
+                visible = two.offline && !screen.asleep && screenOne,
+                enter = fadeIn(HubMotion.Default.compose()),
+                exit = fadeOut(HubMotion.Default.compose()),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 28.dp),
+            ) {
+                OfflinePill(two.texts.offline)
+            }
+            // Сон: приветствие внизу по очереди на трёх языках (прототип, заставка).
+            SleepGreeting(visible = screen.asleep && screenOne, modifier = Modifier.align(Alignment.BottomCenter))
+            // Поездка — светлый слой прототипа поверх лица (стрелка, «Иду к…», «Стоп»), «где» — карточка внизу.
+            GuideLayer(
+                content = screen.island.takeIf { !screen.menuOpen },
+                texts = screen.islandTexts,
+                onStop = { hostNow.onTravelStop() },
+            )
             Island(
                 content = screen.island.takeIf { !screen.menuOpen },
                 texts = screen.islandTexts,
                 guideAvailable = screen.islandGuide,
-                onStop = { hostNow.onTravelStop() },
                 onGuide = { hostNow.onIslandGuide() },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp),
             )
         }
 
@@ -309,11 +381,65 @@ fun RobotScreens(
         ) {
             ExitDialog(two.texts, actions)
         }
+        if (pinActions != null) PinPad(pin, pinActions)
     }
 }
 
 /** Мини-лицо под пальцем (тап по нему — к лицу): сжимается, как кнопка (apple-design: отклик на touch-down). */
 private const val MINI_PRESS_SCALE = 0.9f
+
+/** Плашка «нет связи» на экране лица — янтарная, как полоса прототипа. */
+@Composable
+private fun OfflinePill(text: String) {
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
+    androidx.compose.foundation.layout.Row(
+        Modifier
+            .background(HubColors.AmberBg, shape)
+            .padding(horizontal = 32.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.padding(end = 14.dp).background(HubColors.AmberFg, androidx.compose.foundation.shape.CircleShape).padding(7.dp))
+        BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), maxLines = 1)
+    }
+}
+
+/** Скругление экрана головы робота (прототип: 40 % / 48 % от экрана 272 × 186). */
+private val SCREEN_RADIUS = 86.dp
+
+/**
+ * Заставка сна (прототип): «Здравствуйте! / Подойдите и спросите» внизу, по очереди на русском, казахском и английском,
+ * ~7 с каждая, мягкая смена.
+ */
+@Composable
+private fun SleepGreeting(visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible, modifier = modifier, enter = fadeIn(HubMotion.Gentle.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
+        var i by remember { mutableIntStateOf(0) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(SLEEP_LINE_MS)
+                i = (i + 1) % SLEEP_LINES.size
+            }
+        }
+        AnimatedContent(
+            targetState = i,
+            transitionSpec = { fadeIn(tween(600)).togetherWith(fadeOut(tween(600))) },
+            label = "sleepLine",
+        ) { k ->
+            Column(Modifier.padding(bottom = 54.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                BasicText(SLEEP_LINES[k].first, style = HubType.Display.copy(color = Color.White, fontSize = 56.sp))
+                Spacer(Modifier.height(10.dp))
+                BasicText(SLEEP_LINES[k].second, style = HubType.Callout.copy(color = Color.White.copy(alpha = 0.55f)))
+            }
+        }
+    }
+}
+
+private val SLEEP_LINES = listOf(
+    "Здравствуйте!" to "Подойдите и спросите",
+    "Сәлеметсіз бе!" to "Жақындап, сұраңыз",
+    "Hello!" to "Come closer and ask",
+)
+private const val SLEEP_LINE_MS = 7_000L
 
 /** Размытие экрана под диалогом выхода (API 31+). */
 private const val EXIT_BLUR_DP = 24

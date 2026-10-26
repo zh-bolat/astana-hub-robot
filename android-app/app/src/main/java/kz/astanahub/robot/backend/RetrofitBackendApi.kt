@@ -42,6 +42,8 @@ class RetrofitBackendApi(
     private val token: String,
     private val timeouts: BackendTimeouts = BackendTimeouts(),
     private val client: OkHttpClient = defaultClient(),
+    /** Голос TTS из заголовка `X-TTS-Voice` — для сброса кеша фраз при смене голоса на сервере. */
+    private val voiceMonitor: TtsVoiceMonitor? = null,
 ) : BackendApi {
 
     private val service: HubService = Retrofit.Builder()
@@ -109,7 +111,7 @@ class RetrofitBackendApi(
     }
 
     override suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray> =
-        call(timeouts.ttsMillis, check = ::rejectFakeSpeech) { service.tts(TtsRequestDto(text, lang.code)) }
+        call(timeouts.ttsMillis, check = { r -> noteVoice(r); rejectFakeSpeech(r) }) { service.tts(TtsRequestDto(text, lang.code)) }
             .map { body -> body.use { it.bytes() } }
 
     /**
@@ -120,6 +122,7 @@ class RetrofitBackendApi(
         guard(timeouts.ttsMillis) {
             val response = service.ttsStream(TtsRequestDto(text, lang.code))
             val body = response.body()
+            if (response.isSuccessful) noteVoice(response)
             val rejected = if (response.isSuccessful) rejectFakeSpeech(response) else null
             when {
                 rejected != null -> {
@@ -185,6 +188,10 @@ class RetrofitBackendApi(
             response.body()?.close()
             if (response.isSuccessful) ApiResult.Success(Unit) else ApiResult.Failure(parseError(response))
         }
+
+    private fun noteVoice(response: Response<*>) {
+        voiceMonitor?.seen(response.headers()[TtsVoiceMonitor.HEADER])
+    }
 
     /** Сервер с FakeSpeechProvider отдаёт тишину и `X-Speech-Provider: fake` — считаем TTS недоступным. */
     private fun rejectFakeSpeech(response: Response<*>): BackendError? =

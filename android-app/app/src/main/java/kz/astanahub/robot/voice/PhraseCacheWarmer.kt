@@ -41,6 +41,9 @@ class PhraseCacheWarmer(
     private val phrases: Phrases,
     private val scope: CoroutineScope,
     private val langs: List<Lang> = Lang.entries,
+    /** Голос сервера (`X-TTS-Voice`) и каким голосом записан кеш; null — без проверки голоса. */
+    private val voiceMonitor: kz.astanahub.robot.backend.TtsVoiceMonitor? = null,
+    private val voiceStamp: kz.astanahub.robot.backend.VoiceStamp? = null,
 ) {
     data class Status(val cached: Int = 0, val total: Int = 0, val running: Boolean = false, val lastError: String? = null)
 
@@ -58,8 +61,44 @@ class PhraseCacheWarmer(
         return scope.launch { run(force) }.also { job = it }
     }
 
+    /**
+     * Сервер ответил голосом [voice] (`X-TTS-Voice` любого ответа `/v1/tts`). Кеш записан другим голосом — сбросить
+     * и синтезировать все фразы заново (иначе в ответах нового голоса звучали бы куски старого).
+     * @return true — кеш сброшен.
+     */
+    @Synchronized
+    fun onVoice(voice: String): Boolean {
+        val stamp = voiceStamp ?: return false
+        val old = stamp.get()
+        if (old == voice) return false
+        stamp.set(voice)
+        if (old == null && cache.size() == 0) return false
+        Timber.i("voice cache: server voice %s → %s, re-synthesizing phrases", old ?: "(unknown)", voice)
+        job?.cancel()
+        cache.clear()
+        warmUp(force = true)
+        return true
+    }
+
+    /** Голос сервера уже проверен в этом процессе (или проверять нечем). */
+    @Volatile private var voiceChecked = false
+
     suspend fun run(force: Boolean) {
         val units = langs.flatMap { lang -> CachedPhrases.units(phrases, lang).map { lang to it } }
+        if (!force && !voiceChecked && voiceMonitor != null && voiceStamp != null && units.isNotEmpty()) {
+            // Всё может быть в кеше — тогда без запроса голос сервера не узнать: первый кусок синтезируем всегда
+            // (сервер отдаёт его из своего кеша), ответ сообщит голос; сменился — [onVoice] сбросит кеш.
+            val (lang, text) = units.first()
+            when (val r = backend.tts(text, lang)) {
+                is ApiResult.Success -> {
+                    voiceChecked = true
+                    val voice = voiceMonitor.voice.value
+                    if (voice != null && onVoice(voice)) return
+                    cache.put(text, lang, r.value)
+                }
+                is ApiResult.Failure -> Unit // без сети — дальше как раньше (проход остановится на первой ошибке)
+            }
+        }
         val keys = units.map { (lang, text) -> cache.key(text, lang) }.toSet()
         var cached = if (force) 0 else units.count { (lang, text) -> cache.has(text, lang) }
         _status.value = Status(cached = cached, total = units.size, running = true)

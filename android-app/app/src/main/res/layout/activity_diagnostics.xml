@@ -235,6 +235,68 @@
                 <Button android:id="@+id/refreshPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_refresh_places" />
             </LinearLayout>
 
+            <!-- Костюм робота-компаньона на странице приложения (только вид). -->
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_costume" />
+
+            <LinearLayout
+                android:id="@+id/costumeRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+            <!-- Голова: мотор и слежение напрямую через RobotApi; ответы SDK — здесь и в журнале навигации. -->
+            <TextView android:id="@+id/headLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_head" />
+
+            <LinearLayout android:id="@+id/headRow1" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/headNod" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_nod" />
+                <Button android:id="@+id/headLeft" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_left" />
+                <Button android:id="@+id/headRight" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_right" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/headRow2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/headUp" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_up" />
+                <Button android:id="@+id/headDown" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_down" />
+                <Button android:id="@+id/headReset" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_reset" />
+                <Button android:id="@+id/headStatus" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_status" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/headRow3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/headFollow" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_follow" />
+                <Button android:id="@+id/headStopFollow" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_stop_follow" />
+                <Button android:id="@+id/headPersons" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_persons" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/headHint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/diag_head_hint"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/headLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/card_bg"
+                android:fontFamily="monospace"
+                android:padding="12dp"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+
+            <TextView android:id="@+id/headPresenceLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_head_presence" />
+
+            <TextView
+                android:id="@+id/headPresenceLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/card_bg"
+                android:fontFamily="monospace"
+                android:padding="12dp"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+
             <!-- Точки карты робота с кнопкой «Поехать» у каждой (заполняется по getPlaceList). -->
             <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_map_points" />
 

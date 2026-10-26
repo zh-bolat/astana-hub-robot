@@ -7,7 +7,32 @@ places, backend) не переписана: новый UI читает `MainView
 
 Статус: **M1** — экран 1 (лицо); **M2** — интерактив (тап, удержание → админка, поглаживание, ручка, сон 3 мин);
 **M3** — экран 2 (чат с живыми субтитрами и источниками, плитки, частые вопросы, язык, управление) вместо прежнего
-синего; **M4** — режим поездки (остров «куда + Остановить», итог), остров where_is на лице, полировка.
+синего; **M4** — режим поездки, «где X» на лице, полировка; **MF** — вид из прототипа mynbay
+(`gh/feature/robot-face-ui:docs/design/robot-mvp.html`, финальная версия каскада) поверх нашей логики — ниже §0.
+
+## 0. Вид MF (прототип mynbay) — что изменилось на экранах
+
+Логика, состояния, жесты, переходы, таймеры и связь с сервером — прежние (таблицы ниже), сменился только вид:
+
+| Было (M1–M4) | Теперь (MF) | Код |
+|---|---|---|
+| лицо: белые глаза, брови, рот | чёрный экран, только глаза — голубые (#3AA8F5) со свечением и светлым бликом; «думает» — полоски и «?», радость — дуги «^ ^», сон — «∪» и кружки «zz», поглаживание — красный румянец, ошибка — полоски и слеза; речь — глаза чуть сжимаются в такт | `ui/face/FaceRenderer.kt`, `Expressions`, `FaceEngine.compose` |
+| мини-лицо в шапке экрана 2 | робот-компаньон слева (картинки костюмов отрисованы из прототипа: обычный, космос, казахский, деловой — выбор в диагностике); живые глаза садятся в экран его головы, чёрный экран лица сжимается в голову (скругление растёт) | `ScreenTwo.LeftColumn`, `Costume.kt`, `RobotScreens` (чёрный слой), `FaceMorph` (слот = глаза в голове) |
+| шапка: мини-лицо, «Astana Hub», плашки, язык, × | верхняя панель прототипа: «Назад» (только в частых вопросах), логотип astana hub (удержание 3 с — PIN), язык — одна пилюля, синяя «капля» едет под выбранный, разделитель, × | `ScreenTwo.TopBar`, `LanguageSwitch`, `BackPill` |
+| плашки «Нет связи» / «Микрофон выключен» | янтарная полоса под панелью; на экране лица — янтарная плашка «Нет связи» сверху | `NoticeBar`, `RobotScreens.OfflinePill` |
+| чат слева, плитки справа | слева — робот, под ним состояние («Готов помочь», «Слушаю…»), услышанное «…», пока говорит — пузырь субтитров (слова зажигаются по темпу); справа — приветствие и плитки 3 × 2 (бейджи-значки прототипа) или разговор карточками («вопрос», ответ — белая карточка 40 sp, источник, «Проводить»), ниже — плитки чипами; частые вопросы — белые строки-аккордеон, раскрытая — синяя кромка | `ScreenTwo.Home/Conversation/AnswerCard/TileChips/FaqPanel` |
+| «Спросить голосом» / «Стоп» | внизу по центру: белая пилюля с синим микрофоном / тёмно-синий «Стоп»; пока посетитель говорит — «Слушаю…» с пульсирующим микрофоном (не кнопка) | `ScreenTwo.BottomBar/AskVoice` |
+| остров поездки | светлый слой прототипа поверх лица: синяя стрелка, «Иду к: Кафе», «Следуйте за мной», тёмно-синий «Остановить»; итог — тем же слоем | `IslandView.GuideLayer` |
+| остров where_is | белая карточка внизу экрана лица: синяя стрелка от посетителя, место, расстояние, синий «Проводить» | `IslandView.Island/WhereCard` |
+| сон | глаза «∪», «zz», внизу — «Здравствуйте! / Подойдите и спросите» по очереди на ru / kk / en | `RobotScreens.SleepGreeting` |
+| диалог выхода | белая карточка прототипа: «Остаться» (синяя) и «Выйти» | `ExitDialog`, `DialogCard` |
+| PIN диагностики (системный диалог) | панель прототипа: точки, клавиши 0–9 и ⌫, «Отмена» / «Открыть»; логика та же (`DiagPinGuard`, блокировка, минута без ввода — закрыть) | `ui/screen/PinPad.kt`, `MainActivity.showPin` |
+| шрифт Inter | Nunito (вшит) | `HubFonts`, `HubType` |
+
+Поведение кнопок (аудит MF): повторное быстрое нажатие одной кнопки не запускает действие дважды (600 мс,
+`Pressable`, тест `TouchAreaTest.quick double tap…`); пока страница приложения едет, её кнопки не срабатывают (касание
+ловит переход); «Спросить голосом» без разрешения микрофона неактивна; голова робота ведёт к лицу только там, где
+лицо есть (не в legacy).
 
 Пути: `ui/` = `android-app/app/src/main/java/kz/astanahub/robot/ui/`; тесты — `android-app/app/src/test/…`
 (общие) и `src/testRobotos/…` (RobotAPI робота). «Запись» — `.claude/ui-redesign/shots/<этап>/`.
@@ -82,6 +107,7 @@ MainActivity.render → FaceInputMapper → FaceInputs → кадр: FaceEngine 
 | `/v1/chat` ошибка / нет чата (404) / офлайн | ERROR на лице; `/v1/ask` или локальные правила | `MainViewModel` | `MainViewModelAgentTest.error event before a reply…`, `.server without chat (404)…`, `.offline…` |
 | `/v1/ask` | ответ в чате, фразы по очереди (≤ 300 симв.), источники — подпись; 400 → CONFUSED, 429 — ждёт и повторяет, сеть — ERROR + «нет связи» | `RetrofitBackendApi.ask`, `MainViewModel.deliver/troubleCue` | `RetrofitBackendApiTest`, `MainViewModelTest`, `MainViewModelFaceCueTest` |
 | `/v1/tts` (поток MP3, кеш фраз) | голос робота; рот — `Visualizer`; нет голоса — субтитры без звука | `voice/ServerVoiceGateway.kt`, `TtsStream`, `PhraseAudioCache` | `StreamingTtsTest`, `ElevenLabsOnlyVoiceTest`, `RoutingVoiceGatewayTest` |
+| `/v1/tts` заголовок `X-TTS-Voice` | голос записан рядом с кешем фраз (`filesDir/voice_cache.voice`); сменился — кеш сбрасывается и фразы синтезируются заново; всё в кеше — при старте один пробный запрос, чтобы узнать голос | `backend/TtsVoice.kt` (`TtsVoiceMonitor`, `FileVoiceStamp`), `RetrofitBackendApi.noteVoice`, `PhraseCacheWarmer.onVoice` | `PhraseCacheTest.server voice changed…`, `.same server voice…` |
 | `/v1/stt` (WAV) и live STT (поток) | реплика посетителя → вопрос; «Спросить голосом» — одна фраза; нет связи — плашка «Нет связи» и фраза раз в минуту | `ServerVoiceGateway`, `backend/LiveStt.kt`, `MainActivity.listenOnce` | `RetrofitBackendApiTest.stt…`, `LiveSttTest`, `LiveSttGateTest`, `MainViewModelReliabilityTest.lost STT connection…` |
 | `/v1/look` (кадр SurfaceShareApi) | «Что это?» (плитка или голос): лицо LOOKING, описание в чате; нет камеры — ERROR и готовая фраза | `camera/CameraGateway.kt`, `MainViewModel.handleLook` | `MainViewModelTest.look takes a photo…`, `.camera unavailable…`, `RetrofitBackendApiTest.look sends multipart…` |
 | `/v1/places` (ETag / 304) | кеш мест: «где X» и «проводи» офлайн, остров where_is, `state.directions` | `places/PlaceRepository.kt`, `WayFinder` | `PlaceRepositoryTest`, `RetrofitBackendApiTest.places…`, `WayFinderTest` |
@@ -114,7 +140,7 @@ MainActivity.render → FaceInputMapper → FaceInputs → кадр: FaceEngine 
 | Жест | Действие | Где | Тест |
 |---|---|---|---|
 | тап | спит → проснуться; говорит → замолчать (`stop`/`interrupt`); в поездке говорит → только речь; молчит → рефлекс | `FaceInputMapper.tap`, `MainActivity.onFaceTap` | `FaceInputMapperTest`, `FaceEngineTest.tap reflex…` |
-| удержание 3 с | PIN (`DiagPinDialog`) → `DiagnosticsActivity`; без PIN и **в поездке** — выключено | `faceGestures`, `ScreenTwoMapper.faceHoldEnabled` | `FaceGestureRecognizerTest.holding still…`, `ScreenTwoMapperTest.hold on the face…` |
+| удержание 3 с | PIN (панель `PinPad`) → `DiagnosticsActivity`; без PIN и **в поездке** — выключено | `faceGestures`, `ScreenTwoMapper.faceHoldEnabled` | `FaceGestureRecognizerTest.holding still…`, `ScreenTwoMapperTest.hold on the face…` |
 | поглаживание | PETTED, пока гладят; рот двигается по речи | `FaceInputs.petting` | `FaceEngineTest.petting…` |
 | свайп влево | экран 2 (палец 1:1); в поездке — нет | `RobotScreens`, `ScreenSwipe` | `ScreenSwipeTest` |
 
@@ -155,7 +181,8 @@ MainActivity.render → FaceInputMapper → FaceInputs → кадр: FaceEngine 
 
 | Что | Статус | Где | Тест |
 |---|---|---|---|
-| PIN диагностики (5 попыток, блок 5 мин, сессия) | без изменений; входы — удержание «Astana Hub» на экране 2 и удержание по лицу (не в поездке) | `security/`, `DiagPinDialog`, `DiagnosticsActivity` | `DiagnosticsLockTest` |
+| PIN диагностики (5 попыток, блок 5 мин, сессия) | логика без изменений, ввод — панелью прототипа; входы — удержание логотипа на экране 2 и удержание по лицу (не в поездке) | `security/`, `ui/screen/PinPad.kt`, `DiagnosticsActivity` | `DiagnosticsLockTest` |
+| костюм робота-компаньона | только вид, выбор в диагностике («Костюм») | `ui/screen/Costume.kt` (`CostumeSettings`) | снимки `MF` |
 | масштаб UI (60–150 %) | экраны 1 и 2 — в dp под ширину 1600 dp; лицо вписывается само; применяется без перезапуска | `UiScale`, `MainActivity.onResume` | `UiScaleTest` |
 | чувствительность микрофона, конец фразы (VAD) | без изменений | `voice/VoiceMode.kt` (`VoiceSettings`), `LiveEndpointer`, `EnergyVad` | `LiveEndpointerTest.sensitivity…`, `EnergyVadTest` |
 | адрес бэкенда | без изменений; смена — обновление данных без перезапуска | `BackendUrlPolicy`, `SwitchableBackendApi`, `MainActivity.onResume` | `BackendUrlPolicyTest`, `SwitchableBackendApiTest` |

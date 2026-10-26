@@ -6,6 +6,7 @@ import kz.astanahub.robot.agent.AgentVoiceGateway
 import kz.astanahub.robot.agent.HubAppAgent
 import kz.astanahub.robot.robotapi.PersonApiGateway
 import kz.astanahub.robot.robotapi.RobotApiGateway
+import kz.astanahub.robot.robotapi.RobotHeadDiagnostics
 import kz.astanahub.robot.robotapi.RobotHeadGateway
 import kz.astanahub.robot.robotapi.SurfaceShareCameraGateway
 
@@ -25,6 +26,7 @@ object FlavorGateways {
             builtinAsrAvailable = true,
             persons = PersonApiGateway(),
             head = RobotHeadGateway(),
+            headDiagnostics = RobotHeadDiagnostics(),
         )
     }
 }

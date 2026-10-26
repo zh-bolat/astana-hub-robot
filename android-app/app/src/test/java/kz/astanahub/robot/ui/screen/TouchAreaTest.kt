@@ -36,6 +36,25 @@ class TouchAreaTest {
     @get:Rule
     val rule = createComposeRule()
 
+    /** Пауза дольше защиты от повторного нажатия ([REPEAT_GUARD_MS]). */
+    private fun gap() = org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(REPEAT_GUARD_MS + 50))
+
+    @Test
+    fun `quick double tap runs the action once, a later tap runs it again`() {
+        var clicks = 0
+        rule.setContent {
+            Pressable(onClick = { clicks++ }, modifier = Modifier.testTag("tile").width(300.dp).height(150.dp)) {}
+        }
+        rule.onNodeWithTag("tile").performTouchInput { click(center) }
+        rule.onNodeWithTag("tile").performTouchInput { click(center) } // дрожащий двойной тап
+        rule.waitForIdle()
+        assertEquals(1, clicks)
+        gap()
+        rule.onNodeWithTag("tile").performTouchInput { click(center) }
+        rule.waitForIdle()
+        assertEquals(2, clicks)
+    }
+
     @Test
     fun `pill - both ends inside the padding are pressable`() {
         var clicks = 0
@@ -46,7 +65,9 @@ class TouchAreaTest {
         }
         val pill = rule.onNodeWithTag("pill")
         pill.performTouchInput { click(Offset(3f, centerY)) } // на стрелке у левого края
+        gap()
         pill.performTouchInput { click(Offset(width - 3f, centerY)) } // у правого края
+        gap()
         pill.performTouchInput { click(Offset(centerX, 3f)) } // у верхнего края
         rule.waitForIdle()
         assertEquals(3, clicks)
@@ -62,6 +83,7 @@ class TouchAreaTest {
             ) {}
         }
         rule.onNodeWithTag("row").performTouchInput { click(Offset(4f, 4f)) } // поле строки, вне отступов текста
+        gap()
         rule.onNodeWithTag("row").performTouchInput { click(Offset(width - 4f, height - 4f)) }
         rule.waitForIdle()
         assertEquals(2, clicks)

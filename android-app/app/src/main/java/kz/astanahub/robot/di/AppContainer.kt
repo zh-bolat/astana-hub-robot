@@ -39,6 +39,7 @@ import kz.astanahub.robot.audio.VadConfig
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.voice.RoutingVoiceGateway
 import kz.astanahub.robot.voice.ServerVoiceGateway
@@ -61,7 +62,9 @@ import kz.astanahub.robot.presence.PresenceEvent
 import kz.astanahub.robot.presence.PresenceSimulator
 import kz.astanahub.robot.presence.PresenceTracker
 import kz.astanahub.robot.robot.HeadController
+import kz.astanahub.robot.robot.HeadDiagnostics
 import kz.astanahub.robot.robot.HeadGateway
+import kz.astanahub.robot.presence.SeenPerson
 
 /** Железо робота: реализация выбирается flavor-ом (FlavorGateways в src/emulator и src/robot). */
 class Gateways(
@@ -76,6 +79,8 @@ class Gateways(
     /** Люди перед роботом (PersonApi / заглушка); null — пробуждения по человеку нет. */
     val persons: PersonGateway? = null,
     val head: HeadGateway? = null,
+    /** Проверка головы и зрения с экрана диагностики (RobotApi с отчётом о каждом ответе); null — раздела нет. */
+    val headDiagnostics: HeadDiagnostics? = null,
     /** Эмулятор: «подошёл / ушёл» с экрана диагностики. */
     val presenceSimulator: PresenceSimulator? = null,
 )
@@ -103,14 +108,23 @@ class AppContainer(app: Application) {
     /** Голова: один контроллер на приложение (слежение, сброс, кивки). */
     val head: HeadController? = gateways.head?.let { HeadController(it) }
 
+    val headDiagnostics: HeadDiagnostics? get() = gateways.headDiagnostics
+
+    private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Люди перед роботом: один опрос PersonApi на приложение (трекер присутствия и живой лог диагностики). */
+    val persons: Flow<List<SeenPerson>>? = gateways.persons?.persons?.shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
+
     /** События «подошёл / ушёл»; трекер один на приложение — анти-спам переживает пересоздание экрана. */
-    val presence: Flow<PresenceEvent>? = gateways.persons?.let { persons ->
-        PresenceTracker(PresenceConfig()).track(persons.persons)
-            .shareIn(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), SharingStarted.WhileSubscribed(), 0)
+    val presence: Flow<PresenceEvent>? = persons?.let { persons ->
+        PresenceTracker(PresenceConfig()).track(persons).shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
     }
 
     /** Режим разговора: agent (`/v1/chat`), legacy или live (`WS /v1/live`); меняется на экране диагностики. */
     val chatSettings = ChatSettings(app, ChatMode.fromCode(BuildConfig.CHAT_MODE) ?: ChatMode.AGENT)
+
+    /** Костюм робота-компаньона на странице приложения (только вид). */
+    val costume = kz.astanahub.robot.ui.screen.CostumeSettings(app)
 
     /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
     val backendUrlPolicy = BackendUrlPolicy.fromBuildConfig(
@@ -131,10 +145,13 @@ class AppContainer(app: Application) {
     /** Один OkHttpClient на приложение: пул соединений и потоки общие; клиенты — через newBuilder() от него. */
     val httpClient: OkHttpClient = RetrofitBackendApi.defaultClient()
 
+    /** Голос серверного TTS (`X-TTS-Voice`): сменился — кеш готовых фраз синтезируется заново. */
+    val ttsVoice = kz.astanahub.robot.backend.TtsVoiceMonitor()
+
     /** Адрес сервера меняется на экране диагностики без пересборки; токен — из BuildConfig. */
     val backend: SwitchableBackendApi = SwitchableBackendApi(
         initialUrl = backendSettings.current(),
-        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient) },
+        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient, voiceMonitor = ttsVoice) },
         // Без адреса: эмулятор — заглушка, робот — честное «нет связи».
         fallback = { if (BuildConfig.IS_ROBOT) UnconfiguredBackendApi() else FakeBackendApi() },
     )
@@ -198,7 +215,11 @@ class AppContainer(app: Application) {
     }
 
     /** Синтез кеша фраз: при старте — недостающие, при смене сервера — все заново, при восстановлении связи — недостающие. */
-    val phraseCacheWarmer = PhraseCacheWarmer(backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val phraseCacheWarmer = PhraseCacheWarmer(
+        backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        voiceMonitor = ttsVoice,
+        voiceStamp = kz.astanahub.robot.backend.FileVoiceStamp(java.io.File(app.filesDir, "voice_cache.voice")),
+    )
 
     /**
      * Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики.
@@ -229,6 +250,10 @@ class AppContainer(app: Application) {
         }
         appScope.launch {
             voice.connection.filter { it }.collect { phraseCacheWarmer.warmUp(force = false) }
+        }
+        // Голос сервера сменился (`X-TTS-Voice` в любом ответе /v1/tts) — кеш фраз заново.
+        appScope.launch {
+            ttsVoice.voice.filterNotNull().distinctUntilChanged().collect { phraseCacheWarmer.onVoice(it) }
         }
     }
 }

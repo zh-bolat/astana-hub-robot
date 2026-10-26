@@ -96,7 +96,7 @@ object Expressions {
         this[P.SQUASH] = 0f
         this[P.POP] = 0f
         this[P.SHAKE] = 0f
-        eyeSize(60f, 86f)
+        eyeSize(62f, 79f)
         eyesOpen(1f)
         eyeSmile(0f)
         this[P.ARC] = 0f
@@ -130,7 +130,7 @@ object Expressions {
 
     /** Слушает: глаза чуть шире, брови приподняты, лёгкий наклон головы, реагирует на голос. */
     private val LISTENING = expression("listening", NEUTRAL) {
-        eyeSize(64f, 94f)
+        eyeSize(70f, 100f)
         brows(12f)
         this[P.BROW_ARCH] = 11f
         mouth(w = 50f, smile = 6f)
@@ -144,8 +144,9 @@ object Expressions {
     private val THINKING = expression("thinking", NEUTRAL) {
         gaze(0.55f, -0.7f)
         eyeSize(60f, 78f)
-        eyeSmile(0.16f)
-        lids(0.08f)
+        eyesOpen(0f)
+        this[P.ARC] = 0f
+        this[P.QUESTION] = 1f
         browL(2f, -6f)
         browR(22f, 4f)
         mouth(w = 40f, smile = -2f)
@@ -235,6 +236,8 @@ object Expressions {
     private val ERROR = expression("error", NEUTRAL) {
         gaze(0f, 0.25f)
         eyeSize(60f, 80f)
+        eyesOpen(0f)
+        this[P.ARC] = 0f
         lids(0.32f, 18f)
         brows(6f, 18f)
         mouth(w = 44f, smile = -18f)

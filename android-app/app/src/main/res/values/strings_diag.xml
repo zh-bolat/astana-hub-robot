@@ -24,6 +24,20 @@
     <string name="diag_robot" translatable="false">Робот: RobotApi, карта, места</string>
     <string name="diag_dump_places" translatable="false">getPlaceList</string>
     <string name="diag_dump_pose" translatable="false">getPosition</string>
+    <string name="diag_costume" translatable="false">Костюм робота на странице приложения</string>
+    <string name="diag_head" translatable="false">Голова: мотор и слежение (RobotApi напрямую)</string>
+    <string name="diag_head_nod" translatable="false">Кивок ±15°</string>
+    <string name="diag_head_left" translatable="false">Влево 30° (h +30)</string>
+    <string name="diag_head_right" translatable="false">Вправо 30° (h −30)</string>
+    <string name="diag_head_up" translatable="false">Вверх 10° (v −10)</string>
+    <string name="diag_head_down" translatable="false">Вниз 10° (v +10)</string>
+    <string name="diag_head_reset" translatable="false">Сброс (resetHead)</string>
+    <string name="diag_head_status" translatable="false">getHeadStatus</string>
+    <string name="diag_head_follow" translatable="false">Следить за мной</string>
+    <string name="diag_head_stop_follow" translatable="false">Стоп слежения</string>
+    <string name="diag_head_persons" translatable="false">Кто перед роботом</string>
+    <string name="diag_head_hint" translatable="false">Все повороты — moveHead relative. Знаки углов в документации не описаны: если голова пошла не туда, знак обратный. getHeadStatus в документации нет (есть в SDK).</string>
+    <string name="diag_head_presence" translatable="false">Присутствие (PersonApi): id лица, дистанция, время</string>
     <string name="diag_refresh_places" translatable="false">/v1/places</string>
     <string name="diag_server" translatable="false">Адрес сервера (применяется сразу, сохраняется)</string>
     <string name="diag_server_check" translatable="false">Проверить</string>

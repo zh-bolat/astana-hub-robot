@@ -278,6 +278,9 @@ class FaceEngine(
         val onset = (env - talkSlow).coerceAtLeast(0f)
         o[P.MOUTH_OPEN] += talkOpen
         o[P.MOUTH_W] *= 1f - 0.1f * talk * env
+        // Рта у лица нет (прототип): речь видна по глазам — они чуть сплющиваются и раздаются в такт.
+        o[P.EYE_H] *= 1f - 0.11f * talk * env
+        o[P.EYE_W] *= 1f + 0.035f * talk * env
         o[P.HEAD_Y] -= 4f * talk * env * motion
         brow += (40f * onset).coerceAtMost(8f) * talk
 
