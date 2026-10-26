@@ -566,7 +566,12 @@ async def tts(
     # для синтеза: без многоточий и междометий, числа словами, произношение (app/tts_text.py)
     text = normalize_for_tts(body.text, lang, settings.knowledge_dir / "pronunciations.yaml")
     key = cache_key(provider.name, provider.voice_id(lang), lang, text)
-    common = {"X-Speech-Provider": provider.name, "Cache-Control": "no-store"}
+    # X-TTS-Voice — каким голосом озвучено: робот по смене значения сбрасывает свой кеш готовых фраз
+    common = {
+        "X-Speech-Provider": provider.name,
+        "X-TTS-Voice": provider.voice_id(lang),
+        "Cache-Control": "no-store",
+    }
 
     def record(first_ms: int | None, total_ms: int, hit: bool, ok: bool, extra: dict) -> None:
         metrics.record(

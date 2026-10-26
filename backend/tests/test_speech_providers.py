@@ -79,6 +79,14 @@ def test_tts_speech_provider_header(make_client):
     assert r.headers["x-speech-provider"] == "fake"
 
 
+def test_tts_voice_header_names_the_voice_for_the_robot_phrase_cache(make_client):
+    c = make_client()
+    speech = c.app.state.tts
+    for _ in range(2):  # и промах, и попадание в кеш сервера
+        r = c.post("/v1/tts", json={"text": "Привет.", "lang": "ru"}, headers=AUTH)
+        assert r.headers["x-tts-voice"] == speech.voice_id("ru")
+
+
 def test_tts_speech_provider_header_on_error(make_client):
     c = make_client(speech=FakeSpeechProvider(fail=True))
     r = c.post("/v1/tts", json={"text": "Привет.", "lang": "ru"}, headers=AUTH)
