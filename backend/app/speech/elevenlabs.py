@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -28,6 +29,10 @@ _ISO3 = {"rus": "ru", "kaz": "kk", "eng": "en"}
 _V3_STABILITY = (0.0, 0.5, 1.0)
 # Модели с казахским (ElevenLabs, 2026-10): v3 и v4; flash / turbo / multilingual — unsupported_language
 KK_MODEL_PREFIXES = ("eleven_v3", "eleven_v4")
+# Смех-слово в ответе («Ха-ха!», «Haha!»): v3/v4 смеются по-настоящему тегом, flash прочитал бы «ха-ха» по слогам —
+# для него смех из текста синтеза убираем (на экране текст ответа не меняется)
+_LAUGH = re.compile(r"(?<![\w-])(?:ха|ha)(?:-?(?:ха|ha)){1,2}(?![\w-])[!.,…]*", re.IGNORECASE)
+_CHUCKLE = re.compile(r"(?<![\w-])(?:ха|ha)!+(?=\s|$)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -60,16 +65,19 @@ class VoiceSettings:
 
     def signature(self, model: str) -> str:
         """Для ключа кеша TTS: другие настройки (и тег v3) — другое аудио."""
-        sig = ",".join(f"{k}={v}" for k, v in sorted(self.for_model(model).items()))
+        sig = ",".join(f"{k}={v}" for k, v in sorted(self.for_model(model).items())) + ",laugh=1"
         tag = self.v3_tag.strip()
         return f"{sig},tag={tag}" if tag and model.startswith(KK_MODEL_PREFIXES) else sig
 
     def tag_text(self, model: str, text: str) -> str:
-        """Текст запроса синтеза: v3 — с тегом подачи («[cheerfully] Сәлеметсіз бе!»), остальные — как есть."""
+        """Текст запроса синтеза: v3/v4 — с тегом подачи («[cheerfully] Сәлеметсіз бе!») и смехом тегом
+        («Ха-ха!» → [laughs], «Ха!» → [chuckles]); остальные модели — без смеха-слова."""
+        tags = model.startswith(KK_MODEL_PREFIXES)
+        spoken = _laughs(text, tags)
         tag = self.v3_tag.strip()
-        if tag and model.startswith(KK_MODEL_PREFIXES) and not text.startswith(tag):
-            return f"{tag} {text}"
-        return text
+        if tag and tags and not spoken.startswith(tag):
+            return f"{tag} {spoken}"
+        return spoken
 
     @classmethod
     def from_settings(cls, settings) -> VoiceSettings:
@@ -82,6 +90,17 @@ class VoiceSettings:
             v3_stability=settings.elevenlabs_v3_stability,
             v3_tag=settings.elevenlabs_v3_tag,
         )
+
+
+def _laughs(text: str, tags: bool) -> str:
+    """Смех-слово → тег смеха (модели с тегами) или ничего (flash); пустой результат — исходный текст."""
+    if tags:
+        out = _CHUCKLE.sub("[chuckles]", _LAUGH.sub("[laughs]", text))
+    else:
+        out = _CHUCKLE.sub("", _LAUGH.sub("", text))
+        out = re.sub(r"^[\s,.!…-]+", "", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out or text
 
 
 def kk_safe_model(model: str) -> str:

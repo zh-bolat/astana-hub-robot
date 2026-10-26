@@ -545,3 +545,16 @@ def test_tts_fallback_built_from_settings():
     assert (tts.primary.name, tts.fallback.name) == ("elevenlabs", "openrouter")
     same = s.model_copy(update={"tts_fallback_provider": "elevenlabs"})
     assert build_tts_provider(same).name == "elevenlabs"
+
+
+def test_laugh_word_becomes_real_laughter_on_tag_models_and_is_dropped_for_flash():
+    from app.speech.elevenlabs import VoiceSettings
+
+    v = VoiceSettings(v3_tag="[cheerfully]")
+    assert v.tag_text("eleven_v4_turbo", "Ха-ха! Кофе я не пью.") == "[cheerfully] [laughs] Кофе я не пью."
+    assert v.tag_text("eleven_v4_turbo", "Ха! Хороший вопрос.") == "[cheerfully] [chuckles] Хороший вопрос."
+    assert v.tag_text("eleven_v3", "Haha! I know the way.") == "[cheerfully] [laughs] I know the way."
+    assert v.tag_text("eleven_v4_turbo", "Хабар бар.") == "[cheerfully] Хабар бар."  # не смех
+    assert v.tag_text("eleven_flash_v2_5", "Ха-ха! Кофе я не пью.") == "Кофе я не пью."
+    assert v.tag_text("eleven_flash_v2_5", "Ха-ха!") == "Ха-ха!"  # кроме смеха ничего — как есть
+    assert "laugh=1" in v.signature("eleven_v4_turbo")  # старый кеш аудио со смехом не подхватится
