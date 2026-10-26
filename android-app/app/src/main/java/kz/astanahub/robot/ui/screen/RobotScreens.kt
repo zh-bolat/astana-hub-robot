@@ -382,6 +382,7 @@ fun RobotScreens(
             ExitDialog(two.texts, actions)
         }
         if (pinActions != null) PinPad(pin, pinActions)
+        ClosedLayer(two, actions)
     }
 }
 
@@ -400,6 +401,26 @@ private fun OfflinePill(text: String) {
     ) {
         Box(Modifier.padding(end = 14.dp).background(HubColors.AmberFg, androidx.compose.foundation.shape.CircleShape).padding(7.dp))
         BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), maxLines = 1)
+    }
+}
+
+/** Слой прототипа «Приложение закрыто»: тёмный фон, заголовок, «Открыть снова». */
+@Composable
+private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
+    AnimatedVisibility(two.closed, enter = fadeIn(HubMotion.Default.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Color(0xFF1B2440), Color(0xFF0B1022)), radius = 1600f))
+                .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false).consume() } },
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                BasicText(two.texts.closed, style = HubType.Display.copy(color = Color.White))
+                Spacer(Modifier.height(36.dp))
+                HubPill(two.texts.reopen, actions::onReopen, primary = false, takeTouch = true)
+            }
+        }
     }
 }
 

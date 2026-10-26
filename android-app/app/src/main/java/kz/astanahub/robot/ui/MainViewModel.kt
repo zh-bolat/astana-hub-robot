@@ -130,6 +130,11 @@ data class MainUiState(
     val conversation: Int = 0,
     /** Последний ответ «где X» с направлением по карте — остров where_is на экране лица; null — не было. */
     val whereIs: WhereIsHint? = null,
+    /**
+     * Ответ на вопрос с экрана приложения звучит на лице (функция mynbay): лицо с крупными субтитрами, тап по лицу
+     * возвращает в приложение, речь продолжается.
+     */
+    val answerOnFace: Boolean = false,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -348,6 +353,16 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        viewModelScope.launch {
+            var last = _state.value.phase
+            _state.collect { st ->
+                if (st.phase != last) {
+                    val from = last
+                    last = st.phase
+                    onPhaseChanged(from, st.phase)
+                }
+            }
+        }
         head?.let { h ->
             // Робот начинает говорить (после «слушает» / «думает») — лёгкое движение головой (редко, если свободна).
             viewModelScope.launch {
@@ -580,9 +595,38 @@ class MainViewModel(
 
     /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
+        // Касание лица во время ответа (mynbay): только меняем вид, речь не прерываем и обратно не перекидываем.
+        faceOnAnswer = false
         wake()
-        if (_state.value.mode != ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.MENU) }
+        if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
+            _state.update { it.copy(mode = ScreenMode.MENU, answerOnFace = false) }
+        }
         restartMenuTimer()
+    }
+
+    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; mynbay). */
+    private var faceOnAnswer = false
+
+    /**
+     * Смена фазы: робот заговорил в ответ на вопрос с экрана приложения — лицо на весь экран с крупными субтитрами
+     * (функция mynbay); договорил — в legacy, где «дом» — меню, назад в меню (в agent лицо и есть дом).
+     */
+    private fun onPhaseChanged(from: Phase, to: Phase) {
+        val s = _state.value
+        if (to == Phase.SPEAKING && faceOnAnswer) {
+            faceOnAnswer = false
+            if (s.mode == ScreenMode.MENU && s.guidingTo == null) {
+                menuJob?.cancel()
+                _state.update { it.copy(mode = ScreenMode.FACE, answerOnFace = true) }
+            }
+        } else if (from == Phase.SPEAKING && to != Phase.SPEAKING && s.answerOnFace) {
+            _state.update {
+                it.copy(
+                    answerOnFace = false,
+                    mode = if (awakeMode() == ScreenMode.MENU && it.mode == ScreenMode.FACE) ScreenMode.MENU else it.mode,
+                )
+            }
+        }
     }
 
     /** «К роботу»: из меню обратно к лицу (только agent). */
@@ -682,6 +726,8 @@ class MainViewModel(
         touchSession()
         wake()
         voice.stopSpeaking()
+        // Ответ на этот вопрос покажем на лице, если вопрос задан с экрана приложения (mynbay).
+        faceOnAnswer = true
         // Вопрос кнопкой/текстом при живом режиме: звук live обрываем, отвечает agent (/v1/chat, та же сессия).
         live?.interrupt()
         requestJob?.cancel()

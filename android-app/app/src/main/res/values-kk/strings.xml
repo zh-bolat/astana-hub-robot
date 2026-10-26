@@ -58,4 +58,13 @@
     <string name="island_meters">%1$d м</string>
     <string name="island_near">жақын</string>
     <string name="action_stop_trip">Тоқтату</string>
+    <string name="exit_pin_sub">Тек қызметкер ғана шыға алады. Құпиясөзді енгізіңіз.</string>
+    <string name="exit_pin_wrong">Құпиясөз қате. Қалған әрекет саны: %1$d</string>
+    <string name="exit_pin_locked">Әрекет тым көп. %1$d мин кейін қайталаңыз.</string>
+    <string name="app_closed">Қолданба жабылды</string>
+    <string name="app_reopen">Қайта ашу</string>
+    <string name="costume_default">Әдеттегі</string>
+    <string name="costume_kazakh">Қазақша</string>
+    <string name="costume_business">IT-маман</string>
+    <string name="costume_galaxy">Ғарышкер</string>
 </resources>

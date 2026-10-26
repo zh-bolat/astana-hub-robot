@@ -39,6 +39,8 @@ object FaceInputMapper {
         INTERRUPT_SPEECH,
         /** Молчит — рефлекс: моргнуть или слегка вздрогнуть. */
         REFLEX,
+        /** Ответ на вопрос из приложения звучит на лице — назад в приложение (речь не прерывается; mynbay). */
+        OPEN_MENU,
     }
 
     /**
@@ -52,6 +54,8 @@ object FaceInputMapper {
         val speaking = robotSpeaking || state.phase == Phase.SPEAKING
         return when {
             state.mode == ScreenMode.SLEEP -> Tap.WAKE
+            // Ответ на вопрос из приложения звучит на лице (mynbay): тап — назад в приложение, речь продолжается.
+            state.answerOnFace -> Tap.OPEN_MENU
             speaking && state.guidingTo != null -> Tap.INTERRUPT_SPEECH
             speaking -> Tap.STOP
             else -> Tap.REFLEX

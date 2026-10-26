@@ -57,4 +57,13 @@
     <string name="island_meters">%1$d m</string>
     <string name="island_near">nearby</string>
     <string name="action_stop_trip">Stop</string>
+    <string name="exit_pin_sub">Only staff can exit. Enter the password.</string>
+    <string name="exit_pin_wrong">Wrong password. Attempts left: %1$d</string>
+    <string name="exit_pin_locked">Too many attempts. Try again in %1$d min.</string>
+    <string name="app_closed">App closed</string>
+    <string name="app_reopen">Open again</string>
+    <string name="costume_default">Classic</string>
+    <string name="costume_kazakh">Kazakh</string>
+    <string name="costume_business">Developer</string>
+    <string name="costume_galaxy">Astronaut</string>
 </resources>

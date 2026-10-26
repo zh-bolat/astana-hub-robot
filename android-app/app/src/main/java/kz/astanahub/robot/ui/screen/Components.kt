@@ -71,6 +71,8 @@ fun Pressable(
     takeTouch: Boolean = false,
     /** Своё состояние нажатия (кто-то ещё показывает отклик — мини-лицо в шапке); null — внутреннее. */
     pressed: MutableState<Boolean>? = null,
+    /** Защита от двойного нажатия; клавиатура пароля — без неё (одинаковые знаки подряд). */
+    repeatGuard: Boolean = true,
     contentAlignment: Alignment = Alignment.Center,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -80,7 +82,7 @@ fun Pressable(
     val lastClick = remember { longArrayOf(Long.MIN_VALUE / 2) }
     val clickOnce: () -> Unit = {
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastClick[0] >= REPEAT_GUARD_MS) {
+        if (!repeatGuard || now - lastClick[0] >= REPEAT_GUARD_MS) {
             lastClick[0] = now
             onClick()
         }

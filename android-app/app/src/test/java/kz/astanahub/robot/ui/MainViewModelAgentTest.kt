@@ -57,6 +57,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kz.astanahub.robot.ui.face.FaceInputMapper
 
 /** Агентский чат на экране: события `/v1/chat`, действия, запасной путь, режимы экрана, человек и голова. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -549,5 +550,67 @@ class MainViewModelAgentTest {
         assertEquals(listOf(Lang.EN), voice.langs)
         assertEquals(Lang.EN, vm.state.value.lang)
         assertFalse(vm.state.value.offline)
+    }
+
+    // --- лицо во время ответа (функция mynbay) ---
+
+    @Test
+    fun `answer to a menu question switches to the face, touch returns the menu without stopping speech`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Кафе на первом этаже."))
+            delay(500)
+            emit(ChatEvent.Phrase("Проводить вас?"))
+            emit(done)
+        }
+        val vm = vm()
+        vm.openMenu()
+        vm.submitButton("Где кафе?")
+        assertEquals(ScreenMode.MENU, vm.state.value.mode) // пока думает — меню на месте
+        advanceTimeBy(50); runCurrent()
+        assertEquals(Phase.SPEAKING, vm.state.value.phase)
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        assertTrue(vm.state.value.answerOnFace)
+        // Тап по лицу в этот момент — назад в приложение, а не «замолчать».
+        assertEquals(FaceInputMapper.Tap.OPEN_MENU, FaceInputMapper.tap(vm.state.value))
+
+        val stopsBefore = voice.stops
+        vm.openMenu() // касание лица
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        advanceTimeBy(1_000); runCurrent()
+        // Договорил обе фразы, а экран остался в меню — следующая фраза обратно не перекинула.
+        assertEquals(listOf("Кафе на первом этаже.", "Проводить вас?"), voice.spoken)
+        assertEquals(stopsBefore, voice.stops)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+    }
+
+    @Test
+    fun `legacy mode - answer is shown on the face, touch returns the menu`() = runTest(dispatcher) {
+        mode = ChatMode.LEGACY
+        val vm = vm()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        vm.submitButton("Что такое Astana Hub?")
+        advanceTimeBy(50); runCurrent()
+        assertEquals(listOf("Ответ ask."), voice.spoken)
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.openMenu()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        advanceUntilIdle()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+    }
+
+    @Test
+    fun `question asked on the face keeps our tap - tap while speaking still interrupts`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Есть коворкинг."))
+            delay(2_000)
+            emit(done)
+        }
+        val vm = vm()
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.submit("Есть коворкинг?")
+        advanceTimeBy(50); runCurrent()
+        assertEquals(Phase.SPEAKING, vm.state.value.phase)
+        assertFalse(vm.state.value.answerOnFace)
+        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(vm.state.value))
     }
 }

@@ -118,6 +118,13 @@ data class ScreenTexts(
     val sourceOne: String = "%1\$s",
     val sourceMany: String = "%1\$s",
     val back: String = "",
+    val closed: String = "",
+    val reopen: String = "",
+    val home: String = "",
+    val menu: String = "",
+    val look: String = "",
+    val faceHint: String = "",
+    val costumes: List<String> = emptyList(),
 )
 
 /** Частые вопросы (аккордеон по страницам, как на прежнем экране): что раскрыто и что в нём показать. */
@@ -179,6 +186,12 @@ class ScreenTwoState {
     /** К лицу можно вернуться (режим agent / live); в legacy главный экран — меню, голова робота не кнопка. */
     var faceAvailable by mutableStateOf(true)
 
+    /** Крестик выхода есть (на роботе без пароля сотрудника — нет: выйти с экрана нельзя; mynbay). */
+    var exitVisible by mutableStateOf(true)
+
+    /** Слой «Приложение закрыто» (прототип) — 1,5 с до закрытия, «Открыть снова» — передумать. */
+    var closed by mutableStateOf(false)
+
     /** Палец на роботе-компаньоне: отклик на touch-down рисует слой лица (глаза сжимаются). */
     val miniPressed = mutableStateOf(false)
 
@@ -209,6 +222,9 @@ interface ScreenTwoActions {
 
     /** К лицу (тап по роботу-компаньону). */
     fun onClose()
+
+    /** «Открыть снова» на слое «Приложение закрыто». */
+    fun onReopen() {}
 }
 
 /**
@@ -342,7 +358,7 @@ private fun TopBar(state: ScreenTwoState, actions: ScreenTwoActions) {
         Spacer(Modifier.width(28.dp))
         Box(Modifier.width(2.dp).height(44.dp).background(HubColors.Line))
         Spacer(Modifier.width(28.dp))
-        CircleButton(R.drawable.ic_m_close, actions::onExit)
+        if (state.exitVisible) CircleButton(R.drawable.ic_m_close, actions::onExit)
     }
 }
 
