@@ -217,6 +217,14 @@ fun RobotScreens(
             HubMotion.Press.compose(),
             label = "miniPress",
         )
+        // Экран лица с подписями (прототип v8): глаза поменьше и выше, под ними — состояние, субтитры, кнопки.
+        // Сон и поездка — глаза во весь экран (заставка, слой поездки).
+        val islandNow = screen.island
+        val faceUi = !screen.asleep && !screen.traveling &&
+            islandNow !is kz.astanahub.robot.ui.face.IslandContent.Trip && islandNow !is kz.astanahub.robot.ui.face.IslandContent.Outcome
+        val startScale by animateFloatAsState(if (faceUi) FACE_UI_SCALE else 1f, HubMotion.Gentle.compose(), label = "faceScale")
+        val startDyDp by animateFloatAsState(if (faceUi) FACE_UI_SHIFT.value else 0f, HubMotion.Gentle.compose(), label = "faceDy")
+        val galaxy = two.costume == Costume.GALAXY
 
         // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
         // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
@@ -283,6 +291,28 @@ fun RobotScreens(
                 cornerRadius = CornerRadius(r * 1.2f, r),
                 alpha = 1f - 0.6f * blur,
             )
+            // Костюм «Космонавт»: на экране лица — космос (прототип: тёмно-фиолетовое свечение и звёзды).
+            if (galaxy && t < 0.5f) {
+                val a = (1f - t * 2f) * (1f - 0.6f * blur)
+                drawRoundRect(
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                        listOf(Color(0xFF0E0B2E), Color.Black),
+                        center = Offset((left + right) / 2f, (top + bottom) / 2f),
+                        radius = (right - left) * 0.45f,
+                    ),
+                    topLeft = Offset(left, top),
+                    size = Size(right - left, bottom - top),
+                    cornerRadius = CornerRadius(r * 1.2f, r),
+                    alpha = a,
+                )
+                for (i in STARS.indices step 3) {
+                    drawCircle(
+                        Color.White.copy(alpha = STARS[i + 2] * a),
+                        radius = 1.6f * density.density,
+                        center = Offset(left + (right - left) * STARS[i], top + (bottom - top) * STARS[i + 1]),
+                    )
+                }
+            }
         }
 
         // Лицо: одна поверхность на оба экрана, преобразование — по прогрессу перехода.
@@ -290,7 +320,9 @@ fun RobotScreens(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    FaceMorph.compute(visual(), w, h, slotCx, slotCy, slotH, morph)
+                    // Глаза в экране головы компаньона двигаются вместе с её покачиванием.
+                    val bob = two.headBob.floatValue * density.density * visual().coerceIn(0f, 1f)
+                    FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob, slotH, morph, startScale, startDyDp * density.density)
                     scaleX = morph[0] * miniPress
                     scaleY = morph[0] * miniPress
                     translationX = morph[1]
@@ -340,20 +372,31 @@ fun RobotScreens(
                     },
                 ),
         ) {
-            SwipeHandle(
-                progress = ::visual,
-                travel = w,
-                pressed = pressed.value,
-                visible = swipeAllowed && !screen.asleep && screenOne,
-                reducedMotion = reduced,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
-            )
-            // Нет связи — и на экране лица видно (не только тишина): янтарная плашка сверху.
+            // Подсказка свайпа (прототип: «‹‹‹» на правом краю).
+            if (swipeAllowed && !screen.asleep && screenOne) {
+                SwipeChevrons(Modifier.align(Alignment.CenterEnd).padding(end = 34.dp))
+            }
+            // Экран лица прототипа: логотип, язык, выход, состояние, субтитры, чипы, «Меню», «Спросить голосом» / «Стоп».
+            AnimatedVisibility(
+                visible = faceUi && screenOne,
+                enter = fadeIn(HubMotion.Default.compose()),
+                exit = fadeOut(HubMotion.Snappy.compose()),
+            ) {
+                FaceOverlay(
+                    state = two,
+                    actions = actions,
+                    onMenu = {
+                        if (hostNow.onSwitch(true)) scope.launch { progress.animateTo(1f, HubMotion.Gentle.compose()) }
+                    },
+                    bottom = islandNow !is kz.astanahub.robot.ui.face.IslandContent.WhereIs,
+                )
+            }
+            // Нет связи — и на экране лица видно (не только тишина): янтарная плашка под верхом.
             AnimatedVisibility(
                 visible = two.offline && !screen.asleep && screenOne,
                 enter = fadeIn(HubMotion.Default.compose()),
                 exit = fadeOut(HubMotion.Default.compose()),
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 28.dp),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 96.dp),
             ) {
                 OfflinePill(two.texts.offline)
             }
@@ -423,6 +466,12 @@ private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
         }
     }
 }
+
+/** Звёзды «космоса» на экране лица (доли ширины / высоты, яркость) — как в прототипе. */
+private val STARS = floatArrayOf(
+    0.10f, 0.20f, 0.8f, 0.26f, 0.72f, 0.7f, 0.58f, 0.12f, 0.8f, 0.72f, 0.84f, 0.6f, 0.90f, 0.36f, 0.8f, 0.40f, 0.40f, 0.5f,
+    0.18f, 0.55f, 0.6f, 0.80f, 0.15f, 0.7f, 0.65f, 0.60f, 0.5f, 0.35f, 0.88f, 0.6f,
+)
 
 /** Скругление экрана головы робота (прототип: 40 % / 48 % от экрана 272 × 186). */
 private val SCREEN_RADIUS = 86.dp

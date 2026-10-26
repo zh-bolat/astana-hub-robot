@@ -250,7 +250,7 @@ fun BackPill(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) 
  * (пружина Snappy), подпись выбранного — белая. Сегмент 84 × 50 dp, отступ 4 dp.
  */
 @Composable
-fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier) {
+fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier, takeTouch: Boolean = false) {
     val items = Tiles.languages
     val index = items.indexOfFirst { it.first == selected }.coerceAtLeast(0)
     val thumb = animateDpAsState(SEGMENT_WIDTH * index, HubMotion.Snappy.compose(), label = "langThumb")
@@ -279,6 +279,7 @@ fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier 
                 )
                 Pressable(
                     onClick = { onSelect(lang) },
+                    takeTouch = takeTouch,
                     modifier = Modifier
                         .width(SEGMENT_WIDTH)
                         .fillMaxHeight(),

@@ -135,6 +135,8 @@ data class MainUiState(
      * возвращает в приложение, речь продолжается.
      */
     val answerOnFace: Boolean = false,
+    /** Места карты (чипы мест под ответом «где», прототип mynbay). */
+    val mapPlaces: List<Place> = emptyList(),
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -414,6 +416,8 @@ class MainViewModel(
         viewModelScope.launch {
             wf.refreshPlaces()
             placeWords = runCatching { wf.placeWords() }.getOrDefault(emptySet())
+            val places = runCatching { wf.quickPlaces().map { it.place } }.getOrDefault(emptyList())
+            _state.update { it.copy(mapPlaces = places) }
             // Live открылся раньше, чем пришли места: стартовый набор «где X» не ушёл — отправить сейчас.
             liveDirections?.tick()
         }
@@ -710,6 +714,19 @@ class MainViewModel(
 
     /** Плитка или кнопка частого вопроса. */
     fun submitButton(text: String) = submitInternal(text, faqId = null)
+
+    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой. */
+    fun askWhere(place: Place) {
+        val lang = _state.value.lang
+        val name = WayFinder.displayName(place, lang)
+        submitButton(
+            when (lang) {
+                Lang.KK -> "$name қайда?"
+                Lang.EN -> "Where is $name?"
+                else -> "Где $name?"
+            },
+        )
+    }
 
     private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false) {
         val question = text.trim()

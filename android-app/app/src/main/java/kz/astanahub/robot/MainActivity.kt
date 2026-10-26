@@ -300,6 +300,28 @@ class MainActivity : AppCompatActivity() {
         override fun onClose() {
             viewModel.showFace()
         }
+
+        // --- кнопки прототипа ---
+
+        override fun onBack() {
+            // Наш «Назад» (история экранов ViewModel); разговор без экрана ответа (live) — к приветствию.
+            if (viewModel.state.value.screen != Screen.HOME) viewModel.back() else showHomeView()
+        }
+
+        override fun onHome() {
+            viewModel.goHome()
+            showHomeView()
+        }
+
+        override fun onLook() = viewModel.lookAround()
+
+        override fun onPlace(index: Int) {
+            placeChipTargets.getOrNull(index)?.let(viewModel::askWhere)
+        }
+
+        override fun onCostume(c: kz.astanahub.robot.ui.screen.Costume) = setCostume(c)
+
+        override fun onCostumeSwipe(step: Int) = setCostume(container.costume.costume.value.next(step))
     }
 
     /**
@@ -436,6 +458,22 @@ class MainActivity : AppCompatActivity() {
         override fun onPinCancel() = closePin()
     }
 
+    /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип). */
+    private var homeChatSize = 0
+    private var placeChipTargets: List<kz.astanahub.robot.backend.Place> = emptyList()
+
+    private fun showHomeView() {
+        homeChatSize = chatLog.items.size
+        renderScreenTwo(viewModel.state.value)
+    }
+
+    /** Смена костюма (точки, свайп по роботу): робот «собирается», лицо радуется (как setSkin в прототипе). */
+    private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
+        if (c == container.costume.costume.value) return
+        container.costume.set(c)
+        face.onCue(kz.astanahub.robot.ui.face.FaceCue.ARRIVED)
+    }
+
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
     private fun listenOnce() {
         if (hasMicPermission()) {
@@ -510,6 +548,25 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
+        // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
+        two.pose = when (state.phase) {
+            Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
+            Phase.THINKING, Phase.LOOKING -> kz.astanahub.robot.ui.screen.CompanionPose.THINK
+            Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
+            else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
+        }
+        if (chatLog.items.size < homeChatSize) homeChatSize = chatLog.items.size // новый посетитель — чат с нуля
+        val home = state.screen == Screen.HOME && chatLog.items.size <= homeChatSize &&
+            state.partialQuestion.isNullOrBlank() && !state.processing
+        two.homeView = home
+        two.canGoBack = !home || state.screen != Screen.HOME
+        // Чипы мест под ответом «где» (кроме места из ответа).
+        placeChipTargets = if (!home && (state.whereIs != null || state.guideTarget != null)) {
+            state.mapPlaces.filter { it.id != state.guideTarget?.id }.take(MAX_PLACE_CHIPS)
+        } else {
+            emptyList()
+        }
+        two.placeChips = placeChipTargets.map { WayFinder.displayName(it, lang) }
         two.faceAvailable = container.chatSettings.mode.value.usesAgent
         two.exitVisible = exitMode() != ExitMode.HIDDEN
     }
@@ -685,6 +742,7 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
         const val PIN_TIMEOUT_MS = 60_000L
+        const val MAX_PLACE_CHIPS = 5
         const val CLOSE_DELAY_MS = 1_500L
         val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
