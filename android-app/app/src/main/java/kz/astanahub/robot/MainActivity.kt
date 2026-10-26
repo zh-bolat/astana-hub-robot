@@ -41,12 +41,11 @@ import kz.astanahub.robot.ui.face.FaceController
 import kz.astanahub.robot.ui.face.FaceDebug
 import kz.astanahub.robot.ui.face.FaceInputMapper
 import kz.astanahub.robot.ui.screen.ChatLog
-import kz.astanahub.robot.ui.screen.ChatRole
-import kz.astanahub.robot.ui.screen.FaqUi
 import kz.astanahub.robot.ui.screen.RobotScreens
 import kz.astanahub.robot.ui.screen.RobotScreensHost
 import kz.astanahub.robot.ui.screen.ScreenTexts
 import kz.astanahub.robot.ui.screen.ScreenTwoActions
+import kz.astanahub.robot.ui.screen.ScreenTwoMapper
 import kz.astanahub.robot.ui.screen.ScreenTwoState
 import kz.astanahub.robot.ui.screen.Tile
 import kz.astanahub.robot.ui.screen.TileAction
@@ -215,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         override fun onSwitch(open: Boolean): Boolean {
             if (open) viewModel.openMenu() else viewModel.showFace()
             // Состояние ViewModel обновлено синхронно — сразу отдаём, куда доехать (без кадра «туда-обратно»).
-            val menuOpen = menuOpen(viewModel.state.value)
+            val menuOpen = ScreenTwoMapper.menuOpen(viewModel.state.value)
             face.screen.menuOpen = menuOpen
             return menuOpen
         }
@@ -306,13 +305,10 @@ class MainActivity : AppCompatActivity() {
     // Отрисовка: MainUiState → состояние экранов (Compose перерисовывает только изменившееся)
     // ---------------------------------------------------------------------------------------------
 
-    /** Экран 2 открыт: режим MENU и не едем (в поездке лицо обязано быть на экране). */
-    private fun menuOpen(state: MainUiState): Boolean = state.mode == ScreenMode.MENU && state.guidingTo == null
-
     private fun render(state: MainUiState) {
         face.onState(state)
         val screen = face.screen
-        screen.menuOpen = menuOpen(state)
+        screen.menuOpen = ScreenTwoMapper.menuOpen(state)
         screen.travelTitle = state.guidingTo?.let { container.text.get(R.string.guide_title, state.lang, it) }
         screen.stopLabel = str(R.string.action_stop, state.lang)
         screen.asleep = state.mode == ScreenMode.SLEEP
@@ -330,42 +326,27 @@ class MainActivity : AppCompatActivity() {
         two.lang = lang
         two.status = str(statusRes(state.phase), lang)
         if (chatLog.update(state)) two.chat = chatLog.items
-        two.partial = state.partialQuestion?.takeIf { it.isNotBlank() }
-        val speaking = state.phase == Phase.SPEAKING
-        two.speakingId = if (speaking) chatLog.items.lastOrNull { it.role == ChatRole.ROBOT }?.id else null
+        two.partial = ScreenTwoMapper.partial(state)
+        two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
         two.phrase = state.subtitle
         two.thinking = state.processing
-        two.busy = state.processing || speaking
+        two.busy = ScreenTwoMapper.busy(state)
         two.tilesEnabled = !state.processing
         val tilesKey = listOf(lang, state.quickQuestions)
         if (tilesFor != tilesKey) {
             tilesFor = tilesKey
             two.tiles = Tiles.home(state.quickQuestions, str(R.string.tile_faq, lang), str(R.string.action_look, lang))
         }
-        two.faq = if (state.screen == Screen.FAQ) faq(state) else null
-        val target = state.guideTarget
-        two.guideLabel = if (!two.busy && target != null && state.guidingTo == null && state.screen != Screen.FAQ) {
-            container.text.get(R.string.action_guide, lang, WayFinder.displayName(target, lang))
-        } else {
-            null
+        two.faq = ScreenTwoMapper.faq(
+            state,
+            status = { str(statusRes(it), lang) },
+            more = { page, count -> container.text.get(R.string.faq_more, lang, page, count) },
+        )
+        two.guideLabel = ScreenTwoMapper.guideOffer(state)?.let {
+            container.text.get(R.string.action_guide, lang, WayFinder.displayName(it, lang))
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
-    }
-
-    /** Частые вопросы: аккордеон, раскрыт не больше одного вопроса (как на прежнем экране). */
-    private fun faq(state: MainUiState): FaqUi {
-        val lang = state.lang
-        val openItem = state.faqPageItems.firstOrNull { it.id == state.faqOpenId }
-        val answer = state.answer.takeIf { openItem != null && state.question == openItem.text.trim() }
-        return FaqUi(
-            items = state.faqPageItems,
-            openId = state.faqOpenId,
-            answer = answer,
-            pending = str(statusRes(if (state.processing) state.phase else Phase.THINKING), lang),
-            guide = answer != null && state.guideTarget != null && state.guidingTo == null,
-            more = if (state.faqPageCount > 1) container.text.get(R.string.faq_more, lang, state.faqPage + 1, state.faqPageCount) else null,
-        )
     }
 
     private fun texts(lang: Lang) = ScreenTexts(
