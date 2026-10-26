@@ -191,8 +191,6 @@ class MainActivity : AppCompatActivity() {
                     two = two,
                     actions = actions,
                     host = host,
-                    // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе жест отключён, как и раньше.
-                    holdEnabled = container.diagnostics.access != DiagAccess.DISABLED,
                 )
             }
         }
@@ -312,6 +310,8 @@ class MainActivity : AppCompatActivity() {
         screen.travelTitle = state.guidingTo?.let { container.text.get(R.string.guide_title, state.lang, it) }
         screen.stopLabel = str(R.string.action_stop, state.lang)
         screen.asleep = state.mode == ScreenMode.SLEEP
+        // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
+        screen.holdEnabled = ScreenTwoMapper.faceHoldEnabled(state, container.diagnostics.access != DiagAccess.DISABLED)
         // Уснул — диалог выхода закрывается (робот работает дальше).
         if (state.screensaver && two.exitConfirm) stayIn(wake = false)
         renderScreenTwo(state)

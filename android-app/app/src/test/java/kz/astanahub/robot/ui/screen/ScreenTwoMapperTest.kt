@@ -59,6 +59,14 @@ class ScreenTwoMapperTest {
     }
 
     @Test
+    fun `hold on the face opens admin only when allowed and not during a trip`() {
+        // Ревью M2-r2, M7: PIN-диалог поверх едущего робота не нужен.
+        assertTrue(ScreenTwoMapper.faceHoldEnabled(MainUiState(), diagnostics = true))
+        assertFalse(ScreenTwoMapper.faceHoldEnabled(MainUiState(guidingTo = "Кафе"), diagnostics = true))
+        assertFalse(ScreenTwoMapper.faceHoldEnabled(MainUiState(), diagnostics = false))
+    }
+
+    @Test
     fun `partial text of the visitor, blank is nothing`() {
         assertEquals("Где ка", ScreenTwoMapper.partial(MainUiState(partialQuestion = "Где ка")))
         assertNull(ScreenTwoMapper.partial(MainUiState(partialQuestion = "  ")))

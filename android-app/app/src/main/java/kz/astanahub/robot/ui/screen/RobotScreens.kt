@@ -80,7 +80,6 @@ fun RobotScreens(
     two: ScreenTwoState,
     actions: ScreenTwoActions,
     host: RobotScreensHost,
-    holdEnabled: Boolean,
 ) {
     val screen = face.screen
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -198,7 +197,7 @@ fun RobotScreens(
                     if (screenOne) {
                         Modifier.faceGestures(
                             engine = face.engine,
-                            holdEnabled = holdEnabled,
+                            holdEnabled = screen.holdEnabled,
                             pressed = pressed,
                             onTap = { hostNow.onFaceTap() },
                             onHold = { hostNow.onFaceHold() },

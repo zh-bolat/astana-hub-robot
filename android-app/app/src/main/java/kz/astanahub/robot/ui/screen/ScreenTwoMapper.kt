@@ -22,6 +22,12 @@ object ScreenTwoMapper {
     fun speakingId(s: MainUiState, chat: List<ChatItem>): Long? =
         if (s.phase == Phase.SPEAKING) chat.lastOrNull { it.role == ChatRole.ROBOT }?.id else null
 
+    /**
+     * Удержание по лицу (PIN → админка): если вход в диагностику вообще разрешён ([diagnostics]) и робот не везёт
+     * человека — PIN-диалог поверх едущего робота не нужен (ревью M2-r2, M7).
+     */
+    fun faceHoldEnabled(s: MainUiState, diagnostics: Boolean): Boolean = diagnostics && s.guidingTo == null
+
     /** Промежуточный текст посетителя (говорит прямо сейчас). */
     fun partial(s: MainUiState): String? = s.partialQuestion?.takeIf { it.isNotBlank() }
 
