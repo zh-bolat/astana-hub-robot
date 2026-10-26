@@ -161,9 +161,10 @@ def _kb_index(args: argparse.Namespace) -> int:
 
     settings = Settings()
     embedder = build_embedder(settings)
-    if embedder is None or settings.retrieval_mode == "off":
+    if embedder is None or settings.retrieval_kind() == "off":
         print(
-            "поиск выключен: нужен OPENROUTER_API_KEY (или EMBEDDING_PROVIDER) и RETRIEVAL_MODE=hybrid",
+            "поиск выключен: нужен OPENROUTER_API_KEY (или EMBEDDING_PROVIDER) и RETRIEVAL_MODE"
+            " prefetch или tool",
             file=sys.stderr,
         )
         return 2
