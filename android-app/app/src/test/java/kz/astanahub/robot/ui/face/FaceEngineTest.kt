@@ -195,6 +195,28 @@ class FaceEngineTest {
     }
 
     @Test
+    fun `surprise while speaking keeps the mouth to the speech, in silence opens an o`() {
+        val e = engine(FakeAudio(playback = 0f))
+        e.inputs.emotion = FaceEmotion.SURPRISED
+        e.inputs.activity = FaceActivity.SPEAKING
+        e.frames(90)
+        assertEquals(0f, e.target(P.MOUTH_OPEN), 1e-4f)
+        e.inputs.activity = FaceActivity.IDLE
+        e.frames(90)
+        assertTrue(e.target(P.MOUTH_OPEN) > 0.2f)
+        assertTrue(e.pose[P.MOUTH_OPEN] > 0.2f)
+    }
+
+    @Test
+    fun `thinking emotion at rest looks up like thinking`() {
+        val e = engine()
+        e.inputs.emotion = FaceEmotion.THINKING
+        var up = 0
+        e.frames(600) { if (it.pose[P.GAZE_Y] < -0.3f) up++ }
+        assertTrue("frames looking up: $up of 600", up > 450)
+    }
+
+    @Test
     fun `speaking without a measured level moves the mouth synthetically, silence keeps it closed`() {
         val e = engine(FakeAudio(playback = -1f))
         e.inputs.activity = FaceActivity.SPEAKING

@@ -62,6 +62,9 @@ class FaceEngine(
     /** Пружины по состояниям (темп: сон медленнее, пробуждение бодрее) — готовятся один раз. */
     private val moodSpecs: Array<Array<SpringSpec>> = buildMoodSpecs()
 
+    /** Поведение «жизни» (взгляд, моргание) — по состоянию, иногда по эмоции. */
+    private var lifeMood = FaceMood.IDLE
+
     private var lastNanos = Long.MIN_VALUE
     private var nowMs = 0L
 
@@ -113,7 +116,16 @@ class FaceEngine(
         val t = springs.target
         Expressions.NEUTRAL.applyTo(t)
         Expressions.mood(mood).applyTo(t)
+        // Эмоция поверх; пока говорит — раскрытие рта остаётся за речью.
+        val mouthOpen = t[P.MOUTH_OPEN]
         Expressions.overlay(director.emotion)?.blendInto(t, director.overlayWeight)
+        if (t[P.TALK] >= 0.5f) t[P.MOUTH_OPEN] = mouthOpen
+        // «Думает» как эмоция в покое — и взгляд как у думающего.
+        val lifeMood = if (mood == FaceMood.IDLE && director.emotion == FaceEmotion.THINKING) FaceMood.THINKING else mood
+        if (lifeMood != this.lifeMood) {
+            this.lifeMood = lifeMood
+            life.onMood(lifeMood, nowMs)
+        }
         life.update(nowMs, dt, springs.value[P.BREATH_RATE], reducedMotion)
         t[P.GAZE_X] = (t[P.GAZE_X] + life.gazeOffsetX).coerceIn(-1f, 1f)
         t[P.GAZE_Y] = (t[P.GAZE_Y] + life.gazeOffsetY).coerceIn(-1f, 1f)
@@ -216,6 +228,7 @@ class FaceEngine(
     private fun onMoodEnter(mood: FaceMood, first: Boolean) {
         val specs = moodSpecs[mood.ordinal]
         for (i in 0 until P.COUNT) springs.setSpec(i, specs[i])
+        lifeMood = mood
         life.onMood(mood, nowMs)
         if (first || reducedMotion) return
         when (mood) {

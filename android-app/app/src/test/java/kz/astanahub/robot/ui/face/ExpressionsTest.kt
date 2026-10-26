@@ -91,14 +91,15 @@ class ExpressionsTest {
     }
 
     @Test
-    fun `emotion overlays never touch the talking mouth`() {
+    fun `emotion overlays never switch speech reactions`() {
         for (e in FaceEmotion.entries) {
             val o = Expressions.overlay(e) ?: continue
-            assertFalse("$e", o.has(P.MOUTH_OPEN))
             assertFalse("$e", o.has(P.TALK))
             assertFalse("$e", o.has(P.LISTEN))
         }
         assertEquals(null, Expressions.overlay(FaceEmotion.NEUTRAL))
+        // Удивление в покое — рот «о».
+        assertTrue(Expressions.overlay(FaceEmotion.SURPRISED)!![P.MOUTH_OPEN] > 0.2f)
     }
 
     @Test

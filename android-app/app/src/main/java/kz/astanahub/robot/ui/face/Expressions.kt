@@ -327,7 +327,7 @@ object Expressions {
 
     fun mood(m: FaceMood): Expression = MOODS[m.ordinal]
 
-    // --- Эмоции сервера: частичные наложения (рот «говорит» сам — раскрытие не трогаем). ---
+    // --- Эмоции сервера: частичные наложения. Пока робот говорит, раскрытие рта — от речи (см. FaceEngine). ---
 
     private val E_HAPPY = expression("emotion:happy") {
         eyeSmile(0.75f)
@@ -353,8 +353,7 @@ object Expressions {
         eyeSize(70f, 106f)
         brows(26f)
         this[P.BROW_ARCH] = 16f
-        this[P.MOUTH_W] = 34f
-        this[P.MOUTH_SMILE] = 2f
+        mouth(w = 34f, smile = 2f, open = 0.4f, round = 1f)
     }
 
     private val E_SAD = expression("emotion:sad") {
