@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -201,11 +202,78 @@ _RU_ORD_NOUNS = re.compile(
     r"(?P<n>\d{1,4})\s+(?P<noun>(?:этаж|корпус|подъезд|год)(?:ом|е|у|а|)?)\b", re.I
 )
 _RU_ORD_SUFFIX = re.compile(r"\b(?P<n>\d{1,4})-(?P<suf>й|я|е|го|му|м|ом|ой|ую|х)\b")
+_RU_MONTHS = "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
+_RU_DATE = re.compile(
+    rf"(?<![\w.,:-])(?:(?P<a>\d{{1,2}})\s*(?P<sep>и|или|[-–—])\s*)?(?P<n>\d{{1,2}})\s+(?P<m>{_RU_MONTHS})\b",
+    re.IGNORECASE,
+)
 _TIME = re.compile(r"(?<![\d:])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?![\d:])")
 _TIME_RANGE = re.compile(
     r"(?:(?P<pre>\bс)\s+)?(?<![\d:])(?P<a>(?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*(?P<b>(?:[01]?\d|2[0-3]):[0-5]\d)(?![\d:])"
 )
-_INT = re.compile(r"(?<![\w.,:-])(?P<n>\d{1,4})(?![\w]|[.,:]\d)")
+_INT = re.compile(r"(?<![\w.,:-])(?P<n>\d{1,9})(?![\w]|[.,:]\d)")
+# Разряды через пробел: «9 990 тенге», «1 200 мест» — одно число, а не «девять девятьсот девяносто»
+_GROUPED = re.compile(r"(?<![\d.,:])\d{1,3}(?:[   ]\d{3})+(?!\d)")
+# Телефон: «+7 7172 73 50 89» → «плюс семь, семь один семь два, семьдесят три, пятьдесят, восемьдесят девять»
+_PHONE = re.compile(r"\+\d{1,3}(?:[\s ()-]+\d{2,4}){3,5}(?!\d)")
+
+
+def _phone(m: re.Match[str], card: Callable[[int], str]) -> str:
+    country, *groups = re.findall(r"\d+", m.group(0))
+
+    def say(group: str) -> str:  # код города и группы с нулём — по цифрам, остальное — числом
+        if len(group) >= 4 or group.startswith("0"):
+            return " ".join(card(int(d)) for d in group)
+        return card(int(group))
+
+    return "плюс " + ", ".join([card(int(country)), *map(say, groups)])
+
+
+# Версии и номера комнат: «Startup Orda 2.0» → «два ноль», переговорная «6.01» → «шесть ноль один»;
+# коды павильонов («C4.6») не трогаем — перед числом буква
+_DOTTED = re.compile(r"(?<![\w.,])(?P<a>\d{1,2})\.(?P<b>\d{1,2})(?!\d|\.\d)")
+# Дробь с запятой: «1,7 миллиарда» (разряды через пробел уже склеены, «9990, 19990» — с пробелом после запятой)
+_DECIMAL = re.compile(r"(?<![\w.,])(?P<a>\d{1,3}),(?P<b>\d{1,2})(?!\d)")
+# Дробь в адресе и «24/7»: «55/8» → «пятьдесят пять дробь восемь»
+_SLASH = re.compile(r"(?<![\w/])(?P<a>\d{1,4})/(?P<b>\d{1,4})(?![\w/])")
+
+
+def _dotted(m: re.Match[str], card: Callable[[int], str]) -> str:
+    b = m["b"]
+    tail = " ".join(card(int(d)) for d in b) if b.startswith("0") else card(int(b))
+    return f"{card(int(m['a']))} {tail}"
+
+
+def _ru_decimal(m: re.Match[str]) -> str:
+    case = "g" if _ru_case_before(m.string, m.start()) == "g" else "n"
+    a, b = int(m["a"]), int(m["b"])
+
+    def one(n: int) -> bool:
+        return n % 10 == 1 and n % 100 != 11
+
+    whole = {"n": "целая", "g": "целой"}[case] if one(a) else "целых"
+    frac = ("десят" if len(m["b"]) == 1 else "сот") + ({"n": "ая", "g": "ой"}[case] if one(b) else "ых")
+    return f"{_ru_card(a, case, 'f')} {whole} {_ru_card(b, case, 'f')} {frac}"
+
+
+def _kk_decimal(m: re.Match[str]) -> str:  # «1,7» → «бір бүтін оннан жеті»
+    return f"{_kk_card(int(m['a']))} бүтін {'оннан' if len(m['b']) == 1 else 'жүзден'} {_kk_card(int(m['b']))}"
+
+
+def _slash(m: re.Match[str], lang: str) -> str:
+    if (m["a"], m["b"]) == ("24", "7"):
+        return "тәулік бойы" if lang == "kk" else "двадцать четыре на семь"
+    return f"{m['a']}, {m['b']}" if lang == "kk" else f"{m['a']} дробь {m['b']}"
+
+
+def _numbers_special(text: str, lang: str) -> str:
+    """ru/kk до основных чисел: телефон, версии и номера комнат, дроби, «55/8» и «24/7»."""
+    card = _kk_card if lang == "kk" else _ru_card
+    text = _PHONE.sub(lambda m: _phone(m, card), text)
+    text = _DOTTED.sub(lambda m: _dotted(m, card), text)
+    text = _GROUPED.sub(lambda m: re.sub(r"\s", "", m.group(0)), text)
+    text = _DECIMAL.sub(_kk_decimal if lang == "kk" else _ru_decimal, text)
+    return _SLASH.sub(lambda m: _slash(m, lang), text)
 _PERCENT = re.compile(r"(?<![\w.,])(?P<n>\d{1,4})\s*%")
 _CASE_RU = {
     "n": "nominative",
@@ -322,6 +390,12 @@ def _ru_numbers(text: str) -> str:
 
     text = _RU_ORD_SUFFIX.sub(ord_suffix, text)
 
+    def date(m: re.Match[str]) -> str:  # «2 июля», «до 1 января», «2 и 3 октября» — родительный, ср. род
+        first = f"{_ru_ord(int(m['a']), 'g', 'n')} {m['sep']} " if m["a"] else ""
+        return f"{first}{_ru_ord(int(m['n']), 'g', 'n')} {m['m']}"
+
+    text = _RU_DATE.sub(date, text)
+
     def percent(m: re.Match[str]) -> str:
         n = int(m.group("n"))
         tail = n % 100
@@ -420,12 +494,19 @@ def _kk_time(hh: str, mm: str) -> str:
     return words
 
 
+# Этаж, год и дата по-казахски — порядковые: «2 қабат» → «екінші қабат», «2029 жылғы 1 қаңтарға» →
+# «екі мың жиырма тоғызыншы жылғы бірінші қаңтарға»
+_KK_MONTHS = "қаңтар|ақпан|наурыз|сәуір|мамыр|маусым|шілде|тамыз|қыркүйек|қазан|қараша|желтоқсан"
 _KK_TIME = re.compile(
     r"(?<![\d:])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?:-(?P<suf>[^\W\d_]+))?(?![\d:])"
 )
 _KK_NUM = re.compile(
-    r"(?<![\w.,:])(?P<n>\d{1,4})(?:-(?P<suf>[^\W\d_]+)|(?P<ord>(?=\s+қабат)))?(?![\w]|[.,:]\d)"
+    r"(?<![\w.,:])(?P<n>\d{1,9})(?:-(?P<suf>[^\W\d_]+)|(?P<ord>(?=\s+(?:қабат|жыл|" + _KK_MONTHS + r"))))?"
+    r"(?![\w]|[.,:]\d)"
 )
+# Притяжательный суффикс (с падежом) после числа: «айдың 25-іне» → «жиырма бесіне», «20-сына» → «жиырмасына»;
+# модель пишет его уже под звучание числа — приклеиваем как есть
+_KK_POSS = re.compile(r"с?[ыі](?:н|на|не|нда|нде|нан|нен|мен|ның|нің)?")
 
 
 def _kk_with_suffix(words: str, suffix: str | None) -> str:
@@ -452,6 +533,8 @@ def _kk_numbers(text: str) -> str:
         n, suf = int(m["n"]), m["suf"]
         if m["ord"] is not None:  # «2 қабатта» → «екінші қабатта»
             return _kk_ord(n)
+        if suf is not None and suf.lower() not in _KK_SUFFIX and _KK_POSS.fullmatch(suf.lower()):
+            return _kk_card(n) + suf
         if suf is not None and _KK_SUFFIX.get(suf.lower()) in (None, "ord"):
             return _kk_ord(n) + ("" if _KK_SUFFIX.get(suf.lower()) == "ord" else f" {suf}")
         return _kk_with_suffix(_kk_card(n), suf)
@@ -478,7 +561,11 @@ def normalize_for_tts(text: str, lang: Lang, pronunciations: Path | None = None)
     if re.search(r"\w", stripped):
         text = _cap_first(stripped)
     text = apply_pronunciations(text, lang, pronunciations)
+    if lang == "en":
+        text = _GROUPED.sub(lambda m: re.sub(r"\s", ",", m.group(0)), text)
     try:
+        if lang in ("ru", "kk"):
+            text = _numbers_special(text, lang)
         if lang == "ru":
             text = _ru_numbers(text)
         elif lang == "kk":
