@@ -160,7 +160,7 @@ _NARRATION = re.compile(
 # «Факт есть в базе: …», «В базе данных о камере хранения нет» (правило 10 промпта — базу не упоминать)
 _META = re.compile(
     r"по правилам|согласно правилам|системн\w* промпт|\b(where_is|guide_to|no_answer|search_kb|look\(\))|"
-    r"\bв базе\b|\bбаз[аеуы] (знаний|данных)\b|\bбазада\b|\b(knowledge base|database)\b",
+    r"\b(в|по) базе\b|\bбаз[аеуы] (знаний|данных)\b|\bбазада\b|\b(knowledge base|database)\b",
     re.IGNORECASE,
 )
 # Служебный префикс перед самим ответом: «Translate to Kazakh: EXPO жерасты паркингі…» — модель «переводит»
@@ -200,8 +200,9 @@ def _is_narration(phrase: str, lang: Lang) -> bool:
     """Фраза — рассуждение модели, а не ответ посетителю (не озвучиваем)."""
     if _NARRATION.match(phrase) or _META.search(phrase):
         return True
-    # по-английски посреди русского/казахского ответа — это разбор реплики, а не ответ
-    return lang != "en" and script_of(phrase) == "lat" and len(phrase.split()) >= 4
+    # по-английски посреди русского/казахского ответа — это разбор реплики, а не ответ («Should I search?
+    # Answer directly.» на проде — фразы по 2–3 слова); бренды («Astana Hub») script_of не считает латиницей
+    return lang != "en" and script_of(phrase) == "lat" and len(phrase.split()) >= 2
 
 
 @dataclass
