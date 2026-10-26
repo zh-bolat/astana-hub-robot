@@ -610,6 +610,15 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
 #idleLayer > .ind.idle-ind { position: absolute !important; left: 50%; top: 50%; margin: -260px 0 0 -520px !important; }
 #idleLayer > #saverHi { position: absolute !important; left: 0; right: 0; bottom: 104px; margin: 0; }
 #idleLayer > #saverSub { position: absolute !important; left: 0; right: 0; bottom: 54px; margin: 0; }
+
+/* exit: letter + digit keyboard, the password may contain letters */
+.exit-card.pin { flex-direction: column !important; gap: 22px !important; padding: 40px 48px !important; }
+.exit-main { min-width: 0 !important; gap: 12px !important; }
+.pad { display: flex !important; flex-direction: column; gap: 10px; align-items: center; }
+.kb-row { display: flex; gap: 10px; }
+.pad .btn { width: 76px; height: 72px !important; padding: 0 !important; justify-content: center; font-size: 30px !important; text-transform: none; }
+.pad .btn.kb-del { width: 120px; }
+.exit-card .exit-actions { margin-top: 4px; }
 @media (prefers-reduced-motion: reduce) { .stage *, .stage *::before, .stage *::after { animation: none !important; transition: none !important; } }
 /* boxes lighter than bg */
 .tile, .answer, .row, .exit-card { background: linear-gradient(180deg, #FFFFFF 0%, #FBFDFF 100%) !important; border-color: rgba(60,100,200,.08) !important; border-width: 1px; box-shadow: 0 1px 2px rgba(30,50,110,.05), 0 6px 18px rgba(30,60,140,.08) !important; }
@@ -737,7 +746,7 @@ body { background: var(--page-bg); color: var(--page-fg); font-family: var(--fon
       <button id="modeBtn" class="on" aria-pressed="true">Режим: agent (лицо)</button>
     </div>
     <div class="demo-row" id="emoRow"><label>Мимика робота:</label></div>
-    <p class="note">Тексты ответов, места и расстояния здесь примерные, не данные хаба. На роботе ответы приходят с сервера. Через 20 с без действий после ответа экран сам возвращается к приветствию, через 60 с на приветствии включается заставка. В режиме agent меню без касаний через 30 с снова сменяется лицом, а в режиме legacy лицо появляется только на время ответа. PIN для выхода в прототипе: 0000 (в приложении PIN задаётся в secrets.properties).</p>
+    <p class="note">Тексты ответов, места и расстояния здесь примерные, не данные хаба. На роботе ответы приходят с сервера. Через 20 с без действий после ответа экран сам возвращается к приветствию, через 60 с на приветствии включается заставка. В режиме agent меню без касаний через 30 с снова сменяется лицом, а в режиме legacy лицо появляется только на время ответа. Пароль для выхода в прототипе: 0000 (в приложении он задаётся в secrets.properties).</p>
   </div>
 </div>
 
@@ -770,7 +779,7 @@ const T = {
     offline: 'Нет связи с сервером. Дорогу подскажу и без интернета.', miss1: 'Не расслышал. Повторите, пожалуйста.', miss2: 'Давайте так: выберите тему на экране.',
     whereAsk: 'Куда вас проводить? Выберите место или назовите его.', snapshot: 'снимок с камеры', page: 'стр.',
     back: 'Назад', exit: 'Выйти из приложения', exitQ: 'Выйти из приложения?', exitSub: 'Робот перестанет отвечать посетителям.', exitYes: 'Выйти', exitNo: 'Остаться', closedT: 'Приложение закрыто', closedSub: 'На роботе здесь будет обычный экран Android.', reopen: 'Открыть снова', skinDefault: 'Обычный', skinGalaxy: 'Космос', skinKazakh: 'Казахский', skinBusiness: 'Деловой',
-    pinSub: 'Выйти может только сотрудник. Введите PIN.', pinWrong: 'Неверный PIN. Осталось попыток: ', pinLocked: 'Слишком много попыток. Попробуйте через 5 мин.', erase: 'Стереть',
+    pinSub: 'Выйти может только сотрудник. Введите пароль.', pinWrong: 'Неверный PIN. Осталось попыток: ', pinLocked: 'Слишком много попыток. Попробуйте через 5 мин.', erase: 'Стереть',
     menu: 'Меню', faceHint: 'Скажите вопрос, я слушаю', tapHint: 'Коснитесь экрана, чтобы открыть меню', hello: 'Здравствуйте! Я помощник Astana Hub. Спросите меня о хабе или куда пройти.' },
   kk: { greetTitle: 'Сәлеметсіз бе! Қалай көмектесейін?', greetSub: 'Дауыспен сұраңыз немесе тақырып таңдаңыз', hint: 'Сұрағыңызды айтыңыз, мен тыңдап тұрмын',
     where: 'Не қайда орналасқан', events: 'Іс-шаралар', about: 'Astana Hub туралы', wifi: 'Wi-Fi және қызметтер', faq: 'Жиі қойылатын сұрақтар', look: 'Бұл не?',
@@ -1026,11 +1035,10 @@ function renderPin(msg) {
   document.querySelectorAll('#pad .btn').forEach(b => b.disabled = locked);
 }
 function buildPad() {
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
-  document.getElementById('pad').innerHTML = keys.map(k => k === '' ? '<span></span>' : k === 'del'
-    ? `<button class="btn tap" data-act="pinDel" aria-label="${t('erase')}">⌫</button>`
-    : `<button class="btn tap" data-act="pin" data-d="${k}">${k}</button>`).join('');
+  const rows = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+  document.getElementById('pad').innerHTML = rows.map((r, ri) => `<div class="kb-row">${[...r].map(k => `<button class="btn tap" data-act="pin" data-d="${k}">${k}</button>`).join('')}${ri === 3 ? `<button class="btn tap kb-del" data-act="pinDel" aria-label="${t('erase')}">⌫</button>` : ''}</div>`).join('');
 }
+(() => { const m = document.querySelector('.exit-main'); m.insertBefore(document.getElementById('pad'), m.querySelector('.exit-actions')); })();
 function restartExitTimer() { clearTimeout(exitTimer); exitTimer = setTimeout(stayIn, 15000); } // nobody types: keep working
 function askExit() {
   clearTimers(); stopSpeech(); clearTimeout(idleTimer);

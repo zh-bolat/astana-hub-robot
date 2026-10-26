@@ -30,11 +30,12 @@ val diagPinSalt = secret("DIAG_PIN_SALT").ifEmpty { "kz.astanahub.robot/diag-pin
 
 fun diagPinHash(pin: String, salt: String): String {
     if (pin.isEmpty()) return ""
-    if (!pin.matches(Regex("\\d{4,12}"))) {
-        throw GradleException("DIAG_PIN в secrets.properties: только цифры, 4–12 знаков")
+    // Латинские буквы и цифры, 4–12 знаков; регистр не важен (хешируется в нижнем регистре).
+    if (!pin.matches(Regex("[A-Za-z0-9]{4,12}"))) {
+        throw GradleException("DIAG_PIN в secrets.properties: латинские буквы и цифры, 4–12 знаков")
     }
     val md = MessageDigest.getInstance("SHA-256")
-    var digest = md.digest("$salt:$pin".toByteArray(Charsets.UTF_8))
+    var digest = md.digest("$salt:${pin.lowercase()}".toByteArray(Charsets.UTF_8))
     repeat(9_999) { digest = md.digest(digest) }
     return digest.joinToString("") { "%02x".format(it) }
 }

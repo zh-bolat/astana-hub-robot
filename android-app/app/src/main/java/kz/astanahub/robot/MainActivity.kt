@@ -674,12 +674,12 @@ class MainActivity : AppCompatActivity() {
     private var exitPadErase: View? = null
     private val exitPadKeys = mutableListOf<View>()
 
-    /** Экранная клавиатура 3×4: крупные кнопки, системная клавиатура не нужна. */
+    /** Экранная клавиатура: цифры и латинские буквы (пароль может быть вроде «k7m2»), системная клавиатура не нужна. */
     private fun buildExitPad() {
         val pad = binding.exitPad
-        val size = resources.getDimensionPixelSize(R.dimen.btn_height)
-        val gap = (16 * resources.displayMetrics.density).toInt()
-        val rows = listOf("123", "456", "789", "_0<") // «_» — пустое место, ⌫ справа от нуля, как на телефоне
+        val size = (68 * resources.displayMetrics.density).toInt()
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        val rows = listOf("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm<")
         rows.forEachIndexed { r, row ->
             val line = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
@@ -687,7 +687,7 @@ class MainActivity : AppCompatActivity() {
                 clipChildren = false
             }
             row.forEachIndexed { c, ch ->
-                val lp = android.widget.LinearLayout.LayoutParams(size * 3 / 2, size)
+                val lp = android.widget.LinearLayout.LayoutParams(if (ch == '<') size * 2 else size, size)
                 if (c > 0) lp.marginStart = gap
                 if (ch == '_') {
                     line.addView(android.widget.Space(this), lp)
@@ -701,7 +701,7 @@ class MainActivity : AppCompatActivity() {
                         exitPadErase = this
                     } else {
                         text = ch.toString()
-                        textSize = 36f
+                        textSize = 28f
                         setOnClickListener { if (exitPin.append(ch)) onExitPinChanged() }
                     }
                 }

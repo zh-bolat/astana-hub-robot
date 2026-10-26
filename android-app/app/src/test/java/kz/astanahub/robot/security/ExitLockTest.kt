@@ -51,9 +51,27 @@ class ExitLockTest {
         assertEquals(PinBuffer.MAX_LENGTH, b.length)
     }
 
+    @Test
+    fun `latin letters are accepted in lower case`() {
+        val b = PinBuffer()
+        "K7M2".forEach { assertTrue(b.append(it)) }
+        assertEquals("k7m2", b.value)
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun `non digits are rejected`() {
-        PinBuffer().append('a')
+    fun `symbols are rejected`() {
+        PinBuffer().append('#')
+    }
+
+    @Test
+    fun `letter pin is checked without regard to case`() {
+        val store = object : LockStore {
+            override var failedAttempts = 0
+            override var lockedUntilMillis = 0L
+        }
+        val guard = DiagPinGuard(DiagPin.hash("k7m2", "salt"), "salt", store, now = { 1_000L })
+        assertEquals(DiagPinGuard.Result.Ok, guard.check("K7M2"))
+        assertEquals(DiagPinGuard.Result.Ok, guard.check("k7m2"))
     }
 
     @Test

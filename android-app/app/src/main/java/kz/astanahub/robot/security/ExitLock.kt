@@ -24,7 +24,7 @@ enum class ExitMode {
     }
 }
 
-/** Цифры, набранные на экранной клавиатуре PIN. */
+/** Знаки PIN (цифры и латинские буквы), набранные на экранной клавиатуре. */
 class PinBuffer(private val maxLength: Int = MAX_LENGTH) {
     private val digits = StringBuilder()
 
@@ -34,11 +34,12 @@ class PinBuffer(private val maxLength: Int = MAX_LENGTH) {
     /** Можно ли уже проверять PIN (короче [MIN_LENGTH] PIN не бывает). */
     val isComplete: Boolean get() = digits.length >= MIN_LENGTH
 
-    /** Добавляет цифру; false, если PIN уже максимальной длины. */
-    fun append(digit: Char): Boolean {
-        require(digit in '0'..'9') { "not a digit: $digit" }
+    /** Добавляет цифру или латинскую букву (в нижнем регистре); false, если PIN уже максимальной длины. */
+    fun append(key: Char): Boolean {
+        val c = key.lowercaseChar()
+        require(c in '0'..'9' || c in 'a'..'z') { "not a PIN key: $key" }
         if (digits.length >= maxLength) return false
-        digits.append(digit)
+        digits.append(c)
         return true
     }
 
