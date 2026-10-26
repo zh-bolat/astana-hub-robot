@@ -46,6 +46,26 @@ class FaceGestureRecognizerTest {
         (1..steps).map { i -> (x0 + (x1 - x0) * i / steps) to (y0 + (y1 - y0) * i / steps) }
 
     @Test
+    fun `touch taken by a button (Stop on the island) never starts a face gesture - no hold, no tap, no swipe`() {
+        // Ревью M2-r1, B1: палец 3.6 с на «Стоп» в поездке открывал админку.
+        r.down(500f, 900f, t, onControl = true)
+        repeat(240) { t += 16; r.tick(t) } // 3.8 с удержания
+        r.up(500f, 900f, t)
+        assertEquals(emptyList<String>(), log.events)
+        // Свайп с кнопки — тоже не жест лица.
+        r.down(1500f, 540f, t, onControl = true)
+        drag(line(1500f, 540f, 700f, 540f, 20))
+        r.up(700f, 540f, t)
+        r.cancel()
+        assertEquals(emptyList<String>(), log.events)
+        // Следующее обычное касание лица — снова жест.
+        r.down(500f, 500f, t)
+        t += 100
+        r.up(500f, 500f, t)
+        assertEquals(listOf("down", "holdStart", "holdCancel", "tap", "up"), log.events)
+    }
+
+    @Test
     fun `quick touch is a tap, response starts on touch down`() {
         r.down(500f, 400f, t)
         assertEquals(listOf("down", "holdStart"), log.events)

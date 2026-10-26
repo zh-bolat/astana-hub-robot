@@ -76,7 +76,17 @@ class FaceGestureRecognizer(
     private val sy = FloatArray(SAMPLES)
     private var count = 0
 
-    fun down(x: Float, y: Float, t: Long) {
+    /**
+     * Касание. [onControl] — касание принадлежит кнопке поверх лица («Стоп» на острове, кнопки экрана 2: она
+     * потребила `down`): жест лица не начинается вовсе — ни взгляда, ни удержания (админки), ни тапа, ни свайпа.
+     */
+    fun down(x: Float, y: Float, t: Long, onControl: Boolean = false) {
+        if (onControl) {
+            mode = Mode.NONE
+            stroking = false
+            holdStarted = false
+            return
+        }
         mode = Mode.PRESSED
         stroking = false
         x0 = x
@@ -154,8 +164,9 @@ class FaceGestureRecognizer(
         finish()
     }
 
-    /** Жест отобрали (система, второй палец): без тапа и без перехода в меню. */
+    /** Жест отобрали (система, кнопка забрала отпускание): без тапа и без перехода в меню. */
     fun cancel() {
+        if (mode == Mode.NONE) return
         when (mode) {
             Mode.PRESSED -> cancelHold()
             Mode.SWIPE -> listener.onSwipeCancel()

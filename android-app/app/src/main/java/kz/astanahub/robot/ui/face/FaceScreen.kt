@@ -12,7 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +36,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -204,7 +206,10 @@ fun FaceScreen(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val id = down.id
-                    recognizer.down(down.position.x, down.position.y, down.uptimeMillis)
+                    // Касание кнопки поверх лица («Стоп» на острове) — её: кнопка потребила `down` раньше нас
+                    // (проход Main идёт от потомков к предкам), жест лица не начинаем.
+                    recognizer.down(down.position.x, down.position.y, down.uptimeMillis, onControl = down.isConsumed)
+                    if (recognizer.mode == FaceGestureRecognizer.Mode.NONE) return@awaitEachGesture
                     while (true) {
                         // Пока палец лежит неподвижно, событий нет — время удержания идёт по таймауту.
                         val event = withTimeoutOrNull(HOLD_POLL_MS) { awaitPointerEvent() }
@@ -212,7 +217,7 @@ fun FaceScreen(
                             recognizer.tick(SystemClock.uptimeMillis())
                             continue
                         }
-                        // Второй палец не мешает: следим только за первым.
+                        // Второй палец не мешает и не отменяет: жест ведёт первый палец.
                         val change = event.changes.firstOrNull { it.id == id }
                         if (change == null) {
                             recognizer.cancel()
@@ -344,12 +349,15 @@ fun TravelIsland(title: String?, stopLabel: String, onStop: () -> Unit, modifier
     }
 }
 
-/** Белая кнопка-пилюля: отклик сразу на касание (scale 0.97), действие — на отпускании. */
+/**
+ * Белая кнопка-пилюля: отклик сразу на касание (scale 0.97), действие — на отпускании.
+ * Касание **потребляется сразу** ([pressToClick]): жесты лица под кнопкой (удержание → админка, тап, свайп) не
+ * начинаются — удержание пальца на «Стоп» не откроет админку и не потеряет нажатие (ревью M2-r1, B1).
+ */
 @Composable
 fun PillButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) HubMotion.PRESS_SCALE else 1f, HubMotion.Press.compose(), label = "press")
-    val click by rememberUpdatedState(onClick)
+    val pressed = remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (pressed.value) HubMotion.PRESS_SCALE else 1f, HubMotion.Press.compose(), label = "press")
     Box(
         modifier
             .graphicsLayer {
@@ -359,20 +367,36 @@ fun PillButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier
             .height(72.dp)
             .widthIn(min = 160.dp)
             .background(HubColors.White, RoundedCornerShape(percent = 50))
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        tryAwaitRelease()
-                        pressed = false
-                    },
-                    onTap = { click() },
-                )
-            }
+            .pressToClick(pressed, onClick)
             .padding(horizontal = 40.dp),
         contentAlignment = Alignment.Center,
     ) {
         BasicText(text = label, style = HubType.Headline.copy(color = HubColors.Black), maxLines = 1)
+    }
+}
+
+/**
+ * Нажатие кнопки поверх лица или экрана 2: `down` потребляется сразу (родительские жесты — лицо, свайп экрана —
+ * видят его потреблённым и не начинаются), [pressed] — на touch-down (для scale 0.97), [onClick] — на отпускании
+ * внутри кнопки; палец увели за край или касание забрал свайп — нажатие отменяется без действия.
+ */
+fun Modifier.pressToClick(pressed: MutableState<Boolean>, onClick: () -> Unit): Modifier = composed {
+    val click by rememberUpdatedState(onClick)
+    pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            down.consume()
+            pressed.value = true
+            val up = try {
+                waitForUpOrCancellation()
+            } finally {
+                pressed.value = false
+            }
+            if (up != null) {
+                up.consume()
+                click()
+            }
+        }
     }
 }
 
