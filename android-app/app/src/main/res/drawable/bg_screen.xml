@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Фон: мягкий пастельный градиент слева направо — мятный → почти белый → лавандовый. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <gradient android:angle="0" android:startColor="#EEF9F5" android:centerColor="#F6F9FD" android:endColor="#EEF1FD" />
-</shape>

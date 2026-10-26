@@ -37,6 +37,7 @@ class LiveSessionTest {
         conn: FakeLiveConnection = FakeLiveConnection(),
         mic: FakeLiveMicrophone = FakeLiveMicrophone(),
         connect: () -> LiveConnection? = { conn },
+        levels: kz.astanahub.robot.audio.AudioLevels? = null,
     ): Harness {
         val sink = FakeAudioSink({ testScheduler.currentTime })
         val session = LiveSession(
@@ -47,10 +48,32 @@ class LiveSessionTest {
             clock = { testScheduler.currentTime },
             confined = dispatcher,
             io = dispatcher,
+            levels = levels,
         )
         val signals = mutableListOf<LiveSignal>()
         backgroundScope.launch { session.signals.collect { signals += it } }
         return Harness(session, conn, mic, sink, signals)
+    }
+
+    @Test
+    fun `server VAD drives the face - user_speaking on, user_final off`() = runTest(dispatcher) {
+        val levels = kz.astanahub.robot.audio.AudioLevels { testScheduler.currentTime }
+        val h = harness(levels = levels)
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        assertFalse(levels.voiceActive())
+        h.conn.server(LiveEvent.UserSpeaking)
+        runCurrent()
+        assertTrue(levels.voiceActive())
+        h.conn.server(LiveEvent.UserFinal("Где кафе?", Lang.RU))
+        runCurrent()
+        assertFalse(levels.voiceActive())
+        h.conn.server(LiveEvent.UserPartial("Где"))
+        runCurrent()
+        assertTrue(levels.voiceActive())
+        h.conn.server(LiveEvent.Ignored)
+        runCurrent()
+        assertFalse(levels.voiceActive())
     }
 
     @Test

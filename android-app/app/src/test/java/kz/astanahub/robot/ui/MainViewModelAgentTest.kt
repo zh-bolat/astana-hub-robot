@@ -222,6 +222,7 @@ class MainViewModelAgentTest {
         assertEquals(voice.spoken.toString(), "Могу проводить.", voice.spoken.last())
         assertTrue(voice.spoken.toString(), voice.spoken.first().contains("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
+        assertEquals("island where_is", "Кафе", vm.state.value.whereIs?.place)
         coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
         coVerify(exactly = 0) { backend.postLocalMessage(any(), any()) }
     }

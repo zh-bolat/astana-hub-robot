@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kz.astanahub.robot.audio.PcmPlaybackMeter
 import timber.log.Timber
 
 /**
@@ -51,6 +52,8 @@ class StreamPlayer(
     private val onAudioStart: (turnId: String?) -> Unit = {},
     /** Ход доигран до конца (не вызывается для сброшенных [flush] ходов). */
     private val onDone: (turnId: String?) -> Unit = {},
+    /** Громкость того, что звучит, — для лица (рот по речи); null — не измеряем. */
+    private val meter: PcmPlaybackMeter? = null,
 ) {
     private sealed interface Item {
         data class Begin(val turnId: String?) : Item
@@ -86,6 +89,7 @@ class StreamPlayer(
             opened = false
         }
         this.format = format
+        meter?.configure(format.sampleRate)
     }
 
     fun beginTurn(turnId: String?) = add(Item.Begin(turnId))
@@ -107,6 +111,7 @@ class StreamPlayer(
         started = false
         currentTurn = null
         _playing.value = false
+        meter?.reset()
     }
 
     fun release() {
@@ -124,6 +129,7 @@ class StreamPlayer(
 
     private suspend fun run() {
         while (true) {
+            if (started) meter?.onPlayhead(sink.playedFrames(), true)
             val head = queue.firstOrNull()
             if (head == null) {
                 wake.receive()
@@ -149,6 +155,8 @@ class StreamPlayer(
             return true
         }
         val len = minOf(item.pcm.size - offset, maxWriteBytes())
+        val start = offset
+        val firstFrame = writtenFrames
         val n = sink.write(item.pcm, offset, len)
         if (n < 0) {
             Timber.w("live audio write error %d — chunk dropped", n)
@@ -158,6 +166,7 @@ class StreamPlayer(
         }
         offset += n
         writtenFrames += n / 2
+        if (n > 0) meter?.onWritten(item.pcm, start, n, firstFrame)
         if (offset >= item.pcm.size) {
             queue.removeFirst()
             offset = 0
@@ -188,6 +197,7 @@ class StreamPlayer(
         started = false
         _playing.value = false
         currentTurn = null
+        meter?.reset()
         onDone(item.turnId)
         return true
     }
@@ -195,6 +205,7 @@ class StreamPlayer(
     private fun startPlayback() {
         sink.play()
         started = true
+        meter?.onPlayhead(sink.playedFrames(), true)
         _playing.value = true
         reportAudioStart()
     }

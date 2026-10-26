@@ -47,4 +47,15 @@
     <string name="action_menu">Мәзір</string>
     <string name="action_face">Роботқа</string>
     <string name="face_hint">Сұрағыңызды айтыңыз, тыңдап тұрмын</string>
+    <string name="chat_source">Дереккөз: %1$s</string>
+    <string name="chat_sources">Дереккөздер: %1$s</string>
+    <string name="action_ask_voice">Дауыспен сұрау</string>
+    <string name="chat_you">Сіз</string>
+    <string name="tiles_title">Жылдам сұрақтар</string>
+    <string name="island_arrived">Келдік: %1$s</string>
+    <string name="island_failed">Жете алмадық</string>
+    <string name="island_stopped">Тоқтадық</string>
+    <string name="island_meters">%1$d м</string>
+    <string name="island_near">жақын</string>
+    <string name="action_stop_trip">Тоқтату</string>
 </resources>

@@ -46,4 +46,15 @@
     <string name="action_menu">Menu</string>
     <string name="action_face">Back to robot</string>
     <string name="face_hint">Just ask, I am listening</string>
+    <string name="chat_source">Source: %1$s</string>
+    <string name="chat_sources">Sources: %1$s</string>
+    <string name="action_ask_voice">Ask by voice</string>
+    <string name="chat_you">You</string>
+    <string name="tiles_title">Quick questions</string>
+    <string name="island_arrived">We\'re here: %1$s</string>
+    <string name="island_failed">Couldn\'t get there</string>
+    <string name="island_stopped">Stopped</string>
+    <string name="island_meters">%1$d m</string>
+    <string name="island_near">nearby</string>
+    <string name="action_stop_trip">Stop</string>
 </resources>

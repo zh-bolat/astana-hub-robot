@@ -2,7 +2,9 @@ package kz.astanahub.robot.di
 
 import android.app.Application
 import kz.astanahub.robot.BuildConfig
+import kz.astanahub.robot.audio.AudioLevels
 import kz.astanahub.robot.audio.MicRecorder
+import kz.astanahub.robot.audio.PlaybackVisualizer
 import kz.astanahub.robot.live.AndroidAudioSink
 import kz.astanahub.robot.live.AndroidLiveMicrophone
 import kz.astanahub.robot.live.LiveSession
@@ -163,17 +165,21 @@ class AppContainer(app: Application) {
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    /** Громкость микрофона и речи робота для лица (docs/ui-redesign/INTEGRATION.md, «Звук → лицо»). */
+    val audioLevels = AudioLevels()
+
     val micRecorder = MicRecorder(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
     val serverVoice = ServerVoiceGateway(
         backend = backend,
         recorder = micRecorder,
-        player = Mp3Player(),
+        player = Mp3Player(PlaybackVisualizer(app, audioLevels)),
         vadConfig = {
             val c = voiceSettings.config.value
             VadConfig(endSilenceMillis = c.vadEndSilenceMillis).withSensitivity(c.micSensitivity)
         },
         cache = phraseCache,
         streaming = { voiceSettings.config.value.ttsStreaming },
+        levels = audioLevels,
     )
 
     /** Микрофон живого режима (VOICE_COMMUNICATION + AEC/NS, если есть). */
@@ -187,6 +193,7 @@ class AppContainer(app: Application) {
             microphone = liveMicrophone,
             sink = AndroidAudioSink(),
             clock = android.os.SystemClock::elapsedRealtime,
+            levels = audioLevels,
         )
     }
 

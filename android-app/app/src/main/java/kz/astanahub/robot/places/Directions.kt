@@ -60,6 +60,14 @@ object Directions {
         }
     }
 
+    /**
+     * Угол на место от ПОСЕТИТЕЛЯ (против часовой от «вперёд» посетителя, рад.) по углу от корпуса робота: посетитель
+     * стоит лицом к роботу — его «вперёд» смотрит в робота, его левое — правое робота (тот же разворот, что у
+     * [toVisitor]). Для стрелки на экране: экран смотрит на посетителя, «вверх» — вперёд от посетителя.
+     */
+    fun visitorAngle(robotAngle: Double): Double =
+        if (VISITOR_FACES_ROBOT) normalizeAngle(robotAngle + PI) else normalizeAngle(robotAngle)
+
     /** Расстояние «по-человечески»: null — совсем рядом (< 2 м); дальше округление 1 / 5 / 10 / 50 м. */
     fun humanMeters(d: Double): Int? = when {
         d < 2.0 -> null

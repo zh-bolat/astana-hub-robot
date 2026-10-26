@@ -15,7 +15,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -25,6 +27,7 @@ import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.AskContext
 import kz.astanahub.robot.backend.BackendApi
 import kz.astanahub.robot.backend.BackendError
+import kz.astanahub.robot.backend.Citation
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.backend.LocalMessage
 import kz.astanahub.robot.backend.Place
@@ -49,7 +52,9 @@ import kz.astanahub.robot.core.NoiseContext
 import kz.astanahub.robot.core.NoiseStats
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kz.astanahub.robot.places.Directions
 import kz.astanahub.robot.places.OfflineQuickButtons
+import kz.astanahub.robot.places.WayAnswer
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.places.WayPhrases
 import kz.astanahub.robot.presence.PresenceEvent
@@ -70,6 +75,7 @@ import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.live.LiveSession
 import kz.astanahub.robot.live.LiveSessionFactory
 import kz.astanahub.robot.live.LiveSignal
+import kz.astanahub.robot.ui.face.FaceCue
 import timber.log.Timber
 
 /** Индикатор на экране. */
@@ -77,6 +83,19 @@ enum class Phase { IDLE, LISTENING, THINKING, LOOKING, SPEAKING, NAVIGATING }
 
 /** Что показано в правой части экрана: приветствие с плитками, ответ или список частых вопросов. */
 enum class Screen { HOME, ANSWER, FAQ }
+
+/**
+ * Ответ «где X» для острова на экране лица (бриф, «Остров where_is»): место, расстояние (м) и угол на место от
+ * посетителя (рад., против часовой от его «вперёд»; [kz.astanahub.robot.places.Directions.visitorAngle]), можно ли
+ * проводить. [seq] растёт с каждым новым ответом — тот же вопрос ещё раз снова показывает остров.
+ */
+data class WhereIsHint(
+    val place: String,
+    val distanceM: Double,
+    val visitorAngleRad: Double,
+    val canGuide: Boolean,
+    val seq: Int,
+)
 
 data class MainUiState(
     val lang: Lang = Lang.RU,
@@ -105,6 +124,12 @@ data class MainUiState(
     val faqPage: Int = 0,
     /** Раскрытый вопрос в списке частых вопросов (id), null — все свёрнуты. */
     val faqOpenId: String? = null,
+    /** Источники текущего ответа (`citations`, v1.3) — подпись под ответом на экране 2; старый сервер не шлёт. */
+    val citations: List<Citation> = emptyList(),
+    /** Номер разговора: меняется с session_id (новый посетитель) — экран 2 начинает чат с чистого листа. */
+    val conversation: Int = 0,
+    /** Последний ответ «где X» с направлением по карте — остров where_is на экране лица; null — не было. */
+    val whereIs: WhereIsHint? = null,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -160,10 +185,27 @@ class MainViewModel(
      * null — без периодической проверки (тесты); на старте сессии и после поездки фразы уходят всегда.
      */
     private val liveDirectionsPeriodMillis: Long? = null,
+    /** VAD: посетитель говорит (AudioLevels.voice) — голос будит из сна; null — нет (тесты). */
+    private val visitorVoice: Flow<Boolean>? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = _state.asStateFlow()
+
+    private val _faceCues = MutableSharedFlow<FaceCue>(extraBufferCapacity = 16)
+
+    /**
+     * Короткие реакции лица на события: ошибка, «не понял», приветствие, итог поездки
+     * (docs/ui-redesign/INTEGRATION.md). Состояние лица в остальном следует из [state].
+     */
+    val faceCues: SharedFlow<FaceCue> = _faceCues
+
+    private fun cue(c: FaceCue) {
+        _faceCues.tryEmit(c)
+    }
+
+    /** Реакция лица на ошибку сервера: «не расслышал» (400) — растерянность, остальное — огорчение. */
+    private fun troubleCue(error: BackendError) = cue(if (phraseFor(error) == PhraseKey.NOT_HEARD) FaceCue.CONFUSED else FaceCue.ERROR)
 
     private var requestJob: Job? = null
     private var quickJob: Job? = null
@@ -200,6 +242,7 @@ class MainViewModel(
         set(value) {
             field = value
             voice.setSessionId(value)
+            _state.update { it.copy(conversation = it.conversation + 1) }
         }
     private var lastInteraction = clock()
 
@@ -255,6 +298,9 @@ class MainViewModel(
     private var liveActiveTurn: String? = null
     /** Live: когда робот показал предложение проводить (where_is → кнопка «Проводить»). */
     private var guideOfferedAt = Long.MIN_VALUE / 2
+
+    /** Номер последнего ответа «где» (остров where_is показывается заново на каждый). */
+    private var whereSeq = 0
     /** Live: посетитель сказал «да» на предложение — поехали сами; ответный `guide_to` сервера к этой точке — дубликат. */
     private var localGuideConfirm: Pair<String, Long>? = null
     /** Фразы текущего хода live (текст ответа на экране). */
@@ -302,6 +348,7 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        visitorVoice?.let { flow -> viewModelScope.launch { flow.collect { if (it) onVisitorVoice() } } }
         viewModelScope.launch {
             _state.map { it.answer }.distinctUntilChanged().collect { answerChangedAt = clock() }
         }
@@ -474,6 +521,7 @@ class MainViewModel(
         if (busyForVoice() || requestJob?.isActive == true) return
         lastNoConnectionPhrase = now
         val lang = _state.value.lang
+        cue(FaceCue.ERROR)
         requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
     }
 
@@ -512,6 +560,9 @@ class MainViewModel(
         }
     }
 
+    /** Режим «бодрого» экрана при прошлой проверке настроек (null — ещё не проверяли). */
+    private var lastAwakeMode: ScreenMode? = null
+
     /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
     private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
@@ -532,7 +583,12 @@ class MainViewModel(
     /** Сменили режим разговора на экране диагностики. */
     fun onSettingsChanged() {
         val mode = _state.value.mode
-        if (mode != ScreenMode.SLEEP && mode != awakeMode()) _state.update { it.copy(mode = awakeMode()) }
+        // Режим «бодрого» экрана меняем, только если его правда сменили (agent ↔ legacy): оператор, вернувшийся из
+        // диагностики на экран 2, остаётся на нём (ревью M3-r1, M7).
+        val awake = awakeMode()
+        val awakeChanged = lastAwakeMode != null && lastAwakeMode != awake
+        lastAwakeMode = awake
+        if (awakeChanged && mode != ScreenMode.SLEEP && mode != awake) _state.update { it.copy(mode = awake) }
         if (chatMode() != ChatMode.LIVE) {
             closeLive()
         } else if (mode != ScreenMode.SLEEP) {
@@ -569,7 +625,7 @@ class MainViewModel(
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
                 guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
-                screen = Screen.HOME, faqPage = 0, faqOpenId = null,
+                screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
             )
         }
         history.clear()
@@ -631,7 +687,12 @@ class MainViewModel(
         turn = clockForTurn
         requestJob = viewModelScope.launch {
             try {
-                _state.update { it.copy(question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null, wayHint = null) }
+                _state.update {
+                    it.copy(
+                        question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
+                        wayHint = null, citations = emptyList(),
+                    )
+                }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
                 if (chatMode().usesAgent && !_state.value.offline && !chatUnsupported) {
                     handleAgent(question, lang ?: _state.value.lang)
@@ -704,6 +765,7 @@ class MainViewModel(
             ?: return handleAsk(question)
         setBusy(null)
         _state.update { it.copy(answer = answer.text, subtitle = null, guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
         postLocal(LocalMessage.KIND_WHERE_IS, question, answer.text, answer.place?.id)
         speakPhrases(PhraseSplitter.split(answer.text), _state.value.lang)
     }
@@ -727,6 +789,7 @@ class MainViewModel(
         setBusy(null)
         if (place == null) {
             val text = WayPhrases.unknownPlace(_state.value.lang)
+            cue(FaceCue.CONFUSED)
             postLocal(LocalMessage.KIND_GUIDE_TO, question, text, null, found = false)
             say(text, offline = _state.value.offline)
             return
@@ -814,6 +877,7 @@ class MainViewModel(
                 setBusy(null)
             }
             NavJournal.log("поездка к ${place.id}: итог ${describe(result)}")
+            cue(tripCue(result))
             startSpeech.join()
             obstacleSpeech?.join()
             val text = when (result) {
@@ -918,6 +982,36 @@ class MainViewModel(
         setBusy(null)
     }
 
+    /**
+     * Посетитель заговорил (VAD) — разбудить сразу, не дожидаясь первого распознанного слова. Те же правила, что у
+     * распознанной речи: спит, а PersonApi рядом никого не видит, — голос не будит (разговоры вдалеке).
+     */
+    private fun onVisitorVoice() {
+        if (_state.value.mode != ScreenMode.SLEEP || voiceIgnoredAsleep()) return
+        Timber.i("visitor voice (VAD) → wake")
+        wake()
+    }
+
+    /**
+     * Тап по лицу в поездке, пока робот говорит: замолчать (фраза пути, приезд), а поездка продолжается —
+     * её останавливает только «Стоп» на острове.
+     */
+    fun interruptSpeech() {
+        wake()
+        voice.stopSpeaking()
+        live?.interrupt()
+        if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
+    }
+
+    /** Звучит ли голос робота сейчас (своя озвучка или live-сервер). В поездке фаза NAVIGATING речь не показывает. */
+    val robotSpeaking: Boolean
+        get() = voice.activity.value == VoiceActivity.SPEAKING || live?.playing == true
+
+    /** Только отладка на эмуляторе (FaceDebug, adb broadcast): уснуть сейчас, не дожидаясь таймера. */
+    internal fun sleepNow() {
+        if (_state.value.mode != ScreenMode.SLEEP) goIdle()
+    }
+
     /** Кнопка «Что это?». */
     fun lookAround() = submitButton(LOOK_DEFAULT_QUESTION.getValue(_state.value.lang))
 
@@ -929,9 +1023,12 @@ class MainViewModel(
         live?.interrupt()
         liveGuides.clear()
         if (stopNavigationOnly()) {
+            cue(FaceCue.TRIP_CANCELLED)
             viewModelScope.launch { say(WayPhrases.guideCancelled(_state.value.lang), offline = _state.value.offline) }
         }
         setBusy(null)
+        // Ход оборван — эмоция ответа не должна застрять на лице: спокойное лицо через обычную паузу.
+        if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
     }
 
     /** Остановить поездку (кнопка «Стоп», голосовое «стоп»). true — ехали. */
@@ -960,6 +1057,7 @@ class MainViewModel(
                 }
                 wake()
                 showEmotion(MoodRules.visitorArrived)
+                cue(FaceCue.GREET)
                 // Приложение не на экране — не здороваемся (микрофон и голос выключены, говорить «из фона» нельзя).
                 if (event.greet && !busyNow() && inForeground()) {
                     // Живой режим: здоровается агент на сервере (`visitor_arrived`); live не открылся — как раньше.
@@ -1198,7 +1296,7 @@ class MainViewModel(
                 }
             } else {
                 clockForTurn?.requestId = outcome.done.requestId
-                _state.update { it.copy(offline = false) }
+                _state.update { it.copy(offline = false, citations = outcome.done.citations) }
                 val doneLang = outcome.done.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1231,6 +1329,7 @@ class MainViewModel(
         }
         val answer = wf.describe(place, lang)
         _state.update { it.copy(guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
         PhraseSplitter.split(answer.text).forEach { say(it, lang) }
     }
 
@@ -1241,6 +1340,7 @@ class MainViewModel(
         if (place == null) {
             Timber.w("agent guide_to: unknown place %s", action.placeId)
             NavJournal.log("agent guide_to place=${action.placeId}: точки нет в кеше мест робота — не едем")
+            cue(FaceCue.CONFUSED)
             say(WayPhrases.unknownPlace(lang), lang)
             return
         }
@@ -1257,7 +1357,10 @@ class MainViewModel(
         val result = look.await()
         setBusy(null)
         when (result) {
-            null -> say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang), lang)
+            null -> {
+                cue(FaceCue.ERROR)
+                say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang), lang)
+            }
             is ApiResult.Success -> {
                 val answerLang = result.value.lang ?: lang
                 PhraseSplitter.normalize(result.value.phrases.ifEmpty { listOf(result.value.text) }).forEach { say(it, answerLang) }
@@ -1265,6 +1368,7 @@ class MainViewModel(
             is ApiResult.Failure -> {
                 Timber.w("agent look: %s", result.error)
                 showEmotion(MoodRules.trouble)
+                troubleCue(result.error)
                 if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), lang), lang)
             }
@@ -1425,6 +1529,7 @@ class MainViewModel(
             }
             is LiveSignal.Action -> onLiveAction(signal)
             is LiveSignal.TurnEnd -> {
+                if (signal.citations.isNotEmpty()) _state.update { it.copy(citations = signal.citations) }
                 val doneLang = signal.lang
                 if (!langChosenExplicitly && doneLang != null && doneLang != _state.value.lang) {
                     _state.update { it.copy(lang = doneLang) }
@@ -1495,7 +1600,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
-                answer = null, subtitle = null, guideTarget = null, wayHint = null,
+                answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -1578,6 +1683,25 @@ class MainViewModel(
         val answer = wf.describe(place, lang)
         if (answer.guideTarget != null) guideOfferedAt = clock()
         _state.update { it.copy(wayHint = answer.text, guideTarget = answer.guideTarget) }
+        showWhereIs(answer)
+    }
+
+    /**
+     * Остров where_is на экране лица: место, расстояние и стрелка от посетителя. Без направления (позы нет, места нет
+     * на карте) острова нет — показывать нечего.
+     */
+    private fun showWhereIs(answer: WayAnswer) {
+        val place = answer.place ?: return
+        val bearing = answer.bearing ?: return
+        val name = WayFinder.displayName(place, _state.value.lang)
+        val hint = WhereIsHint(
+            place = name,
+            distanceM = bearing.distanceM,
+            visitorAngleRad = Directions.visitorAngle(bearing.relativeAngleRad),
+            canGuide = answer.guideTarget != null,
+            seq = ++whereSeq,
+        )
+        _state.update { it.copy(whereIs = hint) }
     }
 
     /**
@@ -1677,11 +1801,15 @@ class MainViewModel(
             val result = lookRequest(question)
             val startsBefore = liveTurnStarts
             val text = when (result) {
-                null -> phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang)
+                null -> {
+                    cue(FaceCue.ERROR)
+                    phrases.get(PhraseKey.CAMERA_UNAVAILABLE, lang)
+                }
                 is ApiResult.Success -> result.value.text
                 is ApiResult.Failure -> {
                     Timber.w("live look: %s", result.error)
                     showEmotion(MoodRules.trouble)
+                    troubleCue(result.error)
                     phrases.get(phraseFor(result.error), lang)
                 }
             }
@@ -1797,6 +1925,7 @@ class MainViewModel(
         val result = lookRequest(question) { setBusy(Phase.THINKING) }
         if (result == null) {
             setBusy(null)
+            cue(FaceCue.ERROR)
             say(phrases.get(PhraseKey.CAMERA_UNAVAILABLE, _state.value.lang), offline = false)
             return
         }
@@ -1845,13 +1974,14 @@ class MainViewModel(
                     voice.setLanguage(answer.lang)
                     loadQuickQuestions()
                 }
-                _state.update { it.copy(answer = answer.text, subtitle = null, offline = false) }
+                _state.update { it.copy(answer = answer.text, subtitle = null, offline = false, citations = answer.citations) }
                 if (!quickFromServer) loadQuickQuestions()
                 speakPhrases(PhraseSplitter.normalize(answer.phrases), answer.lang ?: _state.value.lang)
             }
             is ApiResult.Failure -> {
                 Timber.w("backend error: %s", result.error)
                 showEmotion(MoodRules.trouble)
+                troubleCue(result.error)
                 if (result.error.isConnectivity()) lastNoConnectionPhrase = clock()
                 say(phrases.get(phraseFor(result.error), _state.value.lang), offline = result.error.isConnectivity())
             }
@@ -2001,6 +2131,14 @@ class MainViewModel(
 
         /** Live: `guide_to` ждёт `playback_done` своего хода не дольше (потерялся — едем, если звук не играет). */
         const val LIVE_GUIDE_WAIT_MAX_MILLIS = 30_000L
+
+        /** Итог поездки → реакция лица. */
+        internal fun tripCue(r: NavigationResult): FaceCue = when (r) {
+            NavigationResult.Arrived, NavigationResult.AlreadyThere -> FaceCue.ARRIVED
+            NavigationResult.Cancelled -> FaceCue.TRIP_CANCELLED
+            NavigationResult.UnknownPlace -> FaceCue.CONFUSED
+            NavigationResult.NotLocalized, is NavigationResult.Failed -> FaceCue.TRIP_FAILED
+        }
 
         internal fun describe(r: NavigationResult): String = when (r) {
             NavigationResult.Arrived -> "приехали (Arrived)"

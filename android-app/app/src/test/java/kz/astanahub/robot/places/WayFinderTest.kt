@@ -52,6 +52,9 @@ class WayFinderTest {
         val a = wf.whereIs("асхана", Lang.RU)!!
         assertEquals("Кафе — справа от вас, примерно в 10 метрах. Могу проводить.", a.text)
         assertEquals("cafe", a.guideTarget?.id)
+        // Направление и расстояние — для острова where_is на экране лица.
+        assertEquals(12.0, a.bearing!!.distanceM, 1e-9)
+        assertEquals(Math.PI / 2, a.bearing!!.relativeAngleRad, 1e-9)
 
         val en = wf.whereIs("cafe", Lang.EN)!!
         assertTrue(en.text, en.text.startsWith("Cafe is on your right"))

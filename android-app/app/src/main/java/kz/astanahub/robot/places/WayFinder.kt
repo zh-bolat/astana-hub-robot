@@ -8,8 +8,11 @@ import kz.astanahub.robot.robot.RobotPose
 /** Место для офлайн-кнопки «Где X?» / «Проводите: X». */
 data class QuickPlace(val place: Place, val canGuide: Boolean)
 
-/** Ответ «где …» — полностью локальный. [guideTarget] — можно предложить «Проводить». */
-data class WayAnswer(val text: String, val place: Place?, val guideTarget: Place?)
+/**
+ * Ответ «где …» — полностью локальный. [guideTarget] — можно предложить «Проводить». [bearing] — направление и
+ * расстояние от робота (null — позы нет или места нет на карте): остров where_is на экране лица.
+ */
+data class WayAnswer(val text: String, val place: Place?, val guideTarget: Place?, val bearing: Bearing? = null)
 
 /** «Где X?», «Где я?» и выбор цели для «Проводи» — без сервера, по карте робота и кешу мест. */
 class WayFinder(
@@ -60,7 +63,7 @@ class WayFinder(
         val pose = robot.getPosition()
             ?: return WayAnswer(WayPhrases.whereIsNoPose(name, lang, canGuide), place, place.takeIf { canGuide })
         val bearing = Directions.bearing(pose, point.x, point.y)
-        return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide })
+        return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide }, bearing)
     }
 
     /**

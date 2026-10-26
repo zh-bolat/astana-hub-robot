@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kz.astanahub.robot.audio.AudioLevels
 import kz.astanahub.robot.backend.BackendError
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.core.Lang
@@ -42,7 +43,12 @@ sealed interface LiveSignal {
     /** Звук хода пошёл из динамика. */
     data class AudioStarted(val turnId: String?) : LiveSignal
     data class Action(val type: String, val placeId: String?, val turnId: String?) : LiveSignal
-    data class TurnEnd(val turnId: String?, val lang: Lang?, val found: Boolean?) : LiveSignal
+    data class TurnEnd(
+        val turnId: String?,
+        val lang: Lang?,
+        val found: Boolean?,
+        val citations: List<kz.astanahub.robot.backend.Citation> = emptyList(),
+    ) : LiveSignal
     /** Звук хода оборван: посетитель перебил ([local] = false — решил сервер) или «Стоп» на роботе. */
     data class Interrupted(val turnId: String?, val local: Boolean) : LiveSignal
     /** Ход доигран до конца; `playback_done` уже отправлен. */
@@ -85,6 +91,8 @@ class LiveSession(
     private val config: LiveConfig = LiveConfig(),
     private val confined: CoroutineDispatcher = DEFAULT_CONFINED,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Громкость микрофона и речи робота — для лица; null — не измеряем (тесты). */
+    private val levels: AudioLevels? = null,
 ) {
     private val scope = CoroutineScope(parent.coroutineContext + SupervisorJob(parent.coroutineContext[Job]) + confined)
     private val _signals = Channel<LiveSignal>(Channel.UNLIMITED)
@@ -97,6 +105,7 @@ class LiveSession(
         jitterMillis = config.jitterMillis,
         onAudioStart = { emit(LiveSignal.AudioStarted(it)) },
         onDone = ::onPlaybackDone,
+        meter = levels?.pcm,
     )
 
     private var connection: LiveConnection? = null
@@ -217,6 +226,7 @@ class LiveSession(
                     scope.launch { fail(BackendError(ErrorKind.UNKNOWN, message = "microphone read failed")) }
                     return
                 }
+                levels?.reportMic(AudioLevels.rmsPcm16(frame, 0, frame.size))
                 conn.sendAudio(if (localSpeech) silence else frame.copyOf())
             }
         } finally {
@@ -237,11 +247,26 @@ class LiveSession(
                 emit(LiveSignal.Ready(aec))
             }
             LiveEvent.Listening -> emit(LiveSignal.Listening)
-            LiveEvent.UserSpeaking -> if (!echoGuard()) emit(LiveSignal.UserSpeaking)
-            is LiveEvent.UserPartial -> if (!echoGuard()) emit(LiveSignal.UserPartial(event.text))
-            is LiveEvent.UserFinal -> emit(LiveSignal.UserFinal(event.text, event.lang))
-            LiveEvent.Ignored -> emit(LiveSignal.Ignored)
-            LiveEvent.Thinking -> emit(LiveSignal.Thinking)
+            LiveEvent.UserSpeaking -> if (!echoGuard()) {
+                levels?.reportVoice(true, sticky = true) // VAD сервера: лицо «слушает» до user_final
+                emit(LiveSignal.UserSpeaking)
+            }
+            is LiveEvent.UserPartial -> if (!echoGuard()) {
+                levels?.reportVoice(true, sticky = true)
+                emit(LiveSignal.UserPartial(event.text))
+            }
+            is LiveEvent.UserFinal -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.UserFinal(event.text, event.lang))
+            }
+            LiveEvent.Ignored -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.Ignored)
+            }
+            LiveEvent.Thinking -> {
+                levels?.reportVoice(false)
+                emit(LiveSignal.Thinking)
+            }
             is LiveEvent.TurnStart -> {
                 currentTurn = event.turnId
                 dropping = false
@@ -261,7 +286,7 @@ class LiveSession(
             is LiveEvent.TurnEnd -> {
                 if (dropping) return
                 player.endTurn(event.turnId ?: currentTurn)
-                emit(LiveSignal.TurnEnd(event.turnId ?: currentTurn, event.lang, event.found))
+                emit(LiveSignal.TurnEnd(event.turnId ?: currentTurn, event.lang, event.found, event.citations))
             }
             is LiveEvent.Interrupted -> {
                 player.flush()
@@ -292,6 +317,7 @@ class LiveSession(
     }
 
     private fun shutdown() {
+        levels?.reportVoice(false)
         readyJob?.cancel()
         micJob?.cancel()
         connection?.close()

@@ -321,6 +321,15 @@ class MainViewModelTest {
         assertTrue(vm.state.value.answer!!, vm.state.value.answer!!.startsWith("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
         coVerify(exactly = 0) { backend.ask(any(), any()) }
+        // Остров where_is на экране лица: место, расстояние, стрелка от посетителя, можно проводить.
+        val where = vm.state.value.whereIs!!
+        assertEquals("Кафе", where.place)
+        assertTrue(where.distanceM > 0)
+        assertTrue(where.canGuide)
+        val seq = where.seq
+        vm.submit("Асхана қайда?")
+        advanceUntilIdle()
+        assertTrue("same question again shows the island again", vm.state.value.whereIs!!.seq > seq)
     }
 
     @Test
