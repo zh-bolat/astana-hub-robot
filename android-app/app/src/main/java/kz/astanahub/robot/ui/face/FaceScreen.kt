@@ -302,8 +302,8 @@ fun SwipeHandle(
                 scaleY = 1f + 0.25f * pull
                 transformOrigin = TransformOrigin(1f, 0.5f)
             }
-            .width(6.dp)
-            .height(76.dp)
+            .width(7.dp)
+            .height(84.dp)
             .background(HubColors.White, RoundedCornerShape(percent = 50)),
     )
 }
@@ -415,13 +415,15 @@ private const val MIN_EXIT_DP = 120
 /** Гистерезис жестов (apple-design §10: ~10 px; на киоске 1 dp = 1.2 px). */
 private const val GESTURE_SLOP_DP = 10
 private const val STROKE_MIN_PATH_DP = 90
-private const val HOLD_POLL_MS = 16L
+/** Пока палец лежит неподвижно, время удержания проверяется раз в 50 мс (кольцо появляется через 400 мс). */
+private const val HOLD_POLL_MS = 50L
 
 /** В поездке свайп к меню не засчитывается: сопротивление сильнее. */
 private const val LOCKED_RESISTANCE = 0.4f
 
-private const val HANDLE_ALPHA = 0.26f
-private const val HANDLE_ALPHA_PRESSED = 0.7f
+/** Ручка в покое заметна с 1–1.5 м (ревью M2-r1, M6), но тише лица; касание — ярче. */
+private const val HANDLE_ALPHA = 0.36f
+private const val HANDLE_ALPHA_PRESSED = 0.8f
 private const val PULL_FULL_DP = 160
 private const val HINT_SHIFT_DP = 10
 private const val HINT_PERIOD_MS = 40_000L
