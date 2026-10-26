@@ -348,6 +348,18 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
+        head?.let { h ->
+            // Робот начинает говорить (после «слушает» / «думает») — лёгкое движение головой (редко, если свободна).
+            viewModelScope.launch {
+                var last = _state.value.phase
+                _state.collect { st ->
+                    if (st.phase != last) {
+                        if (st.phase == Phase.SPEAKING && last != Phase.NAVIGATING) h.onSpeaking()
+                        last = st.phase
+                    }
+                }
+            }
+        }
         visitorVoice?.let { flow -> viewModelScope.launch { flow.collect { if (it) onVisitorVoice() } } }
         viewModelScope.launch {
             _state.map { it.answer }.distinctUntilChanged().collect { answerChangedAt = clock() }
@@ -1048,6 +1060,8 @@ class MainViewModel(
         when (event) {
             is PresenceEvent.Arrived -> {
                 visitorPresent = true
+                // Кивок-приветствие до слежения (слежение начнётся после кивка — HeadController).
+                if (event.greet && inForeground()) head?.greet()
                 head?.follow(event.personId)
                 val wasSleeping = _state.value.mode == ScreenMode.SLEEP
                 if (wasSleeping) {
@@ -1702,6 +1716,8 @@ class MainViewModel(
             seq = ++whereSeq,
         )
         _state.update { it.copy(whereIs = hint) }
+        // Голова — в сторону места (угол от корпуса робота), если свободна; вернётся сама.
+        head?.lookToward(Math.toDegrees(bearing.relativeAngleRad))
     }
 
     /**

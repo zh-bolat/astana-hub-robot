@@ -261,6 +261,8 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         }
 
+        section("Голова") { HeadDiagPanel(binding, container, lifecycleScope, lifecycle).bind() }
+
         section("Точки карты и журнал навигации") {
         binding.loadMapPoints.setOnClickListener { loadMapPoints() }
         binding.navStop.setOnClickListener { stopTrip() }

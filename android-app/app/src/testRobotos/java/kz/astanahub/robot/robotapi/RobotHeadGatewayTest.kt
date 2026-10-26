@@ -48,15 +48,23 @@ class RobotHeadGatewayTest {
         assertFalse(gateway.startFocusFollow(1) {})
         gateway.stopFocusFollow()
         gateway.resetHead()
-        gateway.nod()
+        gateway.nod(14)
+        gateway.tilt(6)
+        gateway.turnTo(30)
         verify(exactly = 0) { handler.postDelayed(any(), any()) }
     }
 
     @Test
     fun `nod moves the head down relatively and schedules the way back`() {
-        gateway.nod()
-        verify { api.moveHead(any(), "relative", "relative", 0, 6, any()) }
+        gateway.nod(14)
+        verify { api.moveHead(any(), "relative", "relative", 0, 14, any()) }
         verify { handler.postDelayed(any(), 450L) }
+    }
+
+    @Test
+    fun `turn moves the head horizontally to an absolute angle, vertical untouched`() {
+        gateway.turnTo(-25)
+        verify { api.moveHead(any(), "absolute", "relative", -25, 0, any()) }
     }
 
     @Test

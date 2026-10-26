@@ -61,7 +61,9 @@ import kz.astanahub.robot.presence.PresenceEvent
 import kz.astanahub.robot.presence.PresenceSimulator
 import kz.astanahub.robot.presence.PresenceTracker
 import kz.astanahub.robot.robot.HeadController
+import kz.astanahub.robot.robot.HeadDiagnostics
 import kz.astanahub.robot.robot.HeadGateway
+import kz.astanahub.robot.presence.SeenPerson
 
 /** Железо робота: реализация выбирается flavor-ом (FlavorGateways в src/emulator и src/robot). */
 class Gateways(
@@ -76,6 +78,8 @@ class Gateways(
     /** Люди перед роботом (PersonApi / заглушка); null — пробуждения по человеку нет. */
     val persons: PersonGateway? = null,
     val head: HeadGateway? = null,
+    /** Проверка головы и зрения с экрана диагностики (RobotApi с отчётом о каждом ответе); null — раздела нет. */
+    val headDiagnostics: HeadDiagnostics? = null,
     /** Эмулятор: «подошёл / ушёл» с экрана диагностики. */
     val presenceSimulator: PresenceSimulator? = null,
 )
@@ -103,10 +107,16 @@ class AppContainer(app: Application) {
     /** Голова: один контроллер на приложение (слежение, сброс, кивки). */
     val head: HeadController? = gateways.head?.let { HeadController(it) }
 
+    val headDiagnostics: HeadDiagnostics? get() = gateways.headDiagnostics
+
+    private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Люди перед роботом: один опрос PersonApi на приложение (трекер присутствия и живой лог диагностики). */
+    val persons: Flow<List<SeenPerson>>? = gateways.persons?.persons?.shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
+
     /** События «подошёл / ушёл»; трекер один на приложение — анти-спам переживает пересоздание экрана. */
-    val presence: Flow<PresenceEvent>? = gateways.persons?.let { persons ->
-        PresenceTracker(PresenceConfig()).track(persons.persons)
-            .shareIn(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), SharingStarted.WhileSubscribed(), 0)
+    val presence: Flow<PresenceEvent>? = persons?.let { persons ->
+        PresenceTracker(PresenceConfig()).track(persons).shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
     }
 
     /** Режим разговора: agent (`/v1/chat`), legacy или live (`WS /v1/live`); меняется на экране диагностики. */

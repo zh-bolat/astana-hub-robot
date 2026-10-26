@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -101,7 +102,9 @@ class MainViewModelAgentTest {
         override fun startFocusFollow(faceId: Int, onLost: () -> Unit): Boolean { calls += "follow:$faceId"; return true }
         override fun stopFocusFollow() { calls += "stop" }
         override fun resetHead() { calls += "reset" }
-        override fun nod() { calls += "nod" }
+        override fun nod(degrees: Int) { calls += "nod:$degrees" }
+        override fun turnTo(degrees: Int) { calls += "turn:$degrees" }
+        override fun tilt(degrees: Int) { calls += "tilt:$degrees" }
     }
 
     private val phrases = Phrases { key, lang -> "${key.name}:${lang.code}" }
@@ -148,7 +151,10 @@ class MainViewModelAgentTest {
     private fun TestScope.vm(
         withMap: Boolean = true,
         screensaverMillis: Long? = null,
-        head: HeadController? = HeadController(headGateway, clock = { testScheduler.currentTime }),
+        head: HeadController? = HeadController(
+            headGateway, clock = { testScheduler.currentTime },
+            schedule = { ms, block -> backgroundScope.launch { delay(ms); block() } },
+        ),
     ): MainViewModel {
         val wf = if (withMap) {
             val file = java.io.File.createTempFile("places", ".json").apply { delete(); deleteOnExit() }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kz.astanahub.robot.presence.PersonGateway
 import kz.astanahub.robot.presence.PresenceSimulator
 import kz.astanahub.robot.presence.SeenPerson
+import kz.astanahub.robot.robot.HeadDiagnostics
 import kz.astanahub.robot.robot.HeadGateway
 import timber.log.Timber
 
@@ -41,6 +42,8 @@ class FakePersonGateway(
         }
     }
 
+    fun current(): List<SeenPerson> = state.value
+
     @Synchronized
     override fun leave() {
         leaveTimer?.cancel()
@@ -64,5 +67,30 @@ class FakeHeadGateway : HeadGateway {
 
     override fun stopFocusFollow() = Timber.d("FAKE head: stopFocusFollow")
     override fun resetHead() = Timber.d("FAKE head: resetHead")
-    override fun nod() = Timber.d("FAKE head: nod")
+    override fun nod(degrees: Int) = Timber.d("FAKE head: nod %d", degrees)
+    override fun turnTo(degrees: Int) = Timber.d("FAKE head: turnTo %d", degrees)
+    override fun tilt(degrees: Int) = Timber.d("FAKE head: tilt %d", degrees)
+}
+
+/** Диагностика головы на эмуляторе: мотора нет — ответ заглушки, люди — из [FakePersonGateway]. */
+class FakeHeadDiagnostics(private val persons: FakePersonGateway) : HeadDiagnostics {
+    private fun fake(what: String, report: (String) -> Unit) {
+        report("$what → rc=0 (заглушка эмулятора)")
+        report("$what onResult 1 {\"status\":\"ok\"} (заглушка эмулятора)")
+    }
+
+    override fun move(hMode: String, vMode: String, hAngle: Int, vAngle: Int, report: (String) -> Unit) =
+        fake("moveHead($hMode, $vMode, h=$hAngle, v=$vAngle)", report)
+
+    override fun reset(report: (String) -> Unit) = fake("resetHead", report)
+    override fun status(report: (String) -> Unit) = fake("getHeadStatus", report)
+    override fun follow(faceId: Int, report: (String) -> Unit) = fake("startFocusFollow(face=$faceId)", report)
+    override fun stopFollow(report: (String) -> Unit) = report("stopFocusFollow → rc=0 (заглушка эмулятора)")
+
+    override fun persons(): List<String> {
+        val list = persons.current()
+        return listOf("Заглушка: людей ${list.size}") + list.map { "id=${it.id}  ${it.distanceM} м" }
+    }
+
+    override fun nearestFaceId(): Int? = persons.current().minByOrNull { it.distanceM }?.id
 }

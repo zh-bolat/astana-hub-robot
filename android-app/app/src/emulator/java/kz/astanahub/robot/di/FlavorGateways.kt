@@ -2,6 +2,7 @@ package kz.astanahub.robot.di
 
 import android.app.Application
 import kz.astanahub.robot.fake.FakeCameraGateway
+import kz.astanahub.robot.fake.FakeHeadDiagnostics
 import kz.astanahub.robot.fake.FakeHeadGateway
 import kz.astanahub.robot.fake.FakePersonGateway
 import kz.astanahub.robot.fake.FakeRobotGateway
@@ -18,6 +19,7 @@ object FlavorGateways {
             camera = FakeCameraGateway(),
             persons = persons,
             head = FakeHeadGateway(),
+            headDiagnostics = FakeHeadDiagnostics(persons),
             presenceSimulator = persons,
         )
     }
