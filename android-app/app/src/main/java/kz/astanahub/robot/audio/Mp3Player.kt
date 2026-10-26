@@ -51,13 +51,13 @@ class Mp3Player(
     private fun meterStart(c: Clip) {
         val m = meter ?: return
         meteredClip = c
-        m.attach(runCatching { c.player.audioSessionId }.getOrDefault(0))
+        m.onPlay()
     }
 
     private fun meterStop(c: Clip) {
         if (meteredClip !== c) return
         meteredClip = null
-        meter?.detach()
+        meter?.onStop()
     }
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
@@ -83,6 +83,8 @@ class Mp3Player(
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
+                // Все клипы — в общей аудиосессии замера (один Visualizer на всё, без создания на каждую фразу).
+                meter?.sessionId?.takeIf { it > 0 }?.let { clip.player.audioSessionId = it }
                 clip.player.setDataSource(source)
                 clip.player.setOnPreparedListener {
                     if (clip.isReleased) return@setOnPreparedListener

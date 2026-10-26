@@ -172,7 +172,7 @@ class AppContainer(app: Application) {
     val serverVoice = ServerVoiceGateway(
         backend = backend,
         recorder = micRecorder,
-        player = Mp3Player(PlaybackVisualizer(audioLevels)),
+        player = Mp3Player(PlaybackVisualizer(app, audioLevels)),
         vadConfig = {
             val c = voiceSettings.config.value
             VadConfig(endSilenceMillis = c.vadEndSilenceMillis).withSensitivity(c.micSensitivity)
