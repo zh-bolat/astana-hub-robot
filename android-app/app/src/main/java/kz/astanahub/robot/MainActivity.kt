@@ -1,6 +1,7 @@
 package kz.astanahub.robot
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -54,6 +55,9 @@ import kz.astanahub.robot.ui.ScreenMode
 import kz.astanahub.robot.ui.SubtitlePacer
 import kz.astanahub.robot.ui.TileIcons
 import kz.astanahub.robot.ui.UiScale
+import kz.astanahub.robot.ui.face.FaceController
+import kz.astanahub.robot.ui.face.FaceDebug
+import kz.astanahub.robot.ui.face.FaceScreen
 import kz.astanahub.robot.ui.setOnHoldListener
 
 /**
@@ -92,6 +96,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
+
+    /** Экран 1: живое лицо (Compose). Прежний экран (меню) — под ним, до экрана 2 в M3. */
+    private lateinit var face: FaceController
+    private var faceDebug: FaceDebug? = null
+
+    /** Фон окна и корня — убираем, пока лицо закрывает экран целиком (меньше перерисовки). */
+    private var windowBackground: android.graphics.drawable.Drawable? = null
+    private var rootBackground: android.graphics.drawable.Drawable? = null
 
     /** Что уже нарисовано (перерисовываем плитки и строки вопросов только при изменении). */
     private var renderedTiles: Any? = null
@@ -147,6 +159,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         enterKioskMode()
+        setUpFaceScreen()
 
         binding.buildText.text = getString(
             R.string.build_label, getString(R.string.flavor_name), BuildConfig.BUILD_TYPE, BuildConfig.VERSION_NAME,
@@ -234,6 +247,7 @@ class MainActivity : AppCompatActivity() {
             when {
                 binding.exitOverlay.isVisible -> stayIn()
                 viewModel.state.value.canGoBack -> viewModel.back()
+                viewModel.state.value.mode == ScreenMode.MENU -> viewModel.showFace()
             }
         }
         requestMicPermissionOnce()
@@ -243,11 +257,64 @@ class MainActivity : AppCompatActivity() {
                 viewModel.state.collect(::render)
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.faceCues.collect { face.onCue(it) }
+            }
+        }
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        faceDebug?.unregister(this)
         super.onDestroy()
+    }
+
+    /**
+     * Экран 1 — лицо (docs/ui-redesign/DESIGN.md). Виден в режимах FACE и SLEEP и во время поездки; в MENU уходит
+     * влево с прозрачностью, под ним — прежний экран. Отладка (debug + emulator): adb broadcast [FaceDebug.ACTION].
+     */
+    private fun setUpFaceScreen() {
+        face = FaceController(container.audioLevels, reducedMotion = !ValueAnimator.areAnimatorsEnabled())
+        windowBackground = window.decorView.background
+        rootBackground = binding.root.background
+        binding.faceScreen.setContent {
+            FaceScreen(
+                engine = face.engine,
+                renderer = face.renderer,
+                state = face.screen,
+                onSwipeToMenu = { viewModel.openMenu() },
+                onStop = { viewModel.stop() },
+                onShown = { setLegacyCovered(true) },
+                onHidden = { binding.faceScreen.isVisible = false },
+            )
+        }
+        if (BuildConfig.DEBUG && !BuildConfig.IS_ROBOT) {
+            faceDebug = FaceDebug(face, viewModel, container.audioLevels, container.presenceSimulator).also { it.register(this) }
+        }
+    }
+
+    /** Лицо закрыло экран: прежний экран и фоны не рисуем (одна заливка вместо трёх). */
+    private fun setLegacyCovered(covered: Boolean) {
+        binding.menuRoot.visibility = if (covered) View.INVISIBLE else View.VISIBLE
+        binding.root.background = if (covered) null else rootBackground
+        window.setBackgroundDrawable(if (covered) null else windowBackground)
+    }
+
+    private fun renderFaceScreen(state: MainUiState) {
+        face.onState(state)
+        val visible = state.mode != ScreenMode.MENU || state.guidingTo != null
+        val screen = face.screen
+        if (visible != screen.visible) {
+            if (visible) {
+                binding.faceScreen.isVisible = true
+            } else {
+                setLegacyCovered(false)
+            }
+            screen.visible = visible
+        }
+        screen.travelTitle = state.guidingTo?.let { container.text.get(R.string.guide_title, state.lang, it) }
+        screen.stopLabel = str(R.string.action_stop, state.lang)
     }
 
     private fun openDiagnostics() {
@@ -327,14 +394,16 @@ class MainActivity : AppCompatActivity() {
         renderBottom(state)
 
         // Слои.
+        renderFaceScreen(state)
         val guiding = state.guidingTo
-        binding.guideOverlay.isVisible = guiding != null
+        // Поездку и сон показывает экран лица (остров «Стоп», спящее лицо); прежние слои — только если его нет.
+        binding.guideOverlay.isVisible = guiding != null && !face.screen.visible
         if (guiding != null) {
             binding.guideTitle.text = container.text.get(R.string.guide_title, lang, guiding)
             binding.guideSub.text = str(R.string.guide_follow, lang)
             binding.guideStopButton.text = str(R.string.action_stop, lang)
         }
-        binding.screensaver.isVisible = state.screensaver
+        binding.screensaver.isVisible = state.screensaver && !face.screen.visible
         if (state.screensaver && binding.exitOverlay.isVisible) stayIn(wake = false)
         renderExitTexts(lang)
         renderFace(state)
@@ -344,7 +413,8 @@ class MainActivity : AppCompatActivity() {
     private fun renderFace(state: MainUiState) {
         val lang = state.lang
         val faceMode = state.mode == ScreenMode.FACE
-        binding.faceLayer.isVisible = faceMode
+        // Прежний слой лица заменён экраном 1 (Compose); его кнопки — на прежнем экране меню до M3.
+        binding.faceLayer.isVisible = false
         binding.face.emotion = state.emotion
         binding.faceButton.isVisible = state.mode == ScreenMode.MENU && container.chatSettings.mode.value.usesAgent
         binding.faceButton.text = str(R.string.action_face, lang)

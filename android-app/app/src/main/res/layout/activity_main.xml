@@ -14,7 +14,9 @@
     android:clipChildren="false"
     tools:context=".MainActivity">
 
+    <!-- Прежний экран с функциями (меню). До экрана 2 (M3) открывается свайпом влево с лица. -->
     <LinearLayout
+        android:id="@+id/menuRoot"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clipChildren="false"
@@ -828,6 +830,12 @@
     </LinearLayout>
 
     <!-- «Веду вас»: на весь экран, пока робот едет -->
+    <!-- Экран 1 нового интерфейса: живое лицо на весь экран (Compose, ui/face). Поверх прежних слоёв. -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/faceScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <LinearLayout
         android:id="@+id/guideOverlay"
         android:layout_width="match_parent"
