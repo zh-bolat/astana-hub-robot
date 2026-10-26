@@ -47,6 +47,12 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
     private var visitorId = NONE
     private var robotId = NONE
 
+    /** Ход вернули на экран («Назад», откат шума): его источники уже показаны, чужие из состояния не цепляем. */
+    private var restoredTurnShown = false
+
+    /** Источники из прошлого снимка: цепляем только что пришедшие (не повторяем их под стартом поездки и т. п.). */
+    private var prevCitations: List<Citation> = emptyList()
+
     /** true — чат изменился. */
     fun update(s: MainUiState): Boolean {
         var changed = false
@@ -87,8 +93,10 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
                 }
                 visitorId = restored.first
                 robotId = restored.second
+                restoredTurnShown = true
             } else {
                 visitorId = append(ChatRole.VISITOR, q)
+                restoredTurnShown = false
                 robotId = NONE
                 changed = true
             }
@@ -108,7 +116,7 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
                 changed = true
             }
         }
-        if (s.citations.isNotEmpty()) {
+        if (s.citations.isNotEmpty() && s.citations != prevCitations && !restoredTurnShown) {
             val i = indexOf(robotId)
             if (i >= 0 && list[i].citations != s.citations) {
                 list[i] = list[i].copy(citations = s.citations)
@@ -117,6 +125,7 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
         }
         prevQuestion = q
         prevAnswer = a
+        prevCitations = s.citations
         if (list.size > maxItems) {
             list.subList(0, list.size - maxItems).clear()
             changed = true
@@ -134,10 +143,12 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
         if (a == null) return null
         for (i in list.lastIndex downTo 1) {
             val robot = list[i]
-            val visitor = list[i - 1]
-            if (robot.role == ChatRole.ROBOT && robot.text == a && visitor.role == ChatRole.VISITOR && visitor.text == q) {
-                return visitor.id to robot.id
-            }
+            if (robot.role != ChatRole.ROBOT || robot.text != a) continue
+            // Вопрос этого хода — ближайшая реплика посетителя выше (у хода может быть несколько реплик робота:
+            // ответ, старт поездки, «Хорошо, стою»).
+            var j = i - 1
+            while (j >= 0 && list[j].role == ChatRole.ROBOT) j--
+            if (j >= 0 && list[j].text == q) return list[j].id to robot.id
         }
         return null
     }

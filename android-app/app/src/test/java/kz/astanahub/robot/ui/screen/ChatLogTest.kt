@@ -92,6 +92,33 @@ class ChatLogTest {
     }
 
     @Test
+    fun `back returns a turn with several robot lines - no duplicates, no foreign sources`() {
+        val c = listOf(Citation("d", "document", "Hub Space"))
+        step { copy(question = "Где кафе?", answer = "Справа, 15 м.") }
+        step { copy(answer = "Иду к: Кафе") } // «Проводить»
+        step { copy(answer = "Хорошо, стою.") } // «Стоп»
+        step { copy(question = "Что такое Hub?", answer = null) }
+        step { copy(answer = "Технопарк.", citations = c) }
+        // «Назад»: прежний ход, а источники в состоянии — ещё от частого вопроса.
+        step { copy(question = "Где кафе?", answer = "Хорошо, стою.") }
+        assertEquals(
+            listOf("V:Где кафе?", "R:Справа, 15 м.", "R:Иду к: Кафе", "R:Хорошо, стою.", "V:Что такое Hub?", "R:Технопарк."),
+            texts(),
+        )
+        assertTrue(log.items[3].citations.isEmpty())
+        assertEquals(c, log.items[5].citations)
+    }
+
+    @Test
+    fun `sources stay under the answer, not repeated under the trip start of the same turn`() {
+        val c = listOf(Citation("p", "place", "Кафе"))
+        step { copy(question = "Где кафе?", answer = "Справа, 15 м.", citations = c) }
+        step { copy(answer = "Иду к: Кафе") }
+        assertEquals(c, log.items[1].citations)
+        assertTrue(log.items[2].citations.isEmpty())
+    }
+
+    @Test
     fun `home closes the turn but keeps the chat, next greeting does not overwrite the old answer`() {
         step { copy(question = "Q", answer = "A") }
         step { copy(question = null, answer = null) }
