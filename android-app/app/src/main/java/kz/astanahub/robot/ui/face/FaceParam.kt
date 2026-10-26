@@ -185,17 +185,17 @@ object FaceLayout {
 
     /** Сдвиг глаз при взгляде в край (|gaze| = 1). */
     const val GAZE_RANGE_X = 95f
-    const val GAZE_RANGE_Y = 62f
+    const val GAZE_RANGE_Y = 70f
 
     /** Брови: от верхнего края глаза до средней линии брови. */
     const val BROW_GAP = 64f
 
     /** Брови следуют за взглядом на эту долю. */
-    const val BROW_FOLLOW = 0.7f
+    const val BROW_FOLLOW = 0.5f
 
     /** Рот: центр по y; следует за взглядом на [MOUTH_FOLLOW]. */
     const val MOUTH_Y = 205f
-    const val MOUTH_FOLLOW = 0.45f
+    const val MOUTH_FOLLOW = 0.3f
 
     /** Толщина штрихов (бровь, рот, контур глаза). */
     const val STROKE = 26f
@@ -205,5 +205,5 @@ object FaceLayout {
 
     /** Голова доворачивается за взглядом: ед. на |gaze| = 1. */
     const val HEAD_FOLLOW_X = 34f
-    const val HEAD_FOLLOW_Y = 18f
+    const val HEAD_FOLLOW_Y = 12f
 }
