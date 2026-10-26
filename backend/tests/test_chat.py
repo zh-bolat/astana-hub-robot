@@ -464,10 +464,10 @@ def test_reasoning_about_the_base_is_not_spoken(make_client):
     ]
 
 
-# ---------- характер: ремарки и смех текстом не озвучиваются ----------
+# ---------- характер: ремарки не озвучиваются, смех словом остаётся ----------
 
 
-def test_stage_directions_and_laughter_are_not_spoken(make_client):
+def test_stage_directions_are_not_spoken_but_laughter_is(make_client):
     model = FakeModel(
         say("[happy] *смеётся* Конечно! Кафе — справа от вас. (подмигивает) Ха-ха, проводить вас?")
     )
@@ -479,10 +479,10 @@ def test_stage_directions_and_laughter_are_not_spoken(make_client):
     assert [d["text"] for e, d in evs if e == "phrase"] == [
         "Конечно!",
         "Кафе — справа от вас.",
-        "Проводить вас?",
+        "Ха-ха, проводить вас?",
     ]
     answer = logged(client)[0].answer
-    assert "смеётся" not in answer and "подмигивает" not in answer and "Ха" not in answer
+    assert "смеётся" not in answer and "подмигивает" not in answer
 
 
 def test_remark_only_reply_is_not_spoken(make_client):

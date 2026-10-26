@@ -976,7 +976,7 @@ def test_voice_follows_each_phrase_and_v3_tag_only_in_tts(live_server):
 
 
 def test_stage_directions_are_cut_from_streamed_phrases(live_server):
-    """Игривая модель «играет» текстом: ремарки и смех не уходят ни в синтез, ни на экран, ни в журнал."""
+    """Ремарки модели не уходят ни в синтез, ни на экран, ни в журнал; смех словом («Ха-ха») остаётся."""
     model = FakeModel(
         say("[happy] Ха-ха, конечно! *подмигивает* Кафе справа. (улыбается) Проводить вас?")
     )
@@ -989,12 +989,16 @@ def test_stage_directions_are_cut_from_streamed_phrases(live_server):
             await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
             await c.wait("listening", count=2)
             phrases = [p["text"] for p in c.events("phrase")]
-            assert phrases == ["Конечно!", "Кафе справа.", "Проводить вас?"]
+            assert phrases == ["Ха-ха, конечно!", "Кафе справа.", "Проводить вас?"]
 
     run(scenario())
     spoken = " ".join(fakes.tts[0].texts)
-    assert not any(w in spoken for w in ("Ха", "подмиг", "улыба"))
-    assert messages_of(app)[1] == ("assistant", "Конечно! Кафе справа. Проводить вас?", None)
+    assert not any(w in spoken for w in ("подмиг", "улыба"))
+    assert messages_of(app)[1] == (
+        "assistant",
+        "Ха-ха, конечно! Кафе справа. Проводить вас?",
+        None,
+    )
 
 
 def test_tts_text_is_normalized_but_subtitle_is_not(live_server):

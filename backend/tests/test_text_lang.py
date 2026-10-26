@@ -101,7 +101,7 @@ def test_clean_for_tts():
     assert clean_for_tts(raw) == "Ответ Кафе на 1 этаже Сайт"
 
 
-# ---------- ремарки и смех текстом (игривый характер робота): не озвучиваются и не показываются ----------
+# ---------- ремарки (игривый характер робота): не озвучиваются и не показываются ----------
 @pytest.mark.parametrize(
     ("raw", "clean"),
     [
@@ -111,9 +111,6 @@ def test_clean_for_tts():
         ("Кафе справа, *машет рукой*, идёмте!", "Кафе справа, идёмте!"),
         ("*тихо смеётся*, конечно!", "Конечно!"),
         ("Конечно! *смеётся*. Кафе справа.", "Конечно! Кафе справа."),
-        ("Ха-ха, хороший вопрос! Кафе справа.", "Хороший вопрос! Кафе справа."),
-        ("Кафе справа. Хе-хе, проводить вас?", "Кафе справа. Проводить вас?"),
-        ("Конечно, ха-ха.", "Конечно."),
         ("(с улыбкой) Здравствуйте!", "Здравствуйте!"),
         ("(күледі) Әрине! Кафе оң жақта.", "Әрине! Кафе оң жақта."),
         (
@@ -122,7 +119,8 @@ def test_clean_for_tts():
         ),
         ("[playful] Sure! [winks]", "Sure!"),
         ("*beep boop* Hello there!", "Hello there!"),
-        ("Hehe, hi! Welcome.", "Hi! Welcome."),
+        ("*смеётся* Ха-ха! Конечно.", "Ха-ха! Конечно."),
+        ("[laughs] Haha! Sure.", "Haha! Sure."),
         ("*laughs*", ""),
     ],
 )
@@ -151,4 +149,34 @@ def test_clean_for_tts_drops_stage_directions(raw, clean):
     ],
 )
 def test_clean_for_tts_keeps_parentheses_with_content(raw, clean):
+    assert clean_for_tts(raw) == clean
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ха-ха! Кофе я не пью, но дорогу к нему знаю.",
+        "Ха! Хороший вопрос.",
+        "Кафе справа, ха-ха, прямо за углом.",
+        "Хаха, конечно!",
+        "Ха-ха-ха! Конечно.",
+        "Haha! Sure thing.",
+        "Hehe, hi! Welcome.",
+    ],
+)
+def test_clean_for_tts_keeps_short_laughter(text):
+    # смех словом — часть речи робота (звук смеха делает синтез)
+    assert clean_for_tts(text) == text
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("Хахахахаха! Конечно.", "Ха-ха! Конечно."),
+        ("Ха-ха-ха-ха-ха, конечно!", "Ха-ха, конечно!"),
+        ("Кафе справа, хахахахах.", "Кафе справа, ха-ха."),
+        ("Hahahahaha! Sure.", "Haha! Sure."),
+    ],
+)
+def test_clean_for_tts_shortens_long_laughter(raw, clean):
     assert clean_for_tts(raw) == clean
