@@ -51,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.AnnotatedString
@@ -258,10 +260,10 @@ private fun Header(state: ScreenTwoState, actions: ScreenTwoActions) {
             )
         }
         AnimatedVisibility(state.offline, enter = fadeIn(HubMotion.Default.compose()), exit = fadeOut(HubMotion.Default.compose())) {
-            StatusBadge(texts.offline, Modifier.padding(end = 16.dp).widthIn(max = 420.dp))
+            StatusBadge(texts.offline, Modifier.padding(end = 16.dp).widthIn(max = BADGE_MAX_WIDTH))
         }
         AnimatedVisibility(state.micOff, enter = fadeIn(HubMotion.Default.compose()), exit = fadeOut(HubMotion.Default.compose())) {
-            StatusBadge(texts.micOff, Modifier.padding(end = 16.dp).widthIn(max = 420.dp))
+            StatusBadge(texts.micOff, Modifier.padding(end = 16.dp).widthIn(max = BADGE_MAX_WIDTH))
         }
         LanguageSwitch(state.lang, actions::onLanguage)
         Spacer(Modifier.width(20.dp))
@@ -333,6 +335,14 @@ private fun Chat(state: ScreenTwoState, actions: ScreenTwoActions) {
                 }
             }
         }
+        // Верхний край чата растворяется в чёрном (история уходит под шапку мягко, без резкого обреза строки).
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(CHAT_FADE)
+                .background(Brush.verticalGradient(listOf(HubColors.Black, Color.Transparent))),
+        )
     }
 }
 
@@ -702,6 +712,8 @@ fun ExitDialog(texts: ScreenTexts, actions: ScreenTwoActions, modifier: Modifier
 }
 
 private val TILE_GAP = 16.dp
+private val CHAT_FADE = 48.dp
+private val BADGE_MAX_WIDTH = 560.dp
 private val TILE_RADIUS = 32.dp
 private const val MAX_TILE_ROWS = 3
 private const val FAQ_LINES = 4
