@@ -44,12 +44,18 @@ object FaceInputMapper {
     /**
      * Тап по лицу: спит — разбудить; говорит — перебить. В поездке тап обрывает только речь (фразы пути), поездку
      * останавливает лишь «Стоп» на острове. Молчит (в том числе в поездке) — рефлекс лица.
+     *
+     * [robotSpeaking] — звучит ли голос робота прямо сейчас (MainViewModel.robotSpeaking): в поездке фаза остаётся
+     * NAVIGATING и по ней речь не видна.
      */
-    fun tap(state: MainUiState): Tap = when {
-        state.mode == ScreenMode.SLEEP -> Tap.WAKE
-        state.phase == Phase.SPEAKING && state.guidingTo != null -> Tap.INTERRUPT_SPEECH
-        state.phase == Phase.SPEAKING -> Tap.STOP
-        else -> Tap.REFLEX
+    fun tap(state: MainUiState, robotSpeaking: Boolean = false): Tap {
+        val speaking = robotSpeaking || state.phase == Phase.SPEAKING
+        return when {
+            state.mode == ScreenMode.SLEEP -> Tap.WAKE
+            speaking && state.guidingTo != null -> Tap.INTERRUPT_SPEECH
+            speaking -> Tap.STOP
+            else -> Tap.REFLEX
+        }
     }
 
     fun apply(state: MainUiState, inputs: FaceInputs) {

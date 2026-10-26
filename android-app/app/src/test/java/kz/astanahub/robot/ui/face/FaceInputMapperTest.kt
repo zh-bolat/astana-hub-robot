@@ -62,7 +62,10 @@ class FaceInputMapperTest {
             FaceInputMapper.Tap.INTERRUPT_SPEECH,
             FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING, guidingTo = "Кафе")),
         )
-        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")))
+        // В поездке фаза NAVIGATING всё время, речь видна только по голосу робота.
+        val trip = MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")
+        assertEquals(FaceInputMapper.Tap.INTERRUPT_SPEECH, FaceInputMapper.tap(trip, robotSpeaking = true))
+        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(trip, robotSpeaking = false))
         assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.IDLE)))
         assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.THINKING)))
     }

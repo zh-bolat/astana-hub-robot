@@ -963,6 +963,10 @@ class MainViewModel(
         if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
     }
 
+    /** Звучит ли голос робота сейчас (своя озвучка или live-сервер). В поездке фаза NAVIGATING речь не показывает. */
+    val robotSpeaking: Boolean
+        get() = voice.activity.value == VoiceActivity.SPEAKING || live?.playing == true
+
     /** Только отладка на эмуляторе (FaceDebug, adb broadcast): уснуть сейчас, не дожидаясь таймера. */
     internal fun sleepNow() {
         if (_state.value.mode != ScreenMode.SLEEP) goIdle()

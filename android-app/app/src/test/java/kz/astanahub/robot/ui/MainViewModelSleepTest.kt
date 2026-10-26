@@ -42,6 +42,7 @@ import kz.astanahub.robot.robot.NavigationResult
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.robot.RobotPose
 import kz.astanahub.robot.ui.face.FaceCue
+import kz.astanahub.robot.ui.face.FaceInputMapper
 import kz.astanahub.robot.voice.Transcript
 import kz.astanahub.robot.voice.VoiceActivity
 import kz.astanahub.robot.voice.VoiceGateway
@@ -69,6 +70,7 @@ class MainViewModelSleepTest {
 
         override fun stopSpeaking() {
             stops++
+            activity.value = VoiceActivity.IDLE
         }
 
         override fun setLanguage(lang: Lang) = Unit
@@ -201,10 +203,14 @@ class MainViewModelSleepTest {
         advanceTimeBy(500)
         runCurrent()
         assertEquals("cafe trip started", Phase.NAVIGATING, vm.state.value.phase)
+        // Фраза старта звучит, фаза при этом NAVIGATING — тап должен понять, что робот говорит.
+        assertTrue("start phrase is playing", vm.robotSpeaking)
+        assertEquals(FaceInputMapper.Tap.INTERRUPT_SPEECH, FaceInputMapper.tap(vm.state.value, vm.robotSpeaking))
         val stopsBefore = voice.stops
         vm.interruptSpeech()
         runCurrent()
         assertTrue(voice.stops > stopsBefore)
+        assertEquals("silent now — next tap is a reflex", FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(vm.state.value, vm.robotSpeaking))
         assertEquals(Phase.NAVIGATING, vm.state.value.phase)
         verify(exactly = 0) { robot.stopNavigation() }
         coVerify(exactly = 0) { robot.stopNavigationAndWait(any()) }

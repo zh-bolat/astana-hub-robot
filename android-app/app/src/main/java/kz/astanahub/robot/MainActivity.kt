@@ -309,14 +309,16 @@ class MainActivity : AppCompatActivity() {
      * поездка продолжается; молчит — рефлекс (моргнуть / слегка вздрогнуть).
      */
     private fun onFaceTap() {
-        when (FaceInputMapper.tap(viewModel.state.value)) {
+        val tap = FaceInputMapper.tap(viewModel.state.value, viewModel.robotSpeaking)
+        timber.log.Timber.d("face tap: %s", tap)
+        when (tap) {
             FaceInputMapper.Tap.WAKE -> viewModel.wake()
             FaceInputMapper.Tap.STOP -> {
                 viewModel.stop()
                 showSubtitles(false)
             }
             FaceInputMapper.Tap.INTERRUPT_SPEECH -> viewModel.interruptSpeech()
-            FaceInputMapper.Tap.REFLEX -> face.engine.reflex()
+            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
         }
     }
 
