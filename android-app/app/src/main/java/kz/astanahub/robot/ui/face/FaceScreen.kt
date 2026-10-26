@@ -109,17 +109,13 @@ fun FaceScreen(
     }
     val running = started && (state.visible || presence.isRunning)
 
+    // Фон и жесты — на неподвижном слое: открывшаяся при свайпе полоса справа чёрная (у окна фона нет — иначе там
+    // остаются старые пиксели), а координаты пальца не зависят от того, куда уехало лицо.
     Box(
         Modifier
             .fillMaxSize()
-            .graphicsLayer {
-                val p = presence.value
-                alpha = p
-                // Уходит влево — туда же, куда вёл палец; возвращается тем же путём.
-                translationX = drag.value - (1f - p) * EXIT_SHIFT_DP.dp.toPx()
-            }
+            .graphicsLayer { alpha = presence.value }
             .background(HubColors.Black)
-            .faceSurface(engine, renderer, running)
             .pointerInput(holdEnabled) {
                 val inputs = engine.inputs
                 fun touch(x: Float, y: Float) {
@@ -223,7 +219,12 @@ fun FaceScreen(
                             break
                         }
                         if (!change.pressed) {
-                            recognizer.up(change.position.x, change.position.y, change.uptimeMillis)
+                            // Отпускание забрала кнопка («Стоп» на острове) — это её нажатие, не тап по лицу.
+                            if (change.isConsumed) {
+                                recognizer.cancel()
+                            } else {
+                                recognizer.up(change.position.x, change.position.y, change.uptimeMillis)
+                            }
                             break
                         }
                         recognizer.move(change.position.x, change.position.y, change.uptimeMillis)
@@ -237,19 +238,29 @@ fun FaceScreen(
                 }
             },
     ) {
-        SwipeHandle(
-            drag = { drag.value },
-            pressed = pressed.value,
-            visible = state.travelTitle == null && !state.asleep,
-            reducedMotion = engine.reducedMotion,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
-        )
-        TravelIsland(
-            title = state.travelTitle,
-            stopLabel = state.stopLabel,
-            onStop = onStop,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
-        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    // Уходит влево — туда же, куда вёл палец; возвращается тем же путём.
+                    translationX = drag.value - (1f - presence.value) * EXIT_SHIFT_DP.dp.toPx()
+                }
+                .faceSurface(engine, renderer, running),
+        ) {
+            SwipeHandle(
+                drag = { drag.value },
+                pressed = pressed.value,
+                visible = state.travelTitle == null && !state.asleep,
+                reducedMotion = engine.reducedMotion,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+            )
+            TravelIsland(
+                title = state.travelTitle,
+                stopLabel = state.stopLabel,
+                onStop = onStop,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
+            )
+        }
     }
 }
 
