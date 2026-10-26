@@ -12,6 +12,13 @@
         <item name="fontFamily">@font/nunito</item>
     </style>
 
+    <!-- Главный экран-киоск (экраны 1 и 2 — Compose, чёрные): окно до первого кадра тоже чёрное — без белой вспышки
+         при запуске и скачка яркости. -->
+    <style name="Theme.AstanaHubRobot.Kiosk" parent="Theme.AstanaHubRobot">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+    </style>
+
     <!-- Кнопки главного экрана — TextView с фоном: полный контроль над градиентом, тенью и «проседанием» -->
     <style name="Hub.Btn" parent="">
         <item name="android:layout_width">wrap_content</item>

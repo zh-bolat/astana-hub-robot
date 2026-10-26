@@ -69,7 +69,7 @@ class ChatLog(private val maxItems: Int = MAX_ITEMS) {
             visitorId = NONE
         }
         val newTurn = q != null && (q != prevQuestion || (prevAnswer != null && a == null))
-        if (newTurn && q != null) {
+        if (newTurn) {
             val restored = restoredTurn(q, a)
             if (restored != null) {
                 // Откат к прошлому ходу: висящие вопросы без ответа после него убираем, новых реплик нет.
