@@ -959,6 +959,8 @@ class MainViewModel(
             viewModelScope.launch { say(WayPhrases.guideCancelled(_state.value.lang), offline = _state.value.offline) }
         }
         setBusy(null)
+        // Ход оборван — эмоция ответа не должна застрять на лице: спокойное лицо через обычную паузу.
+        if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
     }
 
     /** Остановить поездку (кнопка «Стоп», голосовое «стоп»). true — ехали. */

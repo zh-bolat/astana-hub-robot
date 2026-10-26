@@ -169,6 +169,27 @@ class MainViewModelFaceCueTest {
     }
 
     @Test
+    fun `interrupting a happy answer does not leave the emotion stuck on the face`() = runTest(dispatcher) {
+        every { backend.chat(any()) } answers {
+            flow {
+                emit(ChatEvent.Emotion("happy"))
+                emit(ChatEvent.Phrase("Astana Hub — технопарк."))
+                delay(60_000) // ответ ещё идёт
+                emit(ChatEvent.Done("r", Lang.RU))
+            }
+        }
+        val vm = createVm(chatMode = ChatMode.AGENT)
+        vm.submit("Расскажи про Astana Hub")
+        testScheduler.advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(Emotion.HAPPY, vm.state.value.emotion)
+        vm.stop() // тап по лицу / «Стоп»
+        testScheduler.advanceTimeBy(MainViewModel.EMOTION_LINGER_MILLIS + 100)
+        runCurrent()
+        assertEquals(Emotion.NEUTRAL, vm.state.value.emotion)
+    }
+
+    @Test
     fun `camera without a frame shows the error face`() = runTest(dispatcher) {
         coEvery { camera.captureJpeg(any()) } returns null
         val vm = createVm()
