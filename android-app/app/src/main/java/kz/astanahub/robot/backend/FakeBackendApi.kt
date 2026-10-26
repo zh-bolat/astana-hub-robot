@@ -64,6 +64,9 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
      * «что это» → `look` (кадр робот сам отправит в [look]), остальное — шаблонный ответ.
      * Как у настоящего сервера: `action` приходит до фраз, которые его описывают.
      */
+    /** Место из последнего ответа «где» (агент предложил проводить) — для «да». */
+    @Volatile private var offeredPlace: String? = null
+
     override fun chat(request: ChatRequest): Flow<ChatEvent> = flow {
         delay(latencyMillis / 2)
         val lang = request.lang ?: Lang.RU
@@ -80,6 +83,13 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
                     "Сәлеметсіз бе! Мен Astana Hub көмекшісімін. Қалай көмектесейін?",
                     "Hello! I'm the Astana Hub assistant. How can I help?")))
             }
+            // «Да» на «Могу проводить» — как у настоящего агента: едем к месту из прошлого ответа «где».
+            place == null && offeredPlace != null && CONFIRM_WORDS.any { text.trim(' ', '.', '!', ',').startsWith(it) } -> {
+                emit(ChatEvent.Emotion("excited"))
+                action(ChatAction(ChatAction.GUIDE_TO, offeredPlace))
+                offeredPlace = null
+                emit(ChatEvent.Phrase(fakeText(lang, "Пойдёмте, провожу!", "Жүріңіз, бастап барамын!", "Let's go, follow me!")))
+            }
             place != null && GUIDE_WORDS.any { text.contains(it) } -> {
                 emit(ChatEvent.Emotion("excited"))
                 action(ChatAction(ChatAction.GUIDE_TO, place.id))
@@ -87,6 +97,7 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
             }
             place != null -> {
                 action(ChatAction(ChatAction.WHERE_IS, place.id))
+                offeredPlace = place.id
                 emit(ChatEvent.Phrase(fakeText(lang, "Могу проводить, если хотите.", "Қаласаңыз, бастап барамын.", "I can take you there if you like.")))
             }
             LOOK_WORDS.any { text.contains(it) } -> {
@@ -124,6 +135,7 @@ class FakeBackendApi(private val latencyMillis: Long = 600) : BackendApi {
 
     companion object {
         private val GUIDE_WORDS = listOf("провод", "отвед", "бастап", "take me", "guide")
+        private val CONFIRM_WORDS = listOf("да", "давай", "конечно", "иә", "жарайды", "yes", "sure", "ok")
         private val LOOK_WORDS = listOf("что это", "бұл не", "what is this", "что видишь")
         private val CITED_WORDS = listOf("hub", "хаб", "резидент", "resident", "tech orda", "стартап")
         val FAKE_CITATIONS = listOf(
