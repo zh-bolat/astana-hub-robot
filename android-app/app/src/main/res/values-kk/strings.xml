@@ -48,6 +48,9 @@
     <string name="action_menu">Мәзір</string>
     <string name="action_face">Роботқа</string>
     <string name="face_hint">Сұрағыңызды айтыңыз, тыңдап тұрмын</string>
+    <!-- MF4: мини-подсказка сверху экрана лица (во сне / бодрствуя). -->
+    <string name="face_hint_asleep">Сөйлесу үшін түртіңіз</string>
+    <string name="face_hint_awake">Ұйықтату үшін екі рет түртіңіз</string>
     <string name="tap_hint">Мәзірді ашу үшін экранды түртіңіз</string>
     <string name="chat_source">Дереккөз: %1$s</string>
     <string name="chat_sources">Дереккөздер: %1$s</string>

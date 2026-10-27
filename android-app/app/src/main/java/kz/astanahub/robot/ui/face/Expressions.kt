@@ -24,7 +24,7 @@ enum class FaceMood {
  * Выражение глаз прототипа (`EXPR` в `docs/design/robot-mvp.html`): каждое — своя фигура, рисуется
  * [FaceRenderer] по путям прототипа; смена имени — «раскрытие» `exprIn`.
  */
-enum class ProtoExpr { NEUTRAL, LISTEN, SPEAK, THINK, GUIDE, WIDE, HAPPY, BLUSH, SPARKLE, BORED, CONFUSED, DIZZY, SAD }
+enum class ProtoExpr { NEUTRAL, LISTEN, SPEAK, THINK, GUIDE, WIDE, HAPPY, BLUSH, SPARKLE, BORED, CONFUSED, DIZZY, SAD, SLEEP }
 
 /** Эмоция с сервера (`emotion`) — накладывается поверх состояния ([Expressions.overlay]). */
 enum class FaceEmotion {
@@ -350,12 +350,14 @@ object Expressions {
     fun mood(m: FaceMood): Expression = MOODS[m.ordinal]
 
     /**
-     * Фигура глаз прототипа для состояния ([FaceMood.SLEEP] — заставка: глаза открыты, «скучают / удивляются /
-     * радуются» по [idle] — его выбирает [FaceLife]). Классы `#ind3` прототипа: listen / think / speak / guide /
-     * unclear → confused / look → wide; настроения `setMood`: happy / blush / sparkle / wide / dizzy.
+     * Фигура глаз прототипа для состояния. [FaceMood.SLEEP] — робот спит: прикрытые глаза и значок сна (`sleep`);
+     * покой — «свободное время» заставки: глаза бродят, «скучают / удивляются / радуются» по [idle] — его выбирает
+     * [FaceLife]. Классы `#ind3` прототипа: listen / think / speak / guide / unclear → confused / look → wide;
+     * настроения `setMood`: happy / blush / sparkle / wide / dizzy.
      */
     fun proto(m: FaceMood, idle: ProtoExpr = ProtoExpr.NEUTRAL): ProtoExpr = when (m) {
-        FaceMood.IDLE, FaceMood.WAKE, FaceMood.YAWN -> ProtoExpr.NEUTRAL
+        FaceMood.IDLE -> idle
+        FaceMood.WAKE, FaceMood.YAWN -> ProtoExpr.NEUTRAL
         FaceMood.LISTENING -> ProtoExpr.LISTEN
         FaceMood.THINKING -> ProtoExpr.THINK
         FaceMood.SPEAKING -> ProtoExpr.SPEAK
@@ -367,7 +369,7 @@ object Expressions {
         FaceMood.PETTED, FaceMood.BLUSH -> ProtoExpr.BLUSH
         FaceMood.SPARKLE -> ProtoExpr.SPARKLE
         FaceMood.DIZZY -> ProtoExpr.DIZZY
-        FaceMood.SLEEP -> idle
+        FaceMood.SLEEP -> ProtoExpr.SLEEP
     }
 
     /** Моргают только овалы с классом `bl` прототипа: обычное, слушает, ведёт (говорит и «смотрит» — нет). */

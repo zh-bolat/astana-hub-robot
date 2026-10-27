@@ -73,11 +73,22 @@ class MainViewModelLiveTest {
         override val transcripts: Flow<Transcript> = asr
         override val activity = MutableStateFlow(VoiceActivity.IDLE)
 
+        /** Сколько озвучек идёт сейчас и сколько шло одновременно максимум (один голос за раз — не больше 1). */
+        var speakingNow = 0
+        var maxSpeaking = 0
+        var speakMillis = 100L
+
         override suspend fun speak(phrases: List<String>, lang: Lang): Boolean {
             activity.value = VoiceActivity.SPEAKING
             spoken += phrases
-            delay(100)
-            activity.value = VoiceActivity.IDLE
+            speakingNow++
+            maxSpeaking = maxOf(maxSpeaking, speakingNow)
+            try {
+                delay(speakMillis)
+            } finally {
+                speakingNow--
+                if (speakingNow == 0) activity.value = VoiceActivity.IDLE
+            }
             return true
         }
 
@@ -154,13 +165,14 @@ class MainViewModelLiveTest {
         )
     }
 
-    private fun TestScope.vm(screensaverMillis: Long? = null): MainViewModel {
+    private fun TestScope.vm(screensaverMillis: Long? = null, startAsleep: Boolean = false): MainViewModel {
         val file = java.io.File.createTempFile("places", ".json").apply { delete(); deleteOnExit() }
         val wf = WayFinder(PlaceRepository(backend, robot, file, dispatcher), robot)
         return MainViewModel(
             backend, voice, camera, phrases, clock = { testScheduler.currentTime },
             wayFinder = wf, robot = robot, screensaverMillis = screensaverMillis,
             chatMode = { mode }, presence = presence, liveFactory = factory(), foreground = foreground,
+            startAsleep = startAsleep,
         ).also { runCurrent(); advanceTimeBy(100); runCurrent() }
     }
 
@@ -578,7 +590,7 @@ class MainViewModelLiveTest {
         val vm = vm()
         val before = vm.state.value
         conn.server(LiveEvent.UserFinal("ну", Lang.RU))
-        conn.server(LiveEvent.Ignored)
+        conn.server(LiveEvent.Ignored())
         runCurrent()
         val after = vm.state.value
         assertEquals(before.screen, after.screen)
@@ -596,7 +608,7 @@ class MainViewModelLiveTest {
         conn.server(LiveEvent.Thinking)
         runCurrent()
         assertEquals(Phase.THINKING, vm.state.value.phase)
-        conn.server(LiveEvent.Ignored)
+        conn.server(LiveEvent.Ignored())
         runCurrent()
         assertTrue(vm.state.value.phase != Phase.THINKING)
     }
@@ -612,10 +624,15 @@ class MainViewModelLiveTest {
         advanceTimeBy(10_001); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
         advanceTimeBy(1_000)
+        // MF4: будит тап по лицу (подошедший — нет); live ещё на паузе после сбоя.
         presence.emit(PresenceEvent.Arrived(2, greet = false))
         runCurrent()
+        assertTrue(vm.state.value.asleep)
+        vm.wakeByTap()
+        runCurrent()
         assertFalse(vm.liveOpen)
-        advanceTimeBy(MainViewModel.LIVE_RETRY_MILLIS); runCurrent()
+        // Разговор идёт (касания) — робот не засыпает, пока live на паузе.
+        repeat(7) { advanceTimeBy(5_000); runCurrent(); vm.onTouch() }
         assertTrue(vm.liveOpen)
         assertEquals(2, connections.size)
         presence.emit(PresenceEvent.Left) // иначе таймер заставки перезапускается бесконечно (человек рядом)
@@ -776,5 +793,157 @@ class MainViewModelLiveTest {
         assertEquals("Что такое Astana Hub?", chatRequests.single().question)
         assertTrue(vm.liveOpen)
         advanceUntilIdle()
+    }
+
+    // --- MF4: один голос за раз ---
+
+    /** Голос робота не из live и звук live одновременно — никогда. */
+    private fun assertOneVoice() {
+        val local = voice.activity.value == VoiceActivity.SPEAKING
+        val live = sinks.lastOrNull()?.playing == true
+        assertFalse("two voices at once", local && live)
+    }
+
+    @Test
+    fun `tile during a live answer - live is cut, its late audio is not played, the tile answer plays`() = runTest(dispatcher) {
+        val vm = vm()
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Audio(pcm(2_000)))
+        advanceTimeBy(200); runCurrent()
+        assertTrue(sinks.last().playing)
+        vm.submitButton("Что такое Astana Hub?")
+        runCurrent()
+        assertEquals(1, conn.framesOfType("interrupt").size)
+        assertFalse(sinks.last().playing)
+        // Сервер ещё досылает звук оборванного хода — не играет.
+        conn.server(LiveEvent.Audio(pcm(400)))
+        repeat(10) { advanceTimeBy(20); runCurrent(); assertOneVoice() }
+        assertEquals(0L, sinks.last().writtenSinceFlush)
+        assertEquals(listOf("Ответ агента."), voice.spoken)
+        assertEquals("Что такое Astana Hub?", vm.state.value.question)
+    }
+
+    @Test
+    fun `live turn during a tile answer - interrupted at once, its audio and words never reach the robot`() = runTest(dispatcher) {
+        every { backend.chat(any()) } answers {
+            chatRequests += firstArg<ChatRequest>()
+            flow {
+                delay(800)
+                emit(ChatEvent.Phrase("Ответ агента."))
+                emit(ChatEvent.Done("req", Lang.RU))
+            }
+        }
+        voice.speakMillis = 1_000
+        val vm = vm()
+        vm.submitButton("Где Wi-Fi?")
+        runCurrent()
+        val interrupts = conn.framesOfType("interrupt").size
+        // Пока плитка думает, live услышал шум и начал свой ход (так было в хабе 13:51).
+        conn.server(LiveEvent.UserFinal("ну и что", Lang.RU))
+        conn.server(LiveEvent.TurnStart("t9"))
+        conn.server(LiveEvent.Phrase("Ответ на шум."))
+        conn.server(LiveEvent.Audio(pcm(1_000)))
+        runCurrent()
+        assertEquals(interrupts + 1, conn.framesOfType("interrupt").size)
+        assertEquals(0L, sinks.last().totalWritten)
+        repeat(40) { advanceTimeBy(50); runCurrent(); assertOneVoice() }
+        assertEquals(listOf("Ответ агента."), voice.spoken)
+        assertEquals("Где Wi-Fi?", vm.state.value.question)
+        assertFalse(vm.state.value.answer.orEmpty().contains("шум"))
+        assertEquals(0L, sinks.last().totalWritten)
+    }
+
+    @Test
+    fun `two tiles in a row - the second cuts the first, never two voices`() = runTest(dispatcher) {
+        voice.speakMillis = 2_000
+        val vm = vm()
+        vm.submitButton("Мероприятия?")
+        advanceTimeBy(300); runCurrent()
+        assertEquals(1, voice.speakingNow)
+        vm.submitButton("Wi-Fi?")
+        repeat(30) { advanceTimeBy(100); runCurrent(); assertOneVoice() }
+        assertEquals(1, voice.maxSpeaking)
+        assertEquals(listOf("Мероприятия?", "Wi-Fi?"), chatRequests.map { it.question })
+        assertEquals("Wi-Fi?", vm.state.value.question)
+    }
+
+    @Test
+    fun `what is this during a live answer - live cut, the look answer plays alone`() = runTest(dispatcher) {
+        val vm = vm()
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Audio(pcm(2_000)))
+        advanceTimeBy(200); runCurrent()
+        vm.lookAround()
+        runCurrent()
+        assertEquals(1, conn.framesOfType("interrupt").size)
+        conn.server(LiveEvent.TurnStart("t2"))
+        conn.server(LiveEvent.Audio(pcm(400)))
+        repeat(10) { advanceTimeBy(30); runCurrent(); assertOneVoice() }
+        assertEquals(2, conn.framesOfType("interrupt").size)
+        assertEquals(0L, sinks.last().writtenSinceFlush)
+        assertEquals(1, chatRequests.size)
+        assertEquals(listOf("Ответ агента."), voice.spoken)
+    }
+
+    @Test
+    fun `after the tile answer live listens and speaks again`() = runTest(dispatcher) {
+        val vm = vm()
+        vm.submitButton("Что такое Astana Hub?")
+        advanceTimeBy(1_000); runCurrent()
+        assertFalse(vm.state.value.processing)
+        val interrupts = conn.framesOfType("interrupt").size
+        conn.server(LiveEvent.UserFinal("А где кафе?", Lang.RU))
+        conn.server(LiveEvent.TurnStart("t5"))
+        conn.server(LiveEvent.Audio(pcm(300)))
+        advanceTimeBy(100); runCurrent()
+        assertTrue(sinks.last().totalWritten > 0)
+        assertEquals(interrupts, conn.framesOfType("interrupt").size)
+    }
+
+    // --- MF4: сон ---
+
+    @Test
+    fun `starts asleep without live, one tap opens live with hello and visitor_arrived`() = runTest(dispatcher) {
+        val vm = vm(startAsleep = true)
+        assertTrue(connections.isEmpty())
+        assertTrue(voice.paused)
+        presence.emit(PresenceEvent.Arrived(1, greet = true))
+        advanceTimeBy(1_000); runCurrent()
+        assertTrue("a visitor does not wake", connections.isEmpty())
+        vm.wakeByTap()
+        runCurrent()
+        assertTrue(vm.liveOpen)
+        assertTrue(conn.texts.first().contains("\"type\":\"hello\""))
+        assertEquals(1, conn.framesOfType("visitor_arrived").size)
+        assertTrue(chatRequests.isEmpty())
+    }
+
+    @Test
+    fun `double tap while live speaks - interrupt, then the session closes, nothing more plays`() = runTest(dispatcher) {
+        val vm = vm()
+        val c = conn
+        conn.server(LiveEvent.TurnStart("t1"))
+        conn.server(LiveEvent.Audio(pcm(2_000)))
+        advanceTimeBy(200); runCurrent()
+        vm.sleepByTap()
+        runCurrent()
+        assertEquals(1, c.framesOfType("interrupt").size)
+        assertTrue(c.closed)
+        assertFalse(vm.liveOpen)
+        assertTrue(vm.state.value.asleep)
+        assertFalse(sinks.last().playing)
+        advanceTimeBy(MainViewModel.LIVE_RETRY_MILLIS * 2); runCurrent()
+        assertEquals("no live in sleep", 1, connections.size)
+    }
+
+    @Test
+    fun `ignored as not addressed - the robot does nothing`() = runTest(dispatcher) {
+        val vm = vm()
+        conn.server(LiveEvent.UserFinal("ты по нему тапнул?", Lang.RU))
+        conn.server(LiveEvent.Ignored("not_addressed"))
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(null, vm.state.value.question)
+        assertTrue(voice.spoken.isEmpty())
+        assertTrue(chatRequests.isEmpty())
     }
 }

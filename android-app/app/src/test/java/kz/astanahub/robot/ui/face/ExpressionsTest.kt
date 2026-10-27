@@ -104,7 +104,9 @@ class ExpressionsTest {
         assertEquals(ProtoExpr.BLUSH, Expressions.proto(FaceMood.PETTED))
         assertEquals(ProtoExpr.SPARKLE, Expressions.proto(FaceMood.SPARKLE))
         assertEquals(ProtoExpr.DIZZY, Expressions.proto(FaceMood.DIZZY))
-        assertEquals(ProtoExpr.BORED, Expressions.proto(FaceMood.SLEEP, ProtoExpr.BORED))
+        // MF4: сон — прикрытые глаза и значок сна; «свободное время» заставки — в покое.
+        assertEquals(ProtoExpr.SLEEP, Expressions.proto(FaceMood.SLEEP, ProtoExpr.BORED))
+        assertEquals(ProtoExpr.BORED, Expressions.proto(FaceMood.IDLE, ProtoExpr.BORED))
         // Моргают только овалы `bl`: обычное, слушает, ведёт.
         assertTrue(Expressions.blinks(ProtoExpr.NEUTRAL) && Expressions.blinks(ProtoExpr.LISTEN) && Expressions.blinks(ProtoExpr.GUIDE))
         assertFalse(Expressions.blinks(ProtoExpr.SPEAK) || Expressions.blinks(ProtoExpr.WIDE) || Expressions.blinks(ProtoExpr.HAPPY))

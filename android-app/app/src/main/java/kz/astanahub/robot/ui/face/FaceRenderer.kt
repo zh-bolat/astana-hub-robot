@@ -72,6 +72,13 @@ class FaceRenderer {
             quadTo(x, 38f, x + 18f, 52f)
         }
     }
+    /** Сон (прототип `sleep`): прикрытые глаза — дуги «∪». */
+    private val closed = Path().apply {
+        for (x in EYES_X) {
+            moveTo(x - 18f, 48f)
+            quadTo(x, 62f, x + 18f, 48f)
+        }
+    }
     private val stars = Array(2) { i -> svg(starData(EYES_X[i])) }
     private val spirals = Array(2) { i ->
         val x = EYES_X[i]
@@ -85,6 +92,9 @@ class FaceRenderer {
     /** «?» прототипа — глиф Nunito 800 (путь строится, когда задан шрифт; без шрифта — системный жирный). */
     private val question26 = Path()
     private val question30 = Path()
+
+    /** «z» значка сна (Nunito 800, кегль [Z_BASE]; в кадре масштабируется). */
+    private val zGlyph = Path()
     private var questionReady = false
 
     /** Шрифт «?» (Nunito ExtraBold); задаёт MainActivity. */
@@ -202,6 +212,10 @@ class FaceRenderer {
                 glowFill(canvas, tear, alpha)
                 canvas.drawPath(tear, fill)
             }
+            ProtoExpr.SLEEP -> {
+                strokePath(canvas, closed, 6f, alpha)
+                drawSleepSign(canvas, now, alpha)
+            }
             ProtoExpr.HAPPY -> strokePath(canvas, caret, 8f, alpha)
             ProtoExpr.BLUSH -> strokePath(canvas, arcs, 6f, alpha)
             ProtoExpr.SPARKLE -> {
@@ -314,6 +328,33 @@ class FaceRenderer {
     }
 
     /** «?» прототипа: `<text font-size="26|30" font-weight="800" text-anchor="middle">` → путь глифа. */
+    /**
+     * Значок сна справа от глаз: «z» всплывают одна за другой по одной дорожке вправо-вверх, растут и гаснут (как
+     * пузырьки `zz` прототипа: 2,4 с на путь, видна к 40 %), три сразу — через треть цикла, не налезают друг на друга.
+     */
+    private fun drawSleepSign(canvas: Canvas, now: Long, alpha: Float) {
+        for (i in 0 until Z_COUNT) {
+            val t = ((now + i * Z_CYCLE_MS / Z_COUNT) % Z_CYCLE_MS).toFloat() / Z_CYCLE_MS
+            val a = when {
+                t < 0.25f -> Z_EASE.transform(t / 0.25f)
+                t < 0.7f -> 1f
+                else -> 1f - Z_EASE.transform((t - 0.7f) / 0.3f)
+            }
+            if (a <= 0.01f) continue
+            val k = Z_EASE.transform(t)
+            val size = lerp(Z_SIZE_FROM, Z_SIZE_TO, t)
+            canvas.save()
+            canvas.translate(lerp(Z_FROM_X, Z_TO_X, k), lerp(Z_FROM_Y, Z_TO_Y, k))
+            canvas.scale(size / Z_BASE, size / Z_BASE)
+            val za = alpha * a
+            fill.alpha = (255 * za).toInt()
+            glowFill(canvas, zGlyph, za)
+            canvas.drawPath(zGlyph, fill)
+            canvas.restore()
+        }
+        fill.alpha = (255 * alpha).toInt()
+    }
+
     private fun buildQuestion() {
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = this@FaceRenderer.typeface ?: Typeface.DEFAULT_BOLD
@@ -325,6 +366,9 @@ class FaceRenderer {
             out.rewind()
             p.getTextPath("?", 0, 1, -w / 2f, 0f, out)
         }
+        p.textSize = Z_BASE
+        zGlyph.rewind()
+        p.getTextPath("z", 0, 1, -p.measureText("z") / 2f, 0f, zGlyph)
         questionReady = true
     }
 
@@ -335,6 +379,18 @@ class FaceRenderer {
 
         /** Единиц лица ([FaceLayout]) в единице поля прототипа: поле 1000 × 500 px на сцене 1600 × 900 → 5 px. */
         const val PROTO = 4.389f
+
+        /** Значок сна: дорожка «z» (поле прототипа, базовая линия), кегль от и до, цикл всплытия. */
+        private const val Z_COUNT = 3
+        private const val Z_FROM_X = 174f
+        private const val Z_FROM_Y = 46f
+        private const val Z_TO_X = 198f
+        private const val Z_TO_Y = 4f
+        private const val Z_SIZE_FROM = 10f
+        private const val Z_SIZE_TO = 22f
+        private const val Z_BASE = 16f
+        private const val Z_CYCLE_MS = 2_400L
+        private val Z_EASE = Bezier.EASE_IN_OUT
 
         /** Центры глаз в поле прототипа. */
         private val EYES_X = floatArrayOf(50f, 150f)

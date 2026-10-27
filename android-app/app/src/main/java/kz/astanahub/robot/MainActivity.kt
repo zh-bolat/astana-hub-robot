@@ -53,7 +53,6 @@ import kz.astanahub.robot.ui.face.IslandModel
 import kz.astanahub.robot.ui.face.IslandTexts
 import kz.astanahub.robot.ui.face.TripOutcome
 import kz.astanahub.robot.ui.face.FaceDebug
-import kz.astanahub.robot.ui.face.FaceInputMapper
 import kz.astanahub.robot.ui.screen.ChatLog
 import kz.astanahub.robot.ui.screen.RobotScreens
 import kz.astanahub.robot.ui.screen.RobotScreensHost
@@ -93,7 +92,8 @@ class MainActivity : AppCompatActivity() {
                     liveFactory = container.liveFactory,
                     foreground = container.appForeground,
                     liveDirectionsPeriodMillis = LiveDirectionsReporter.PERIOD_MILLIS,
-                    visitorVoice = container.audioLevels.voice,
+                    // MF4, шумный зал: после запуска робот спит — будит тап по лицу.
+                    startAsleep = true,
                 )
             }
         }
@@ -114,6 +114,9 @@ class MainActivity : AppCompatActivity() {
     /** Остров экрана лица и его таймер (where_is ~9 с, итог поездки ~2 с). */
     private val island = IslandModel()
     private var firstRender = true
+
+    /** Робот спал при прошлой отрисовке: уснул — страница приложения снова с приветствия (MF4). */
+    private var wasAsleep = false
     private val islandTick = Runnable {
         if (island.tick(SystemClock.uptimeMillis())) applyIsland() else scheduleIsland()
     }
@@ -338,24 +341,23 @@ class MainActivity : AppCompatActivity() {
         override fun onCostumeSwipe(step: Int) = setCostume(container.costume.costume.value.next(step))
     }
 
+    /** Тапы по лицу (MF4): спит — один тап будит; не спит — двойной тап усыпляет, одиночный — только моргнуть. */
+    private val tapGate = kz.astanahub.robot.ui.face.FaceTapGate()
+
     /**
-     * Тап по лицу: спит — проснуться; говорит — замолчать и слушать (tap-to-interrupt); говорит в поездке — замолчать,
-     * поездка продолжается; молчит — рефлекс (моргнуть / слегка вздрогнуть).
+     * Тап по лицу (MF4, шумный зал): спит — проснуться и поздороваться; не спит — двойной тап (≤ 350 мс) — уснуть
+     * (говорит — оборвать); одиночный — рефлекс лица. Тап больше не перебивает робота — для этого «Стоп» на странице.
      */
     private fun onFaceTap() {
-        val tap = FaceInputMapper.tap(viewModel.state.value, viewModel.robotSpeaking)
-        timber.log.Timber.d("face tap: %s", tap)
-        when (tap) {
-            FaceInputMapper.Tap.WAKE -> viewModel.wake()
-            FaceInputMapper.Tap.STOP -> {
-                speechCutAt = SystemClock.uptimeMillis()
-                viewModel.stop()
+        val action = tapGate.onTap(SystemClock.uptimeMillis(), viewModel.state.value.asleep)
+        timber.log.Timber.d("face tap: %s", action)
+        when (action) {
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.WAKE -> viewModel.wakeByTap()
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.SLEEP -> {
+                if (viewModel.robotSpeaking) speechCutAt = SystemClock.uptimeMillis()
+                viewModel.sleepByTap()
             }
-            FaceInputMapper.Tap.INTERRUPT_SPEECH -> {
-                speechCutAt = SystemClock.uptimeMillis()
-                viewModel.interruptSpeech()
-            }
-            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.NONE -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
         }
     }
 
@@ -426,7 +428,7 @@ class MainActivity : AppCompatActivity() {
         pin.visible = false
         pinBuffer.clear()
         pin.length = 0
-        if (wasExit) viewModel.wake()
+        if (wasExit) viewModel.onTouch()
     }
 
     private val pinActions = object : PinPadActions {
@@ -585,7 +587,7 @@ class MainActivity : AppCompatActivity() {
         }
         wasSpeaking = speaking
         // Новый вопрос или сон — пузырь с прошлым ответом убираем.
-        if (two.linger != null && (state.processing || !state.partialQuestion.isNullOrBlank() || state.mode == ScreenMode.SLEEP)) {
+        if (two.linger != null && (state.processing || !state.partialQuestion.isNullOrBlank() || state.asleep)) {
             handler.removeCallbacks(clearLinger)
             two.linger = null
         }
@@ -596,6 +598,8 @@ class MainActivity : AppCompatActivity() {
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
     private fun listenOnce() {
+        // «Просто скажите вопрос» на странице — явное действие: во сне робот просыпается.
+        viewModel.wake()
         if (hasMicPermission()) {
             container.voice.stopSpeaking()
             container.voice.pushToTalk()
@@ -617,7 +621,11 @@ class MainActivity : AppCompatActivity() {
         val screen = face.screen
         screen.traveling = state.guidingTo != null
         screen.islandGuide = state.guideTarget != null && state.guidingTo == null
-        screen.asleep = state.mode == ScreenMode.SLEEP
+        screen.asleep = state.asleep
+        if (state.asleep && !wasAsleep) homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
+        wasAsleep = state.asleep
+        // MF4: мини-подсказка сверху экрана лица — на языке экрана.
+        screen.hint = str(if (state.asleep) R.string.face_hint_asleep else R.string.face_hint_awake, state.lang)
         if (islandTextsFor != state.lang) {
             islandTextsFor = state.lang
             screen.islandTexts = islandTexts(state.lang)
@@ -629,7 +637,7 @@ class MainActivity : AppCompatActivity() {
             firstRender = false
             island.markSeen(state.whereIs)
         }
-        val changed = if (state.mode == ScreenMode.SLEEP) island.clear() else island.update(state.guidingTo, state.whereIs, now)
+        val changed = if (state.asleep) island.clear() else island.update(state.guidingTo, state.whereIs, now)
         if (changed) applyIsland() else refreshMenuOpen()
         // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
         screen.holdEnabled = ScreenTwoMapper.faceHoldEnabled(state, container.diagnostics.access != DiagAccess.DISABLED)
@@ -867,7 +875,7 @@ class MainActivity : AppCompatActivity() {
     private fun stayIn(wake: Boolean = true) {
         handler.removeCallbacks(exitTimeout)
         two.exitConfirm = false
-        if (wake) viewModel.wake()
+        if (wake) viewModel.onTouch()
     }
 
     private fun exitApp() {
@@ -894,9 +902,9 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------------------------------------
 
-    /** Любое касание экрана — активность посетителя (таймер сна). */
+    /** Любое касание экрана — активность посетителя (таймер сна). Во сне само касание не будит (MF4). */
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (!techPauseRedirected && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.wake()
+        if (!techPauseRedirected && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.onTouch()
         return super.dispatchTouchEvent(ev)
     }
 

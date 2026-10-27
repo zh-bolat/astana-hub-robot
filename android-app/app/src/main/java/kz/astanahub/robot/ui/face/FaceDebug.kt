@@ -19,7 +19,8 @@ import kz.astanahub.robot.ui.MainViewModel
  * ```
  *
  * - настоящие события приложения (идут обычным путём через MainViewModel и фейковый бэкенд):
- *   `ask <текст>`, `heard <текст>` (посетитель ещё говорит), `arrive`, `leave`, `sleep`, `wake`, `stop`, `look`,
+ *   `ask <текст>`, `heard <текст>` (посетитель ещё говорит), `arrive`, `leave`, `sleep`, `wake` (как тап по спящему
+ *   лицу), `dbltap` (как двойной тап — уснуть), `stop`, `look`,
  *   `menu`, `face`;
  * - звук: `mic on|off` (имитация голоса посетителя: VAD + громкость), `noise on|off` (гул зала без речи),
  *   `play on|off` (громкость речи робота);
@@ -62,7 +63,8 @@ class FaceDebug(
             "arrive" -> presence?.arrive() ?: return "no presence simulator"
             "leave" -> presence?.leave() ?: return "no presence simulator"
             "sleep" -> viewModel.sleepNow()
-            "wake" -> viewModel.wake()
+            "wake" -> viewModel.wakeByTap()
+            "dbltap" -> viewModel.sleepByTap()
             "stop" -> viewModel.stop()
             "look" -> viewModel.lookAround()
             "menu" -> viewModel.openMenu()

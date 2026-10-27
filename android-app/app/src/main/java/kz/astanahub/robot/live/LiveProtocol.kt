@@ -82,7 +82,8 @@ sealed interface LiveEvent {
     data object UserSpeaking : LiveEvent
     data class UserPartial(val text: String) : LiveEvent
     data class UserFinal(val text: String, val lang: Lang?) : LiveEvent
-    data object Ignored : LiveEvent
+    /** Реплика без ответа; [reason] (v1.4, необязателен): `noise` — шум, `not_addressed` — не роботу. */
+    data class Ignored(val reason: String? = null) : LiveEvent
     data object Thinking : LiveEvent
     data class TurnStart(val turnId: String?) : LiveEvent
     data class Emotion(val name: String) : LiveEvent
@@ -116,7 +117,7 @@ sealed interface LiveEvent {
                 "user_speaking" -> UserSpeaking
                 "user_partial" -> UserPartial(str("text").orEmpty().trim())
                 "user_final" -> UserFinal(str("text").orEmpty().trim(), Lang.fromCode(str("lang")))
-                "ignored" -> Ignored
+                "ignored" -> Ignored(str("reason")?.trim()?.takeIf(String::isNotEmpty))
                 "thinking" -> Thinking
                 "turn_start" -> TurnStart(str("turn_id"))
                 "emotion" -> str("name")?.let(::Emotion)

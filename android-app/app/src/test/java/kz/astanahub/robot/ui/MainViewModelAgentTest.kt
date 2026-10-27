@@ -458,7 +458,7 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `visitor arrives - wakes from sleep, greets through the agent with a new session`() = runTest(dispatcher) {
+    fun `tap wakes from sleep, greets through the agent with a new session, visitor alone does not`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Phrase("Здравствуйте! Чем помочь?"))
             emit(done)
@@ -466,20 +466,23 @@ class MainViewModelAgentTest {
         val vm = vm(screensaverMillis = 60_000)
         advanceTimeBy(61_000); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        // MF4: подошедший не будит и не здоровается.
         presence.emit(PresenceEvent.Arrived(4, greet = true))
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        assertTrue(requests.isEmpty())
+        vm.wakeByTap()
         advanceTimeBy(100); runCurrent()
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        assertEquals(Emotion.EXCITED, vm.state.value.emotion)
         advanceTimeBy(2_000); runCurrent()
         val req = requests.single()
         assertEquals(ChatRequest.EVENT_VISITOR_ARRIVED, req.event)
         assertEquals("", req.question)
         assertEquals(listOf("Здравствуйте! Чем помочь?"), voice.spoken)
-        assertEquals("follow:4", headGateway.calls.last())
         vm.submit("Привет")
         advanceTimeBy(500); runCurrent()
         assertEquals(req.sessionId, requests[1].sessionId)
-        presence.emit(PresenceEvent.Left) // иначе таймер заставки перезапускается бесконечно (человек рядом)
+        // Человек рядом сон не держит: 5 мин (тут 60 с) без разговора — спит.
         advanceUntilIdle()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
     }
@@ -570,8 +573,7 @@ class MainViewModelAgentTest {
         assertEquals(Phase.SPEAKING, vm.state.value.phase)
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
         assertTrue(vm.state.value.answerOnFace)
-        // Прототип v9: на лице только глаза, тап — наш («перебить»), в приложение — свайпом.
-        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(vm.state.value))
+        // MF4: тап по лицу больше не перебивает — в приложение свайпом, остановить — «Стоп» на странице.
 
         val stopsBefore = voice.stops
         vm.openMenu() // свайп с лица
@@ -599,7 +601,7 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `question asked on the face keeps our tap - tap while speaking still interrupts`() = runTest(dispatcher) {
+    fun `question asked on the face - the answer stays on the face`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Phrase("Есть коворкинг."))
             delay(2_000)
@@ -611,6 +613,6 @@ class MainViewModelAgentTest {
         advanceTimeBy(50); runCurrent()
         assertEquals(Phase.SPEAKING, vm.state.value.phase)
         assertFalse(vm.state.value.answerOnFace)
-        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(vm.state.value))
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
     }
 }
