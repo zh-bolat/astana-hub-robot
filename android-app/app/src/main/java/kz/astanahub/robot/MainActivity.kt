@@ -441,6 +441,9 @@ class MainActivity : AppCompatActivity() {
         override fun onPinErase() {
             pinBuffer.backspace()
             pin.length = pinBuffer.length
+            // Прототип: «⌫» тоже перезапускает таймер панели.
+            handler.removeCallbacks(pinTimeout)
+            handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
         }
 
         override fun onPinSubmit() {
@@ -872,10 +875,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** «Открыть снова» на слое «Приложение закрыто»: передумали — работаем дальше. */
+    /** «Открыть снова» (прототип `reopen`): русский язык, приветствие и лицо — как после пробуждения. */
     private fun reopen() {
         handler.removeCallbacks(closeNow)
         two.closed = false
         viewModel.wake()
+        if (viewModel.state.value.lang != Lang.RU) viewModel.selectLanguage(Lang.RU)
+        viewModel.goHome()
+        showHomeView()
+        viewModel.showFace()
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -912,7 +920,8 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
-        const val PIN_TIMEOUT_MS = 60_000L
+        /** Панель пароля без ввода закрывается (прототип: 15 с, каждая клавиша и «⌫» перезапускают). */
+        const val PIN_TIMEOUT_MS = 15_000L
         const val MAX_PLACE_CHIPS = 5
 
         /** «Что это?»: сколько ждём начала ответа с карточкой-снимком. */

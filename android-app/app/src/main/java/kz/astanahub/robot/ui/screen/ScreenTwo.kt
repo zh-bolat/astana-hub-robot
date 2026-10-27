@@ -1257,15 +1257,15 @@ fun ExitDialog(texts: ScreenTexts, actions: ScreenTwoActions, modifier: Modifier
         Box(
             Modifier
                 .fillMaxSize()
-                .background(HubColors.Scrim)
+                .background(Color(0x4D14286E))
                 .pointerInput(Unit) { detectTapGestures(onTap = { actions.onExitCancel() }) },
         )
         DialogCard {
-            BasicText(texts.exitQuestion, style = HubType.Title.copy(color = HubColors.Navy, textAlign = TextAlign.Center))
+            BasicText(texts.exitQuestion, style = DIALOG_TITLE)
             Spacer(Modifier.height(12.dp))
-            BasicText(texts.exitSub, style = HubType.Body.copy(color = HubColors.Muted, textAlign = TextAlign.Center))
-            Spacer(Modifier.height(36.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            BasicText(texts.exitSub, style = DIALOG_SUB)
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 HubPill(texts.exitNo, actions::onExitCancel)
                 HubPill(texts.exitYes, actions::onExitConfirm, primary = false)
             }
@@ -1273,15 +1273,18 @@ fun ExitDialog(texts: ScreenTexts, actions: ScreenTwoActions, modifier: Modifier
     }
 }
 
-/** Белая карточка-диалог прототипа (`.exit-card`): скругление 36 dp, мягкая тень, поля 40 × 48 dp. */
+/**
+ * Карточка-диалог прототипа (`.exit-card`): скругление 28, белый градиент к #FBFDFF, кромка 1 dp, лёгкая тень, поля
+ * 40 × 48; ширина — по содержимому (клавиатура пароля — 850 dp).
+ */
 @Composable
 fun DialogCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(36.dp)
+    val shape = RoundedCornerShape(28.dp)
     Column(
         modifier
-            .widthIn(max = 920.dp)
-            .softShadow(shape, 24.dp, 0.18f)
-            .background(Color.White, shape)
+            .softShadow(shape, 12.dp, 0.10f)
+            .background(Brush.verticalGradient(listOf(Color.White, HubColors.CardBottom)), shape)
+            .border(1.dp, HubColors.CardBorder, shape)
             .pointerInput(Unit) { detectTapGestures { } }
             .padding(horizontal = 48.dp, vertical = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
