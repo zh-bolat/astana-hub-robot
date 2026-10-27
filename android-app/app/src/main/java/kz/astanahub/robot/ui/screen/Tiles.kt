@@ -10,8 +10,14 @@ import kz.astanahub.robot.ui.TileIcons
 enum class TileGlyph { PLACE, EVENT, INFO, WIFI, CHAT, FAQ, LOOK }
 
 sealed interface TileAction {
-    /** Частый вопрос — как кнопкой на прежнем экране (`submitButton`): «Где кафе?», «Проводи до…» и т. п. */
-    data class Ask(val text: String) : TileAction
+    /**
+     * Вопрос серверу (`submitButton`): [text] уходит агенту, [display] — строка «вопрос» на экране (у плиток-тем
+     * прототипа — название темы); null — сам вопрос.
+     */
+    data class Ask(val text: String, val display: String? = null) : TileAction
+
+    /** «Где что находится» — места карты чипами, без сервера (`whereList`). */
+    data object Where : TileAction
 
     /** Весь список частых вопросов (аккордеон по страницам, `openFaq`). */
     data object Faq : TileAction
@@ -23,16 +29,36 @@ sealed interface TileAction {
 @Immutable
 data class Tile(val key: String, val glyph: TileGlyph, val label: String, val action: TileAction)
 
-/** Плитки экрана 2 и подписи (чистые функции — тест). Набор — как на прежнем экране приветствия. */
+/** Подписи и вопросы плиток главной на языке экрана (тексты прототипа `T`). */
+@Immutable
+data class TileTexts(
+    val where: String,
+    val events: String,
+    val eventsQuestion: String,
+    val about: String,
+    val aboutQuestion: String,
+    val wifi: String,
+    val wifiQuestion: String,
+    val faq: String,
+    val look: String,
+)
+
+/** Плитки экрана 2 и подписи (чистые функции — тест). */
 object Tiles {
 
-    /** Частых вопросов плитками (остальные — в «Частые вопросы»). */
-    const val QUESTION_TILES = 4
-
-    fun home(questions: List<QuickQuestion>, faqLabel: String, lookLabel: String): List<Tile> =
-        questions.take(QUESTION_TILES).map { q -> Tile("q:${q.id}", glyphFor(q.text), q.text, TileAction.Ask(q.text)) } +
-            Tile("faq", TileGlyph.FAQ, faqLabel, TileAction.Faq) +
-            Tile("look", TileGlyph.LOOK, lookLabel, TileAction.Look)
+    /**
+     * Шесть тем прототипа (`goHome`): «Где что находится» — места карты без сервера; «Мероприятия», «Об Astana Hub»,
+     * «Wi‑Fi и сервисы» — вопросы агенту (на экране — название темы); «Частые вопросы» — вопросы с сервера по страницам;
+     * «Что это?» — снимок камеры.
+     */
+    fun home(t: TileTexts): List<Tile> = listOf(
+        Tile("where", TileGlyph.PLACE, t.where, TileAction.Where),
+        Tile("events", TileGlyph.EVENT, t.events, TileAction.Ask(t.eventsQuestion, display = t.events)),
+        Tile("about", TileGlyph.INFO, t.about, TileAction.Ask(t.aboutQuestion, display = t.about)),
+        Tile("wifi", TileGlyph.WIFI, t.wifi, TileAction.Ask(t.wifiQuestion, display = t.wifi)),
+        Tile("faq", TileGlyph.FAQ, t.faq, TileAction.Faq),
+        Tile("look", TileGlyph.LOOK, t.look, TileAction.Look),
+    )
 
     /** Значок по смыслу вопроса — те же правила, что у прежних плиток ([TileIcons]). */
     fun glyphFor(text: String): TileGlyph = when (TileIcons.kindFor(text)) {

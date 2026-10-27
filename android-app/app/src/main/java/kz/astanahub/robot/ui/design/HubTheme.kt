@@ -2,8 +2,16 @@ package kz.astanahub.robot.ui.design
 
 import androidx.compose.animation.core.SpringSpec as ComposeSpring
 import androidx.compose.animation.core.spring
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +79,7 @@ object HubColors {
 object HubFonts {
     val Nunito = FontFamily(
         Font(R.font.nunito_regular, FontWeight.Normal),
+        Font(R.font.nunito_medium, FontWeight.Medium),
         Font(R.font.nunito_semibold, FontWeight.SemiBold),
         Font(R.font.nunito_bold, FontWeight.Bold),
         Font(R.font.nunito_extrabold, FontWeight.ExtraBold),
@@ -80,19 +89,29 @@ object HubFonts {
     val Inter = Nunito
 }
 
-/** Типографика прототипа (размеры — в sp сцены 1600 × 900). */
+/**
+ * Типографика прототипа (размеры — в sp сцены 1600 × 900). Межстрочный — как в CSS: лишняя высота строки делится
+ * поровну сверху и снизу и у первой / последней строки не обрезается (`LineHeightStyle(Center, Trim.None)`; по
+ * умолчанию Compose оставляет полный подъём и спуск шрифта — текст выходит ниже, чем в прототипе).
+ */
 object HubType {
     private val f = HubFonts.Nunito
-    val Display = TextStyle(fontFamily = f, fontWeight = FontWeight.ExtraBold, fontSize = 52.sp, lineHeight = 60.sp)
-    val Title = TextStyle(fontFamily = f, fontWeight = FontWeight.ExtraBold, fontSize = 44.sp, lineHeight = 52.sp)
-    val Headline = TextStyle(fontFamily = f, fontWeight = FontWeight.SemiBold, fontSize = 30.sp, lineHeight = 38.sp)
-    val Answer = TextStyle(fontFamily = f, fontWeight = FontWeight.Normal, fontSize = 40.sp, lineHeight = 52.sp)
-    val Body = TextStyle(fontFamily = f, fontWeight = FontWeight.Normal, fontSize = 28.sp, lineHeight = 38.sp)
-    val Tile = TextStyle(fontFamily = f, fontWeight = FontWeight.Normal, fontSize = 30.sp, lineHeight = 36.sp)
-    val Callout = TextStyle(fontFamily = f, fontWeight = FontWeight.Normal, fontSize = 26.sp, lineHeight = 35.sp)
-    val Button = TextStyle(fontFamily = f, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, lineHeight = 34.sp)
-    val ButtonPrimary = TextStyle(fontFamily = f, fontWeight = FontWeight.SemiBold, fontSize = 30.sp, lineHeight = 36.sp)
-    val Caption = TextStyle(fontFamily = f, fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 26.sp)
+    val CssLines = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+    private fun style(w: FontWeight, size: Int, line: Float) =
+        TextStyle(fontFamily = f, fontWeight = w, fontSize = size.sp, lineHeight = line.sp, lineHeightStyle = CssLines)
+
+    val Display = style(FontWeight.ExtraBold, 52, 59.8f)
+    val Title = style(FontWeight.ExtraBold, 44, 52f)
+    val Headline = style(FontWeight.SemiBold, 30, 38f)
+    val Answer = style(FontWeight.Normal, 40, 52f)
+    val Body = style(FontWeight.Normal, 28, 38f)
+
+    /** Подпись плитки: 30 / 500, межстрочный 36 (прототип `.tile span`). */
+    val Tile = style(FontWeight.Medium, 30, 36f)
+    val Callout = style(FontWeight.Normal, 26, 35f)
+    val Button = style(FontWeight.SemiBold, 28, 34f)
+    val ButtonPrimary = style(FontWeight.SemiBold, 30, 36f)
+    val Caption = style(FontWeight.Normal, 20, 26f)
 }
 
 /** Отступы (сетка 8 dp) и радиусы. Минимальная зона касания — 44 dp (на киоске берём 64). */
@@ -127,7 +146,10 @@ object HubMotion {
     /** Нажатие: scale 0.97 сразу на touch-down. */
     val Press = HubSpring(dampingRatio = 1f, response = 0.12f)
 
-    const val PRESS_SCALE = 0.97f
+    /** Нажатие прототипа: `scale(.965)`, `transform .22s cubic-bezier(.3,.7,.3,1)`. */
+    const val PRESS_SCALE = 0.965f
+    const val PRESS_MS = 220
+    val PressEase = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.7f, 0.3f, 1f)
 }
 
 /** Пружина в терминах Apple для Compose и для движка лица. */
@@ -138,4 +160,32 @@ class HubSpring(val dampingRatio: Float, val response: Float) {
         spring(dampingRatio = dampingRatio, stiffness = stiffness, visibilityThreshold = visibilityThreshold)
 
     fun toFaceSpec(): SpringSpec = SpringSpec(dampingRatio, response)
+}
+
+/** Подъём и спуск Nunito (hhea / typo, на em): по ним браузер строит строку. */
+private const val NUNITO_ASCENT = 1.011f
+private const val NUNITO_DESCENT = 0.353f
+
+/**
+ * Блок текста как в CSS. Когда высота строки меньше высоты шрифта (заголовок 52 / 59,8, плитка 30 / 36), Compose не
+ * даёт глифам обрезаться: добавляет сверху и снизу поля до их фактических границ — блок выходит выше, а текст ниже,
+ * чем в прототипе (заголовок главной — на ~6 dp, плитки под ним — на ~13 dp). Здесь базовая линия первой строки — как
+ * в CSS: (высота строки − (подъём + спуск)) / 2 + подъём, а высота блока = число строк × высота строки. Глифы
+ * по-прежнему рисуются целиком (выступают за блок, как в браузере). Ставить последним модификатором текста.
+ */
+fun Modifier.cssLines(style: TextStyle): Modifier = layout { measurable, constraints ->
+    val p = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+    val first = p[FirstBaseline]
+    val last = p[LastBaseline]
+    val lh = style.lineHeight
+    val fs = style.fontSize
+    if (first == AlignmentLine.Unspecified || last == AlignmentLine.Unspecified || !lh.isSp || !fs.isSp) {
+        return@layout layout(p.width, p.height) { p.place(0, 0) }
+    }
+    val lhPx = lh.toPx()
+    val fsPx = fs.toPx()
+    val cssFirst = (lhPx - (NUNITO_ASCENT + NUNITO_DESCENT) * fsPx) / 2f + NUNITO_ASCENT * fsPx
+    val lines = 1 + ((last - first) / lhPx).roundToInt()
+    val h = (lhPx * lines).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
+    layout(p.width, h) { p.place(0, (cssFirst - first).roundToInt()) }
 }

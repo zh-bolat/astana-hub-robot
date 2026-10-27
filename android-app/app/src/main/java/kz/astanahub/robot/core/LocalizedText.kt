@@ -25,6 +25,8 @@ class LocalizedText(context: Context) : Phrases {
             PhraseKey.GREETING -> R.string.phrase_greeting
             PhraseKey.CANT_SPEAK -> R.string.phrase_cant_speak
             PhraseKey.LOOKING -> R.string.phrase_looking
+            PhraseKey.FAQ_INTRO -> R.string.faq_intro
+            PhraseKey.WHERE_ASK -> R.string.where_ask
         },
         lang,
     )

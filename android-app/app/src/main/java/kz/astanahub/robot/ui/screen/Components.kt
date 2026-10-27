@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -87,7 +88,11 @@ fun Pressable(
             onClick()
         }
     }
-    val scale by animateFloatAsState(if (pressed.value) HubMotion.PRESS_SCALE else 1f, HubMotion.Press.compose(), label = "press")
+    val scale by animateFloatAsState(
+        if (pressed.value) HubMotion.PRESS_SCALE else 1f,
+        androidx.compose.animation.core.tween(HubMotion.PRESS_MS, easing = HubMotion.PressEase),
+        label = "press",
+    )
     val dim by animateFloatAsState(if (enabled) 1f else DISABLED_ALPHA, HubMotion.Default.compose(), label = "enabled")
     Box(
         Modifier
@@ -221,7 +226,8 @@ fun CircleButton(@DrawableRes glyph: Int, onClick: () -> Unit, modifier: Modifie
             .background(Color.White, CircleShape)
             .border(1.dp, HubColors.Border, CircleShape),
     ) {
-        Glyph(glyph, 34.dp, HubColors.ExitIcon)
+        // Прототип: × — Material `close` 30 × 30.
+        Glyph(glyph, 30.dp, HubColors.ExitIcon)
     }
 }
 
@@ -238,9 +244,10 @@ fun BackPill(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) 
             .padding(start = 16.dp, end = 24.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Glyph(R.drawable.ic_m_back, 36.dp, HubColors.Blue)
+            // Прототип `.back`: стрелка 32, текст 26 / 500 #111827.
+            Glyph(R.drawable.ic_m_back, 32.dp, HubColors.Blue)
             Spacer(Modifier.width(8.dp))
-            BasicText(label, style = HubType.Callout.copy(color = HubColors.Ink), maxLines = 1)
+            BasicText(label, style = HubType.Callout.copy(color = HubColors.Ink, fontWeight = FontWeight.Medium), maxLines = 1)
         }
     }
 }
@@ -253,14 +260,20 @@ fun BackPill(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) 
 fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier, takeTouch: Boolean = false) {
     val items = Tiles.languages
     val index = items.indexOfFirst { it.first == selected }.coerceAtLeast(0)
-    val thumb = animateDpAsState(SEGMENT_WIDTH * index, HubMotion.Snappy.compose(), label = "langThumb")
+    // Прототип: «капля» переезжает .42 с по cubic-bezier(.3, 1.25, .4, 1) — с лёгким перелётом.
+    val thumb = animateDpAsState(
+        SEGMENT_WIDTH * index,
+        androidx.compose.animation.core.tween(420, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 1.25f, 0.4f, 1f)),
+        label = "langThumb",
+    )
     val shape = RoundedCornerShape(percent = 50)
     Box(
         modifier
             .height(SEGMENT_HEIGHT + 10.dp)
             .background(Color.White, shape)
             .border(1.dp, HubColors.Border, shape)
-            .padding(4.dp),
+            // Кромка 1 + поле 4 (в CSS кромка занимает место): сегменты 84 × 50, вся пилюля 262 × 60.
+            .padding(5.dp),
     ) {
         Box(
             Modifier
@@ -294,7 +307,8 @@ fun LanguageSwitch(selected: Lang, onSelect: (Lang) -> Unit, modifier: Modifier 
 /** Полоса предупреждения под верхней панелью (прототип `.offline`): янтарная, значок и текст. */
 @Composable
 fun NoticeBar(text: String, modifier: Modifier = Modifier) {
-    // Прототип `.offline`: янтарный градиент, низ скруглён (28), мягкая тень, значок «!» в круге, 26sp 500.
+    // Прототип `.offline`: янтарный градиент, низ скруглён (28) с кромкой 1 px #F0D9A8, мягкая тень, значок «!» в
+    // круге, 26sp 500.
     val shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
     Row(
         modifier
@@ -302,6 +316,19 @@ fun NoticeBar(text: String, modifier: Modifier = Modifier) {
             .height(NOTICE_HEIGHT)
             .softShadow(shape, 4.dp, 0.10f, HubColors.AmberFg)
             .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFFFFF7E3), Color(0xFFFFEFCB))), shape)
+            .drawBehind {
+                // Нижняя кромка по скруглённому низу (бока и верх — без кромки, как `border-bottom`).
+                val r = 28.dp.toPx()
+                val w = 1.dp.toPx()
+                val y = size.height - w / 2f
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(0f, size.height - r)
+                    quadraticTo(0f, y, r, y)
+                    lineTo(size.width - r, y)
+                    quadraticTo(size.width, y, size.width, size.height - r)
+                }
+                drawPath(path, HubColors.AmberLine, style = androidx.compose.ui.graphics.drawscope.Stroke(w))
+            }
             .padding(horizontal = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -357,7 +384,7 @@ val CIRCLE_SIZE = 60.dp
 val NOTICE_HEIGHT = 64.dp
 private val SEGMENT_WIDTH = 84.dp
 private val SEGMENT_HEIGHT = 50.dp
-private const val DISABLED_ALPHA = 0.4f
+private const val DISABLED_ALPHA = 0.5f
 
 /** Повтор нажатия той же кнопки раньше — без действия (двойной тап, дрожание пальца). */
 const val REPEAT_GUARD_MS = 600L

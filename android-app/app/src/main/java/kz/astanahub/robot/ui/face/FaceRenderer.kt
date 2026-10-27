@@ -4,61 +4,46 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PathMeasure
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
-import kotlin.math.PI
+import android.graphics.Typeface
+import androidx.core.graphics.PathParser
 import kotlin.math.min
-import kotlin.math.sin
 import kz.astanahub.robot.ui.face.FaceParam as P
 
 /**
- * Рисует лицо по [FacePose] в стиле прототипа (`docs/design/robot-mvp.html`): на чёрном — только глаза, голубые
- * (#3AA8F5) со свечением и светлым бликом; выражения — формой глаз (овалы, полоски «думает», дуги «^ ^», «∪» сна),
- * «?», слеза, румянец, «zz»-кружки. Рта и бровей нет (параметры движка остаются — рисуются только глаза).
- * Все Paint/Path/шейдеры созданы заранее — в [draw] нет аллокаций; свечение — готовые радиальные градиенты.
+ * Рисует лицо точно как прототип (`docs/design/robot-mvp.html`, `EXPR`): на чёрном — только голубые глаза (#3AA8F5)
+ * со свечением; каждое выражение — своя фигура из путей прототипа в его поле 200 × 100 (глаза в 50 и 150):
+ * овалы с бликом (обычное, слушает, говорит, ведёт, «смотрит» с искоркой), полоски и «?» («думает», «не понял»),
+ * галочки «^ ^» (радость), дуги с румянцем (смущение), звёзды (восторг), полоски с искоркой (скука), спирали
+ * (нет связи), полоски со слезой (огорчение). Смена фигуры — «раскрытие» `exprIn`, моргание — `sblink`, речь —
+ * сжатие в такт голосу, взгляд — сдвиг глаз `lookAt`.
+ *
+ * Все Paint/Path созданы заранее — в [draw] нет аллокаций.
  */
 class FaceRenderer {
-    private val geometry = FaceGeometry()
 
-    private val eyePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = EYE
-        style = Paint.Style.FILL_AND_STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        strokeWidth = FaceLayout.STROKE
-    }
-    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = EYE; style = Paint.Style.FILL }
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = EYE
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
-        strokeWidth = FaceLayout.STROKE
     }
-    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = EYE }
-    private val lidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.BLACK
-        style = Paint.Style.FILL
+    private val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
     }
-    private val glintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = GLINT }
+    private val glint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = GLINT; alpha = (255 * 0.75f).toInt() }
 
-    /** Свечение глаз (прототип: drop-shadow 6 px 85 % + 18 px 45 %): круг радиуса 1 с градиентом, масштабируется. */
-    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    /** Румянец (прототип: эллипс 16 × 8 #FF2D3D α .7, размытие σ 5): радиальный градиент по кругу радиуса 1. */
+    private val blush = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         shader = RadialGradient(
             0f, 0f, 1f,
-            intArrayOf(Color.argb(150, 58, 168, 245), Color.argb(70, 40, 140, 240), Color.argb(0, 40, 140, 240)),
-            floatArrayOf(0.55f, 0.78f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-    }
-
-    /** Румянец (прототип «смущение»): размытый красный овал. */
-    private val blushPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        shader = RadialGradient(
-            0f, 0f, 1f,
-            intArrayOf(Color.argb(180, 255, 45, 61), Color.argb(90, 255, 45, 61), Color.argb(0, 255, 45, 61)),
-            floatArrayOf(0f, 0.5f, 1f),
+            intArrayOf(Color.argb(170, 255, 45, 61), Color.argb(120, 255, 45, 61), Color.argb(0, 255, 45, 61)),
+            floatArrayOf(0f, 0.45f, 1f),
             Shader.TileMode.CLAMP,
         )
     }
@@ -70,55 +55,244 @@ class FaceRenderer {
         strokeCap = Paint.Cap.ROUND
     }
     private val ringRect = RectF()
-    private val ovalRect = RectF()
-
+    private val oval = RectF()
     private val path = Path()
-    private val lidPath = Path()
-    private val decorPath = Path()
 
-    /** «?» — крючок со стержнем (обводится постепенно) и точка. */
-    private val questionPath = Path().apply {
-        moveTo(-38f, -52f)
-        cubicTo(-38f, -96f, 40f, -96f, 40f, -52f)
-        cubicTo(40f, -22f, 0f, -18f, 0f, 14f)
-        lineTo(0f, 30f)
+    // Фигуры прототипа (поле 200 × 100), готовые пути.
+    private val caret = Path().apply {
+        for (x in EYES_X) {
+            moveTo(x - 15f, 58f)
+            lineTo(x, 43f)
+            lineTo(x + 15f, 58f)
+        }
     }
-    private val questionMeasure = PathMeasure(questionPath, false)
-    private val questionLength = questionMeasure.length
+    private val arcs = Path().apply {
+        for (x in EYES_X) {
+            moveTo(x - 18f, 52f)
+            quadTo(x, 38f, x + 18f, 52f)
+        }
+    }
+    private val stars = Array(2) { i -> svg(starData(EYES_X[i])) }
+    private val spirals = Array(2) { i ->
+        val x = EYES_X[i]
+        svg("M$x 50 m0 -2 a2 2 0 1 1 -2 2 a6 6 0 1 1 6 6 a10 10 0 1 1 -10 -10 a14 14 0 1 1 14 14")
+    }
+    private val spiralBox = Array(2) { RectF().also { r -> spirals[it].computeBounds(r, true) } }
+    private val wideSpark = svg("M28 26 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z")
+    private val boredSpark = svg("M173 38 l1.5 4 4 1.5 -4 1.5 -1.5 4 -1.5 -4 -4 -1.5 4 -1.5z")
+    private val tear = svg("M162 60 q8 11 0 16 q-8 -5 0 -16z")
 
-    /** Слеза (прототип «плачет»): капля острым верхом. */
-    private val tearPath = Path().apply {
-        moveTo(0f, -30f)
-        cubicTo(12f, -12f, 22f, 0f, 22f, 12f)
-        cubicTo(22f, 26f, 12f, 34f, 0f, 34f)
-        cubicTo(-12f, 34f, -22f, 26f, -22f, 12f)
-        cubicTo(-22f, 0f, -12f, -12f, 0f, -30f)
-        close()
-    }
+    /** «?» прототипа — глиф Nunito 800 (путь строится, когда задан шрифт; без шрифта — системный жирный). */
+    private val question26 = Path()
+    private val question30 = Path()
+    private var questionReady = false
+
+    /** Шрифт «?» (Nunito ExtraBold); задаёт MainActivity. */
+    var typeface: Typeface? = null
+        set(value) {
+            field = value
+            questionReady = false
+        }
 
     /** Масштаб последнего кадра: px на единицу лица. */
     var unit: Float = 1f
         private set
 
+    /**
+     * Масштаб слоя лица на экране (лицо во весь экран — 1, в голове компаньона — меньше) и плотность (px на dp):
+     * свечение прототипа (`drop-shadow` 6 / 18 px) одного размера в dp на любом масштабе — у маленьких глаз в голове
+     * оно относительно больше, как в прототипе. Пишет слой лица ([kz.astanahub.robot.ui.screen.RobotScreens]).
+     */
+    var layerScale: Float = 1f
+    var density: Float = 1f
+
+    /** Единиц поля прототипа в одном dp на экране (для свечения). */
+    private var unitsPerDp = 0.2f
+
     fun draw(canvas: Canvas, pose: FacePose, width: Float, height: Float) {
         val v = pose.v
-        geometry.compute(pose)
         val u = min(width / FaceLayout.WIDTH, height / FaceLayout.HEIGHT)
         unit = u
-        val glow = v[P.GLOW].coerceIn(0f, 1.2f)
+        if (!questionReady) buildQuestion()
+        val now = pose.nowMs
+        val e = pose.expr
 
         canvas.save()
         canvas.translate(width * 0.5f + v[P.HEAD_X] * u, height * 0.5f + v[P.HEAD_Y] * u)
         canvas.rotate(v[P.HEAD_TILT])
-        val scale = u * v[P.HEAD_SCALE]
-        canvas.scale(scale * (1f + v[P.SQUASH]), scale * (1f - v[P.SQUASH]))
+        val sc = u * v[P.HEAD_SCALE] * PROTO * (1f + v[P.POP])
+        unitsPerDp = density / (u * PROTO * layerScale.coerceAtLeast(0.05f))
+        canvas.scale(sc * (1f + v[P.SQUASH]), sc * (1f - v[P.SQUASH]))
+        // Теперь единица — единица поля прототипа, (0, 0) — его центр (100, 50).
 
-        drawBlush(canvas, v)
-        drawEye(canvas, geometry.left, glow)
-        drawEye(canvas, geometry.right, glow)
-        drawDecor(canvas, pose)
+        // Румянец смущения — вне группы глаз: не раскрывается и не ходит за взглядом.
+        if (e == ProtoExpr.BLUSH) drawCheeks(canvas)
+
+        // Группа глаз `.eyes`: взгляд (`lookAt`), раскрытие при смене (`exprIn`), моргание (`sblink`), речь (`talk`).
+        canvas.save()
+        canvas.translate(v[P.GAZE_X] * FaceLife.LOOK_RANGE_X, v[P.GAZE_Y] * FaceLife.LOOK_RANGE_Y)
+        var sx = 1f
+        var sy = 1f
+        var alpha = 1f
+        val inMs = (now - pose.exprSince).toFloat()
+        if (inMs in 0f..EXPR_IN_MS) {
+            val t = inMs / EXPR_IN_MS
+            if (t < 0.55f) {
+                val k = EXPR_EASE.transform(t / 0.55f)
+                sx = lerp(1.04f, 0.98f, k)
+                sy = lerp(0.08f, 1.06f, k)
+                alpha = lerp(0.5f, 1f, k)
+            } else {
+                val k = EXPR_EASE.transform((t - 0.55f) / 0.45f)
+                sx = lerp(0.98f, 1f, k)
+                sy = lerp(1.06f, 1f, k)
+            }
+        }
+        if (Expressions.blinks(e)) {
+            val b = pose.blink
+            sx *= 1f + 0.04f * b
+            sy *= 1f - 0.92f * b
+        }
+        if (e == ProtoExpr.SPEAK) {
+            // Прототип `talk` (scale 1.03 / .9); у нас — в такт настоящему голосу.
+            val k = pose.talk.coerceIn(0f, 1f)
+            sx *= 1f + 0.03f * k
+            sy *= 1f - 0.1f * k
+        }
+        canvas.scale(sx, sy)
+        canvas.translate(-100f, -50f)
+        val a = (255 * alpha).toInt()
+        fill.alpha = a
+        stroke.alpha = a
+        glint.alpha = (255 * 0.75f * alpha).toInt()
+        drawShape(canvas, e, now, alpha)
+        canvas.restore()
+
         canvas.restore()
         drawHoldRing(canvas, pose, width, height, u)
+    }
+
+    private fun drawShape(canvas: Canvas, e: ProtoExpr, now: Long, alpha: Float) {
+        when (e) {
+            ProtoExpr.NEUTRAL, ProtoExpr.SPEAK -> ovals(canvas, 0f, 18f, 22f, alpha)
+            ProtoExpr.LISTEN -> ovals(canvas, 0f, 21f, 26f, alpha)
+            ProtoExpr.GUIDE -> ovals(canvas, 14f, 18f, 22f, alpha)
+            ProtoExpr.WIDE -> {
+                ovals(canvas, 0f, 21f, 26f, alpha)
+                glowFill(canvas, wideSpark, alpha)
+                canvas.drawPath(wideSpark, fill)
+            }
+            ProtoExpr.THINK -> {
+                for (x in EYES_X) bar(canvas, x - 17f, 46f, 34f, 9f, alpha)
+                question(canvas, question26, 180f, 34f, alpha)
+            }
+            ProtoExpr.CONFUSED -> {
+                bar(canvas, 30f, 48f, 34f, 9f, alpha)
+                bar(canvas, 134f, 48f, 34f, 9f, alpha)
+                question(canvas, question30, 178f, 40f, alpha)
+            }
+            ProtoExpr.BORED -> {
+                for (x in EYES_X) bar(canvas, x - 18f, 46f, 36f, 9f, alpha)
+                glowFill(canvas, boredSpark, alpha)
+                canvas.drawPath(boredSpark, fill)
+            }
+            ProtoExpr.SAD -> {
+                bar(canvas, 30f, 48f, 36f, 8f, alpha)
+                bar(canvas, 132f, 48f, 36f, 8f, alpha)
+                glowFill(canvas, tear, alpha)
+                canvas.drawPath(tear, fill)
+            }
+            ProtoExpr.HAPPY -> strokePath(canvas, caret, 8f, alpha)
+            ProtoExpr.BLUSH -> strokePath(canvas, arcs, 6f, alpha)
+            ProtoExpr.SPARKLE -> {
+                // `.heart`: «биение» .9 с — каждая звезда до 1,12 вокруг своего центра.
+                val k = beat(now)
+                for (i in 0..1) {
+                    canvas.save()
+                    canvas.scale(k, k, EYES_X[i], 50f)
+                    glowFill(canvas, stars[i], alpha)
+                    canvas.drawPath(stars[i], fill)
+                    canvas.restore()
+                }
+            }
+            ProtoExpr.DIZZY -> {
+                // `.spin`: оборот за 2 с вокруг своего центра.
+                val deg = (now % SPIN_MS).toFloat() / SPIN_MS * 360f
+                for (i in 0..1) {
+                    val box = spiralBox[i]
+                    canvas.save()
+                    canvas.rotate(deg, box.centerX(), box.centerY())
+                    strokePath(canvas, spirals[i], 4f, alpha)
+                    canvas.restore()
+                }
+            }
+        }
+    }
+
+    /** Овалы глаз со свечением и бликом (`hl` прототипа). */
+    private fun ovals(canvas: Canvas, dx: Float, rx: Float, ry: Float, alpha: Float) {
+        for (x0 in EYES_X) {
+            val x = x0 + dx
+            oval.set(x - rx, 50f - ry, x + rx, 50f + ry)
+            path.rewind()
+            path.addOval(oval, Path.Direction.CW)
+            glowFill(canvas, path, alpha)
+            canvas.drawOval(oval, fill)
+            val gx = x - rx * 0.36f
+            val gy = 50f - ry * 0.4f
+            oval.set(gx - rx * 0.22f, gy - ry * 0.17f, gx + rx * 0.22f, gy + ry * 0.17f)
+            canvas.drawOval(oval, glint)
+        }
+    }
+
+    private fun bar(canvas: Canvas, x: Float, y: Float, w: Float, h: Float, alpha: Float) {
+        oval.set(x, y, x + w, y + h)
+        path.rewind()
+        path.addRoundRect(oval, 2f, 2f, Path.Direction.CW)
+        glowFill(canvas, path, alpha)
+        canvas.drawPath(path, fill)
+    }
+
+    private fun question(canvas: Canvas, glyph: Path, x: Float, baseline: Float, alpha: Float) {
+        canvas.save()
+        canvas.translate(x, baseline)
+        glowFill(canvas, glyph, alpha)
+        canvas.drawPath(glyph, fill)
+        canvas.restore()
+    }
+
+    private fun strokePath(canvas: Canvas, p: Path, width: Float, alpha: Float) {
+        for (i in HALO_D.indices) {
+            halo.color = HALO_COLOR[i]
+            halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
+            halo.strokeWidth = width + 2f * HALO_D[i] * unitsPerDp
+            canvas.drawPath(p, halo)
+        }
+        stroke.strokeWidth = width
+        canvas.drawPath(p, stroke)
+    }
+
+    /**
+     * Свечение прототипа (`drop-shadow(0 0 6px rgba(58,168,245,.85)) drop-shadow(0 0 18px rgba(40,140,240,.45))`):
+     * несколько полупрозрачных обводок по контуру — мягкий ореол без размытия (дёшево, работает на любом GPU).
+     */
+    private fun glowFill(canvas: Canvas, p: Path, alpha: Float) {
+        for (i in HALO_D.indices) {
+            halo.color = HALO_COLOR[i]
+            halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
+            halo.strokeWidth = 2f * HALO_D[i] * unitsPerDp
+            canvas.drawPath(p, halo)
+        }
+    }
+
+    private fun drawCheeks(canvas: Canvas) {
+        for (cx in CHEEKS_X) {
+            canvas.save()
+            canvas.translate(cx - 100f, 70f - 50f)
+            canvas.scale(16f + 2f * BLUSH_SIGMA, 8f + 2f * BLUSH_SIGMA)
+            canvas.drawCircle(0f, 0f, 1f, blush)
+            canvas.restore()
+        }
     }
 
     /** Кольцо удержания у пальца, в координатах экрана: дорожка и заполнение по часовой от 12 часов. */
@@ -139,153 +313,75 @@ class FaceRenderer {
         }
     }
 
-    private fun drawEye(canvas: Canvas, e: FaceGeometry.Eye, glow: Float) {
-        canvas.save()
-        canvas.translate(e.cx, e.cy)
-        // Свечение: эллипс чуть больше глаза; у закрытого — сплющен до полоски.
-        val half = FaceLayout.STROKE * 0.5f
-        val glowH = ((e.top + e.bottom) * 0.5f + half).coerceAtLeast(half)
-        glowSpot(canvas, 0f, e.yc + (e.bottom - e.top) * 0.5f, (e.a + half) * GLOW_SCALE, glowH * GLOW_SCALE, glow * GLOW_STRENGTH)
-
-        FaceRendererShapes.lens(path, -e.a, e.yc, e.a, e.yc, 0f, e.yc - e.top, e.yc + e.bottom)
-        canvas.drawPath(path, eyePaint)
-
-        // Блик (прототип: светло-голубой овал сверху-слева) — пока глаз открыт.
-        val open = ((e.top + e.bottom) / (2f * e.h.coerceAtLeast(1f))).coerceIn(0f, 1f)
-        if (open > 0.25f) {
-            val rx = e.a + half
-            val ry = e.h + half
-            glintPaint.alpha = (255 * GLINT_ALPHA * ((open - 0.25f) / 0.35f).coerceIn(0f, 1f)).toInt()
-            val gx = -rx * 0.36f
-            val gy = e.yc + (e.bottom - e.top) * 0.5f - ry * 0.4f * open
-            ovalRect.set(gx - rx * 0.22f, gy - ry * 0.17f, gx + rx * 0.22f, gy + ry * 0.17f)
-            canvas.drawOval(ovalRect, glintPaint)
+    /** «?» прототипа: `<text font-size="26|30" font-weight="800" text-anchor="middle">` → путь глифа. */
+    private fun buildQuestion() {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = this@FaceRenderer.typeface ?: Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.LEFT
         }
-
-        // Веко — чёрная кромка поверх глаза и его свечения.
-        if (e.lid > 0.004f) {
-            val x = e.a + FaceLayout.STROKE + LID_PAD
-            val topY = -e.h * GLOW_SCALE - FaceLayout.STROKE - LID_PAD
-            lidPath.rewind()
-            lidPath.moveTo(-x, topY)
-            lidPath.lineTo(x, topY)
-            lidPath.lineTo(x, e.lidY + e.lidSlope * x)
-            lidPath.lineTo(-x, e.lidY - e.lidSlope * x)
-            lidPath.close()
-            canvas.drawPath(lidPath, lidPaint)
+        for ((size, out) in listOf(26f to question26, 30f to question30)) {
+            p.textSize = size
+            val w = p.measureText("?")
+            out.rewind()
+            p.getTextPath("?", 0, 1, -w / 2f, 0f, out)
         }
-        canvas.restore()
-    }
-
-    /** Пятно света под элементом: эллипс (rx, ry), яркость [strength] 0..1. */
-    private fun glowSpot(canvas: Canvas, x: Float, y: Float, rx: Float, ry: Float, strength: Float) {
-        if (strength <= 0.01f) return
-        glowPaint.alpha = (255 * strength.coerceIn(0f, 1f)).toInt()
-        canvas.save()
-        canvas.translate(x, y)
-        canvas.scale(rx, ry)
-        canvas.drawCircle(0f, 0f, 1f, glowPaint)
-        canvas.restore()
-    }
-
-    /** Румянец под глазами (поглаживание): размытые красные овалы снаружи-снизу. */
-    private fun drawBlush(canvas: Canvas, v: FloatArray) {
-        val blush = v[P.BLUSH]
-        if (blush <= 0.01f) return
-        blushPaint.alpha = (255 * blush.coerceAtMost(1f)).toInt()
-        for (side in -1..1 step 2) {
-            val e = if (side < 0) geometry.left else geometry.right
-            canvas.save()
-            canvas.translate(e.cx + side * BLUSH_DX, e.cy + BLUSH_DY)
-            canvas.scale(BLUSH_RX, BLUSH_RY)
-            canvas.drawCircle(0f, 0f, 1f, blushPaint)
-            canvas.restore()
-        }
-    }
-
-    private fun drawDecor(canvas: Canvas, pose: FacePose) {
-        val v = pose.v
-
-        // «?» справа над правым глазом (прототип: «думает», «не понял»): обводится, точка в конце, лёгкое покачивание.
-        val q = v[P.QUESTION]
-        if (q > 0.01f) {
-            canvas.save()
-            canvas.translate(geometry.right.cx + Q_DX, geometry.right.cy + Q_DY)
-            canvas.rotate(-6f + 5f * sin(pose.wobble))
-            val k = 0.62f + 0.18f * q
-            canvas.scale(k, k)
-            decorPath.rewind()
-            questionMeasure.getSegment(0f, questionLength * q.coerceAtMost(1f), decorPath, true)
-            strokePaint.strokeWidth = QUESTION_STROKE
-            strokePaint.alpha = (255 * q).toInt().coerceIn(0, 255)
-            canvas.drawPath(decorPath, strokePaint)
-            val dot = ((q - 0.8f) / 0.2f).coerceIn(0f, 1f)
-            if (dot > 0f) {
-                fillPaint.alpha = (255 * dot).toInt()
-                canvas.drawCircle(0f, 64f, 15f * dot, fillPaint)
-                fillPaint.alpha = 255
-            }
-            strokePaint.strokeWidth = FaceLayout.STROKE
-            strokePaint.alpha = 255
-            canvas.restore()
-        }
-
-        // Слеза под правым глазом (прототип «плачет»): медленно стекает и гаснет.
-        val sweat = v[P.SWEAT]
-        if (sweat > 0.01f) {
-            val slide = pose.sweatPhase
-            canvas.save()
-            canvas.translate(geometry.right.cx + geometry.right.a * 0.6f, geometry.right.cy + TEAR_DY + 26f * slide)
-            val k = 0.85f + 0.3f * sweat
-            canvas.scale(k, k)
-            fillPaint.alpha = (255 * sweat * (1f - 0.6f * slide)).toInt().coerceIn(0, 255)
-            canvas.drawPath(tearPath, fillPaint)
-            fillPaint.alpha = 255
-            canvas.restore()
-        }
-
-        // «zz» сна (прототип): кружки поднимаются справа над головой и тают.
-        val z = v[P.ZZZ]
-        if (z > 0.01f) {
-            strokePaint.strokeWidth = Z_STROKE
-            for (i in 0 until 3) {
-                val p = (pose.zPhase + i / 3f) % 1f
-                val r = 10f + 16f * p
-                val x = geometry.right.cx + 150f + 60f * p
-                val y = geometry.right.cy - 90f - 160f * p
-                val a = sin(PI.toFloat() * p) * z
-                if (a <= 0.01f) continue
-                strokePaint.alpha = (255 * a).toInt().coerceIn(0, 255)
-                canvas.drawCircle(x, y, r, strokePaint)
-            }
-            strokePaint.strokeWidth = FaceLayout.STROKE
-            strokePaint.alpha = 255
-        }
+        questionReady = true
     }
 
     companion object {
-        private const val K = FaceGeometry.KAPPA
-
         /** Голубые глаза прототипа и их блик. */
         const val EYE = 0xFF3AA8F5.toInt()
         private const val GLINT = 0xFFCDEFFF.toInt()
-        private const val GLINT_ALPHA = 0.75f
 
-        /** Насколько свечение глаза больше самого глаза и его яркость. */
-        private const val GLOW_SCALE = 1.32f
-        private const val GLOW_STRENGTH = 0.95f
-        private const val LID_PAD = 70f
-        private const val QUESTION_STROKE = 24f
-        private const val Q_DX = 150f
-        private const val Q_DY = -60f
-        private const val TEAR_DY = 120f
-        private const val BLUSH_DX = 60f
-        private const val BLUSH_DY = 105f
-        private const val BLUSH_RX = 80f
-        private const val BLUSH_RY = 42f
-        private const val Z_STROKE = 10f
+        /** Единиц лица ([FaceLayout]) в единице поля прототипа: поле 1000 × 500 px на сцене 1600 × 900 → 5 px. */
+        const val PROTO = 4.389f
+
+        /** Центры глаз в поле прототипа. */
+        private val EYES_X = floatArrayOf(50f, 150f)
+        private val CHEEKS_X = floatArrayOf(32f, 168f)
+        private const val BLUSH_SIGMA = 5f
+
+        /** «Раскрытие» `exprIn`: .3 с, cubic-bezier(.3, 1.4, .5, 1) на отрезках 0–55 % и 55–100 %. */
+        private const val EXPR_IN_MS = 300f
+        private val EXPR_EASE = Bezier(0.3f, 1.4f, 0.5f, 1f)
+        private val BEAT_EASE = Bezier.EASE_IN_OUT
+        private const val BEAT_MS = 900L
+        private const val SPIN_MS = 2_000L
+
+        /**
+         * Ореол прототипа (`drop-shadow(0 0 6px rgba(58,168,245,.85)) drop-shadow(0 0 18px rgba(40,140,240,.45))`):
+         * яркость у края глаза ~0,55 и плавный спад до нуля к ~40 dp — сняли по пикселям с экрана лица прототипа
+         * (v9, 1 px = 1 dp). Рисуем вложенными обводками (полуширина [HALO_D], dp от края): прозрачность каждой
+         * подобрана так, что их наложение повторяет этот спад — свечение сразу от края, без колец и полос.
+         */
+        private val HALO_D = floatArrayOf(1f, 2f, 3f, 4f, 5.5f, 7f, 9f, 11.5f, 14.5f, 18f, 23f, 30f, 38f)
+        private val HALO_ALPHA = floatArrayOf(
+            0.154f, 0.118f, 0.077f, 0.085f, 0.079f, 0.080f, 0.068f, 0.056f, 0.029f, 0.029f, 0.027f, 0.025f, 0.014f,
+        )
+
+        /** Цвет: у края — цвет глаза, к краю ореола — синее (вторая тень прототипа). */
+        private val HALO_COLOR = IntArray(HALO_D.size) { k ->
+            val f = k / (HALO_D.size - 1f)
+            Color.rgb(lerp(58f, 40f, f).toInt(), lerp(168f, 140f, f).toInt(), lerp(245f, 240f, f).toInt())
+        }
+
         private const val RING_RADIUS = 56f
         private const val RING_STROKE = 7f
+
+        private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
+
+        /** Масштаб `beat`: 1 → 1,12 (50 %) → 1, ease-in-out на отрезках. */
+        private fun beat(now: Long): Float {
+            val t = (now % BEAT_MS).toFloat() / BEAT_MS
+            val k = if (t < 0.5f) BEAT_EASE.transform(t / 0.5f) else 1f - BEAT_EASE.transform((t - 0.5f) / 0.5f)
+            return 1f + 0.12f * k
+        }
+
+        /** Звезда восторга прототипа (`sparkle`). */
+        private fun starData(x: Float) =
+            "M$x 26 Q${x + 3} 47 ${x + 12} 50 Q${x + 3} 53 $x 74 Q${x - 3} 53 ${x - 12} 50 Q${x - 3} 47 $x 26Z"
+
+        private fun svg(d: String): Path = PathParser.createPathFromPathData(d)
     }
 }
 

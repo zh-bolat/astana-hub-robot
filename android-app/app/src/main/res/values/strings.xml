@@ -11,7 +11,7 @@
     <string name="status_listening">Слушаю…</string>
     <string name="status_thinking">Думаю…</string>
     <string name="status_looking">Смотрю…</string>
-    <string name="status_navigating">Веду…</string>
+    <string name="status_navigating">Веду вас</string>
     <string name="action_guide">Проводить: %1$s</string>
     <string name="status_speaking">Говорю…</string>
     <string name="offline_badge">Нет связи с сервером</string>
@@ -27,7 +27,7 @@
 
     <!-- Фразы робота без сервера (docs/api-contract.md, «Ошибки») -->
     <string name="phrase_no_connection">Извините, сейчас нет связи с сервером. Спросите, где что находится, — это я подскажу и без интернета.</string>
-    <string name="phrase_not_heard">Извините, я не расслышал. Повторите, пожалуйста.</string>
+    <string name="phrase_not_heard">Не расслышал. Повторите, пожалуйста.</string>
     <string name="phrase_camera_unavailable">Извините, камера сейчас недоступна.</string>
     <string name="phrase_cant_speak">Извините, я сейчас не могу говорить. Ответ — на экране.</string>
     <string name="phrase_looking">Сейчас посмотрю.</string>
@@ -65,19 +65,32 @@
     <string name="chat_you">Вы</string>
     <string name="tiles_title">Быстрые вопросы</string>
     <!-- Остров экрана лица (M4): поездка, итог, «где». -->
-    <string name="island_arrived">Пришли: %1$s</string>
+    <string name="island_arrived">Мы на месте!</string>
     <string name="island_failed">Не получилось дойти</string>
     <string name="island_stopped">Остановились</string>
     <string name="island_meters">%1$d м</string>
     <string name="island_near">рядом</string>
     <!-- MF2: прототип mynbay (лицо с подписями, выход по паролю, костюмы). -->
     <string name="exit_pin_sub">Выйти может только сотрудник. Введите пароль.</string>
-    <string name="exit_pin_wrong">Неверный пароль. Осталось попыток: %1$d</string>
+    <string name="exit_pin_wrong">Неверный PIN. Осталось попыток: %1$d</string>
     <string name="exit_pin_locked">Слишком много попыток. Попробуйте через %1$d мин.</string>
     <string name="app_closed">Приложение закрыто</string>
+    <string name="app_closed_sub">На роботе здесь будет обычный экран Android.</string>
     <string name="app_reopen">Открыть снова</string>
     <string name="costume_default">Обычный</string>
     <string name="costume_kazakh">Казахский</string>
     <string name="costume_business">Айтишник</string>
     <string name="costume_galaxy">Космонавт</string>
+    <string name="tile_where">Где что находится</string>
+    <string name="tile_events">Мероприятия</string>
+    <string name="tile_about">Об Astana Hub</string>
+    <string name="tile_wifi">Wi-Fi и сервисы</string>
+    <string name="status_unclear">Не расслышал</string>
+    <string name="faq_intro">Вот частые вопросы. Нажмите на любой или спросите свой.</string>
+    <string name="island_arrived_sub">Если нужно что-то ещё, просто спросите.</string>
+    <string name="where_ask">Куда вас проводить? Выберите место или назовите его.</string>
+    <string name="look_snapshot">снимок с камеры</string>
+    <string name="tile_events_q">Какие ближайшие мероприятия в Astana Hub?</string>
+    <string name="tile_about_q">Расскажи про Astana Hub</string>
+    <string name="tile_wifi_q">Как подключиться к Wi-Fi и какие здесь есть сервисы?</string>
 </resources>

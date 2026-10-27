@@ -28,6 +28,14 @@ class FacePose {
     var mood: FaceMood = FaceMood.IDLE
     var emotion: FaceEmotion = FaceEmotion.NEUTRAL
 
+    /** Фигура глаз прототипа и когда она сменилась (мс) — для «раскрытия» `exprIn`; время кадра (мс). */
+    var expr: ProtoExpr = ProtoExpr.NEUTRAL
+    var exprSince: Long = Long.MIN_VALUE / 2
+    var nowMs: Long = 0L
+
+    /** Моргание прототипа `sblink` (0 — открыты, 1 — сжаты в линию). */
+    var blink: Float = 0f
+
     /** Кольцо удержания: прогресс 0..1 и проявление 0..1; где палец (−1..1 от центра экрана). */
     var holdProgress: Float = 0f
     var holdAlpha: Float = 0f
@@ -175,14 +183,19 @@ class FaceEngine(
         val mouthOpen = t[P.MOUTH_OPEN]
         Expressions.overlay(director.emotion)?.blendInto(t, director.overlayWeight)
         if (t[P.TALK] >= 0.5f) t[P.MOUTH_OPEN] = mouthOpen
-        // «Думает» как эмоция в покое — и взгляд как у думающего.
-        val lifeMood = if (mood == FaceMood.IDLE && director.emotion == FaceEmotion.THINKING) FaceMood.THINKING else mood
-        if (lifeMood != this.lifeMood) {
-            this.lifeMood = lifeMood
-            life.onMood(lifeMood, nowMs)
+        if (mood != lifeMood) {
+            lifeMood = mood
+            life.onMood(mood, nowMs)
         }
         life.update(nowMs, dt, springs.value[P.BREATH_RATE], reducedMotion)
-        val eyesOpen = mood != FaceMood.SLEEP && mood != FaceMood.YAWN && mood != FaceMood.PETTED
+        // Фигура глаз прототипа: сменилось имя — «раскрытие» `exprIn` (на заставке — выражение «свободного времени»).
+        val expr = Expressions.proto(mood, life.idleExpr)
+        if (expr != pose.expr || first) {
+            pose.expr = expr
+            pose.exprSince = if (first) Long.MIN_VALUE / 2 else nowMs
+        }
+        pose.nowMs = nowMs
+        val eyesOpen = mood != FaceMood.PETTED
         if (inputs.touching && eyesOpen) {
             // Отклик на касание: глаза сразу на палец (саккада), голова — за ними.
             t[P.GAZE_X] = (inputs.touchX * TOUCH_GAZE_X).coerceIn(-1f, 1f)
@@ -250,10 +263,9 @@ class FaceEngine(
         System.arraycopy(s, 0, o, 0, P.COUNT)
         val motion = if (reducedMotion) REDUCED else 1f
 
-        // Моргание: веки закрываются, брови чуть опускаются.
+        // Моргание прототипа — сжатие фигуры (`sblink`), рисует [FaceRenderer] по [FacePose.blink].
         val blink = life.blink
-        o[P.OPEN_L] *= 1f - blink
-        o[P.OPEN_R] *= 1f - blink
+        pose.blink = blink
         var brow = -3f * blink
 
         // Дыхание и микродвижения.
@@ -267,10 +279,8 @@ class FaceEngine(
         o[P.HEAD_TILT] += 0.7f * micro * life.microTilt
         brow += 1.0f * micro * life.microY
 
-        // Голова доворачивается за взглядом; покачивание «нет».
-        o[P.HEAD_X] += s[P.HEAD_FOLLOW_X] * FaceLayout.HEAD_FOLLOW_X * motion + s[P.SHAKE]
-        o[P.HEAD_Y] += s[P.HEAD_FOLLOW_Y] * FaceLayout.HEAD_FOLLOW_Y * motion
-        o[P.HEAD_TILT] += s[P.HEAD_FOLLOW_X] * 1.5f * motion
+        // Прототип двигает только глаза (`lookAt`), голова за взглядом не доворачивается; покачивание «нет».
+        o[P.HEAD_X] += s[P.SHAKE]
 
         // Речь робота: рот открывается по громкости, на ударениях — брови и кивок.
         val talk = s[P.TALK].coerceIn(0f, 1f)
@@ -334,38 +344,12 @@ class FaceEngine(
         for (i in 0 until P.COUNT) springs.setSpec(i, specs[i])
         lifeMood = mood
         life.onMood(mood, nowMs)
-        if (first || reducedMotion) return
-        when (mood) {
-            FaceMood.HAPPY -> kick(P.SQUASH, 1.3f)
-            FaceMood.EXCITED -> {
-                kick(P.SQUASH, 1.4f)
-                kick(P.POP, 0.8f)
-                kickLater(P.SQUASH, 1.2f, 320L)
-            }
-            FaceMood.SURPRISED -> {
-                kick(P.POP, 2.2f)
-                kick(P.SQUASH, -1.2f)
-            }
-            FaceMood.WAKE -> {
-                kick(P.POP, 1.8f)
-                kick(P.SQUASH, -1.0f)
-            }
-            FaceMood.ERROR -> kick(P.SHAKE, 450f)
-            FaceMood.ACK -> kick(P.SQUASH, 0.6f)
-            FaceMood.PETTED -> kick(P.SQUASH, 0.5f)
-            // Встрепенуться — только когда пошёл текст посетителя, не на каждое включение VAD.
-            FaceMood.LISTENING -> if (inputs.userSpeaking) kick(P.POP, 0.4f)
-            else -> Unit
-        }
+        // Толчков на смену состояния нет: у прототипа каждая смена фигуры — «раскрытие» `exprIn` (рисовальщик).
     }
 
+    @Suppress("UNUSED_PARAMETER")
     private fun onEmotionEnter(e: FaceEmotion) {
-        if (reducedMotion || director.overlayWeight <= 0f) return
-        when (e) {
-            FaceEmotion.HAPPY, FaceEmotion.EXCITED -> kick(P.SQUASH, 1.0f)
-            FaceEmotion.SURPRISED -> kick(P.POP, 1.6f)
-            else -> Unit
-        }
+        // Эмоции сервера на лице нет (прототип): настроение — после ответа ([FaceCue.MOOD_HAPPY] и др.).
     }
 
     private fun kick(p: Int, dv: Float) = springs.impulse(p, dv)

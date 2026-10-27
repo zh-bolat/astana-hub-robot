@@ -139,6 +139,8 @@ data class MainUiState(
     val mapPlaces: List<Place> = emptyList(),
     /** Снимок «Что это?» (прототип: кадр в карточке ответа); null — новый вопрос, сон, новый разговор. */
     val lookPhoto: LookPhoto? = null,
+    /** Ответ «Где что находится»: под карточкой — чипы всех мест карты (прототип `placeList`). */
+    val placeList: Boolean = false,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -240,6 +242,7 @@ class MainViewModel(
         val question: String?,
         val answer: String?,
         val guideTarget: Place?,
+        val placeList: Boolean = false,
     )
     private val history = ArrayDeque<Snapshot>()
 
@@ -486,6 +489,9 @@ class MainViewModel(
      * Фраза посетителя. Пока робот занят, принимаем только «стоп» или новую содержательную фразу
      * (≥ 3 слов, не «угу/ага/да»); остальное — шум/реплики в сторону, игнорируем (в лог — без текста).
      */
+    /** Только отладка на эмуляторе (FaceDebug `heard`): промежуточный текст распознавания, как от ASR. */
+    fun debugPartial(text: String) = onTranscript(Transcript(text, isFinal = false))
+
     private fun onTranscript(t: Transcript) {
         val busyNow = busyForVoice()
         if (voiceIgnoredAsleep()) {
@@ -541,8 +547,7 @@ class MainViewModel(
             if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
             return
         }
-        // Разговор голосом — лицом к лицу: из меню возвращаемся к лицу (agent).
-        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        // Прототип `autoFace`: к лицу — когда робот начнёт отвечать (submitInternal ставит faceOnAnswer).
         submitInternal(text, faqId = null, lang = t.lang, fromVoice = true)
     }
 
@@ -554,7 +559,7 @@ class MainViewModel(
         if (busyForVoice() || requestJob?.isActive == true) return
         lastNoConnectionPhrase = now
         val lang = _state.value.lang
-        cue(FaceCue.ERROR)
+        // Лицо: «кружится голова» 2,5 с — по переходу в offline (MainActivity, прототип `dizzy`).
         requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
     }
 
@@ -599,9 +604,9 @@ class MainViewModel(
     /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
     private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
-    /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
+    /** Свайп с лица: страница приложения. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
-        // Касание лица во время ответа (mynbay): только меняем вид, речь не прерываем и обратно не перекидываем.
+        // Свайп с лица во время ответа: только меняем вид, речь не прерываем и обратно не перекидываем.
         faceOnAnswer = false
         wake()
         if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
@@ -610,12 +615,13 @@ class MainViewModel(
         restartMenuTimer()
     }
 
-    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; mynbay). */
+    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; прототип `autoFace`). */
     private var faceOnAnswer = false
 
     /**
-     * Смена фазы: робот заговорил в ответ на вопрос с экрана приложения — лицо на весь экран с крупными субтитрами
-     * (функция mynbay); договорил — в legacy, где «дом» — меню, назад в меню (в agent лицо и есть дом).
+     * Смена фазы: робот заговорил в ответ на вопрос, пока открыта страница приложения, — лицо на весь экран (прототип
+     * `autoFace`; субтитры остаются в пузыре страницы); договорил — в legacy, где «дом» — меню, назад в меню (в agent
+     * лицо и есть дом).
      */
     private fun onPhaseChanged(from: Phase, to: Phase) {
         val s = _state.value
@@ -665,7 +671,10 @@ class MainViewModel(
         menuJob = viewModelScope.launch {
             delay(MENU_IDLE_MILLIS)
             val s = _state.value
-            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true) {
+            // Прототип `armMenu`: не уходит, пока робот говорит, слушает, думает или ведёт.
+            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true && phaseIdle(s.phase) &&
+                s.guidingTo == null
+            ) {
                 _state.update { it.copy(mode = ScreenMode.FACE) }
             } else if (s.mode == ScreenMode.MENU) {
                 restartMenuTimer()
@@ -715,10 +724,13 @@ class MainViewModel(
     /** Вопрос текстом (поле ввода на эмуляторе) или финальный ASR: ответ — на экране ответа. */
     fun submit(text: String) = submitInternal(text, faqId = null)
 
-    /** Плитка или кнопка частого вопроса. */
-    fun submitButton(text: String) = submitInternal(text, faqId = null)
+    /**
+     * Плитка или кнопка частого вопроса. [display] — что показать строкой «вопрос» (прототип: у плиток-тем — название
+     * темы «Мероприятия», у чипа места — «Кафе»), серверу уходит [text].
+     */
+    fun submitButton(text: String, display: String? = null) = submitInternal(text, faqId = null, display = display)
 
-    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой. */
+    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой; строка «вопрос» — «X». */
     fun askWhere(place: Place) {
         val lang = _state.value.lang
         val name = WayFinder.displayName(place, lang)
@@ -728,10 +740,58 @@ class MainViewModel(
                 Lang.EN -> "Where is $name?"
                 else -> "Где $name?"
             },
+            display = name,
         )
     }
 
-    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false) {
+    /**
+     * Плитка «Где что находится» (прототип `placeList`): без сервера — «Куда вас проводить? Выберите место или назовите
+     * его.» и чипы всех мест карты под карточкой; чип — «где X» ([askWhere]) с направлением, метрами и «Проводить».
+     */
+    fun whereList(display: String) {
+        wake()
+        stopActivity()
+        remember()
+        val text = phrases.get(PhraseKey.WHERE_ASK, _state.value.lang)
+        _state.update {
+            it.copy(
+                screen = Screen.ANSWER, faqOpenId = null, question = display, partialQuestion = null, answer = text,
+                subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = true,
+            )
+        }
+        // Прототип: ответ темы — тоже на лице, когда робот заговорит (`showAnswer` → `autoFace`).
+        faceOnAnswer = true
+        requestJob = viewModelScope.launch { speakPhrases(PhraseSplitter.split(text), _state.value.lang) }
+    }
+
+    /** Прототип `tileTap`: «думаю» 700 мс с подсвеченной плиткой, потом ответ темы. */
+    fun whereListSoon(display: String) {
+        wake()
+        stopActivity()
+        val lang = _state.value.lang
+        requestJob = viewModelScope.launch {
+            setBusy(Phase.THINKING)
+            delay(WHERE_THINK_MILLIS)
+            setBusy(null)
+            if (_state.value.lang == lang) whereList(display)
+        }
+    }
+
+    /** Сказать фразу экрана (вступление частых вопросов): пузырь субтитров, в разговор не пишется. */
+    private fun sayAside(text: String) {
+        val lang = _state.value.lang
+        requestJob?.cancel()
+        requestJob = viewModelScope.launch {
+            _state.update { it.copy(subtitle = text) }
+            try {
+                speakPhrases(PhraseSplitter.split(text), lang)
+            } finally {
+                if (_state.value.subtitle == text) _state.update { it.copy(subtitle = null) }
+            }
+        }
+    }
+
+    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false, display: String? = null) {
         val question = text.trim()
         if (question.isEmpty()) {
             if (thinkingEarly) clearThinkingEarly(resetPhase = true)
@@ -767,8 +827,8 @@ class MainViewModel(
             try {
                 _state.update {
                     it.copy(
-                        question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
-                        wayHint = null, citations = emptyList(), lookPhoto = null,
+                        question = display?.trim()?.takeIf(String::isNotEmpty) ?: question, partialQuestion = null, answer = null,
+                        subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = false,
                     )
                 }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
@@ -911,7 +971,7 @@ class MainViewModel(
             }
             _state.update {
                 it.copy(
-                    guideTarget = null, guidingTo = name, subtitle = null,
+                    guideTarget = null, whereIs = null, guidingTo = name, subtitle = null,
                     answer = if (announce) WayPhrases.guideStart(name, lang) else it.answer,
                 )
             }
@@ -993,7 +1053,9 @@ class MainViewModel(
         if (_state.value.screen == Screen.FAQ) return
         stopActivity()
         remember()
-        _state.update { it.copy(screen = Screen.FAQ, faqPage = 0, faqOpenId = null) }
+        _state.update { it.copy(screen = Screen.FAQ, faqPage = 0, faqOpenId = null, placeList = false) }
+        // Прототип `openFaq`: робот читает вступление — «Вот частые вопросы. Нажмите на любой или спросите свой.»
+        sayAside(phrases.get(PhraseKey.FAQ_INTRO, _state.value.lang))
     }
 
     /** «Ещё вопросы»: следующая страница (по кругу). Текущую страницу можно вернуть кнопкой «Назад». */
@@ -1026,6 +1088,7 @@ class MainViewModel(
             it.copy(
                 screen = prev.screen, faqPage = prev.faqPage, faqOpenId = null,
                 question = prev.question, answer = prev.answer, guideTarget = prev.guideTarget, partialQuestion = null,
+                placeList = prev.placeList,
             )
         }
     }
@@ -1038,7 +1101,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null,
-                question = null, answer = null, guideTarget = null, partialQuestion = null,
+                question = null, answer = null, guideTarget = null, whereIs = null, partialQuestion = null, placeList = false,
             )
         }
     }
@@ -1046,7 +1109,10 @@ class MainViewModel(
     /** Запомнить текущий экран для «Назад» (повтор того же экрана не копим). */
     private fun remember() {
         val s = _state.value
-        val snap = Snapshot(s.screen, s.faqPage, s.question.takeIf { s.screen == Screen.ANSWER }, s.answer.takeIf { s.screen == Screen.ANSWER }, s.guideTarget.takeIf { s.screen == Screen.ANSWER })
+        val snap = Snapshot(
+            s.screen, s.faqPage, s.question.takeIf { s.screen == Screen.ANSWER }, s.answer.takeIf { s.screen == Screen.ANSWER },
+            s.guideTarget.takeIf { s.screen == Screen.ANSWER }, s.placeList && s.screen == Screen.ANSWER,
+        )
         if (snap.screen == Screen.ANSWER && snap.answer == null) return // ответ ещё не пришёл — возвращаться некуда
         if (history.lastOrNull() == snap) return
         history.addLast(snap)
@@ -1661,7 +1727,9 @@ class MainViewModel(
             return
         }
         touchLiveSession()
-        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        // Прототип `autoFace`: лицо на весь экран — когда робот начнёт отвечать (страница приложения остаётся, пока
+        // слушает и думает).
+        faceOnAnswer = true
         // На экране предложение «Проводить?» (where_is), посетитель сказал «да / давай / проводи / иә / yes» —
         // едем сразу, не дожидаясь сервера. Проверка — ДО сброса guideTarget ниже.
         val offered = _state.value.guideTarget
@@ -1680,8 +1748,8 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
-                answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
-                lookPhoto = null,
+                answer = null, subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(),
+                lookPhoto = null, placeList = false,
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -2240,7 +2308,10 @@ class MainViewModel(
         const val LIVE_LOOK_SPEAK_FALLBACK_MILLIS = 4_000L
 
         /** Меню без касаний столько — назад к лицу (agent). */
-        const val MENU_IDLE_MILLIS = 30_000L
+        const val MENU_IDLE_MILLIS = 90_000L
+
+        /** «Где что находится»: «думаю» перед ответом, как в прототипе (`tileTap` → 700 мс). */
+        const val WHERE_THINK_MILLIS = 700L
 
         /** Эмоция держится после ответа / события, потом лицо спокойное. */
         const val EMOTION_LINGER_MILLIS = 6_000L

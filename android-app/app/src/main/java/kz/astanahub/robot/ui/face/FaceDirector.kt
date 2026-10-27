@@ -22,6 +22,15 @@ enum class FaceCue {
     TRIP_CANCELLED,
     /** Удивление (тап в тишине — M2). */
     SURPRISE,
+
+    /** Настроение после ответа (прототип: эмодзи в конце субтитров → `setMood(…, 2200)`). */
+    MOOD_HAPPY, MOOD_BLUSH, MOOD_SPARKLE, MOOD_WIDE, MOOD_CONFUSED,
+
+    /** Смена костюма (прототип `setSkin`: обычный — happy, казахский — blush, айтишник — wide, космонавт — sparkle; 1,8 с). */
+    COSTUME_HAPPY, COSTUME_BLUSH, COSTUME_WIDE, COSTUME_SPARKLE,
+
+    /** Пропала связь (прототип: `dizzy` 2,5 с). */
+    OFFLINE,
     ;
 
     companion object {
@@ -129,11 +138,22 @@ class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
     private var wakeUntil = Long.MIN_VALUE / 2
     private var pettingUntil = Long.MIN_VALUE / 2
 
+    /** Вторая ступень реакции (приветствие: «смотрит» → «слушает»). */
+    private var reactionNext: FaceMood? = null
+    private var reactionNextMs = 0L
+
     /** Реакция на событие; держится [REACTIONS] мс (новое дело — думает/ведёт/смотрит/голос — обрывает раньше). */
     fun cue(c: FaceCue, nowMs: Long) {
         val (m, ms) = REACTIONS.getValue(c)
         reaction = m
         reactionUntil = nowMs + ms
+        // Прототип «посетитель подошёл»: глаза распахнулись (450 мс), потом «слушает» (700 мс), потом речь.
+        if (c == FaceCue.GREET) {
+            reactionNext = FaceMood.LISTENING
+            reactionNextMs = GREET_LISTEN_MS
+        } else {
+            reactionNext = null
+        }
     }
 
     /** [voice] — VAD: посетитель говорит сейчас ([FaceAudioSource.voiceActive]). */
@@ -148,8 +168,9 @@ class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
         }
         if (wasAwake && !inputs.awake) {
             sleepStartedAt = nowMs
-            skipYawn = false
+            skipYawn = true // прототип «никогда не спит»: заставка сразу, без зевка
             reaction = null
+            reactionNext = null
         } else if (!wasAwake && inputs.awake) {
             wakeUntil = nowMs + WAKE_MS
             this.voice.reset()
@@ -163,10 +184,22 @@ class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
         ) {
             reaction = null
         }
-        if (inputs.userSpeaking && !lastUserSpeaking) reaction = null
+        if (inputs.userSpeaking && !lastUserSpeaking) {
+            reaction = null
+            reactionNext = null
+        }
         lastActivity = activity
         lastUserSpeaking = inputs.userSpeaking
-        if (reaction != null && nowMs >= reactionUntil) reaction = null
+        if (reaction != null && nowMs >= reactionUntil) {
+            val next = reactionNext
+            reactionNext = null
+            if (next != null) {
+                reaction = next
+                reactionUntil += reactionNextMs
+            } else {
+                reaction = null
+            }
+        }
 
         if (inputs.petting) pettingUntil = nowMs + PETTING_TAIL_MS
 
@@ -208,10 +241,36 @@ class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
             FaceCue.ERROR to (FaceMood.ERROR to 2_600L),
             FaceCue.TRIP_FAILED to (FaceMood.ERROR to 2_600L),
             FaceCue.CONFUSED to (FaceMood.CONFUSED to 2_800L),
-            FaceCue.GREET to (FaceMood.EXCITED to 2_000L),
+            FaceCue.GREET to (FaceMood.WIDE to 450L),
             FaceCue.ARRIVED to (FaceMood.HAPPY to 2_200L),
             FaceCue.TRIP_CANCELLED to (FaceMood.ACK to 1_400L),
             FaceCue.SURPRISE to (FaceMood.SURPRISED to 1_300L),
+            FaceCue.MOOD_HAPPY to (FaceMood.HAPPY to MOOD_MS),
+            FaceCue.MOOD_BLUSH to (FaceMood.BLUSH to MOOD_MS),
+            FaceCue.MOOD_SPARKLE to (FaceMood.SPARKLE to MOOD_MS),
+            FaceCue.MOOD_WIDE to (FaceMood.WIDE to MOOD_MS),
+            FaceCue.MOOD_CONFUSED to (FaceMood.CONFUSED to MOOD_MS),
+            FaceCue.COSTUME_HAPPY to (FaceMood.HAPPY to COSTUME_MS),
+            FaceCue.COSTUME_BLUSH to (FaceMood.BLUSH to COSTUME_MS),
+            FaceCue.COSTUME_WIDE to (FaceMood.WIDE to COSTUME_MS),
+            FaceCue.COSTUME_SPARKLE to (FaceMood.SPARKLE to COSTUME_MS),
+            FaceCue.OFFLINE to (FaceMood.DIZZY to 2_500L),
         )
+
+        /** Настроение после ответа и реакция на костюм (прототип `setMood`), мс. */
+        const val MOOD_MS = 2_200L
+        const val COSTUME_MS = 1_800L
+
+        /** Приветствие: «слушает» после «смотрит», мс. */
+        const val GREET_LISTEN_MS = 700L
+
+        /** Настроение по эмодзи в конце ответа (прототип `MOOD_FACE`; прочие — happy). */
+        fun moodFor(emoji: String): FaceCue = when (emoji) {
+            "🤔" -> FaceCue.MOOD_CONFUSED
+            "👋" -> FaceCue.MOOD_BLUSH
+            "🎉" -> FaceCue.MOOD_SPARKLE
+            "📶" -> FaceCue.MOOD_WIDE
+            else -> FaceCue.MOOD_HAPPY
+        }
     }
 }

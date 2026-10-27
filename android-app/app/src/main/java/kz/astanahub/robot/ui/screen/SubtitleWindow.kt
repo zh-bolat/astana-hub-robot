@@ -34,6 +34,12 @@ internal object SubtitleWindow {
         return start..words.lastIndex
     }
 
+    /** Последний кусок фразы (прототип `fin` → `subsShow(последнее слово)`). */
+    fun lastPiece(phrase: String): String {
+        val words = words(phrase)
+        return words.slice(window(words, words.size)).joinToString(" ")
+    }
+
     /** Текущий кусок: сказанные слова — цветом текста, ещё не сказанные — [faint]. */
     fun text(phrase: String, spoken: Int, faint: Color): AnnotatedString {
         val words = words(phrase)

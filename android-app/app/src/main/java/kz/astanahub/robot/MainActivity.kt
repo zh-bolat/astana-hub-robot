@@ -205,12 +205,15 @@ class MainActivity : AppCompatActivity() {
     private fun setUpScreens() {
         val reduced = !ValueAnimator.areAnimatorsEnabled()
         face = FaceController(container.audioLevels, reducedMotion = reduced)
+        // «?» на лице — глиф Nunito ExtraBold, как в прототипе.
+        face.renderer.typeface = runCatching { ResourcesCompat.getFont(this, R.font.nunito_extrabold) }.getOrNull()
         two.reducedMotion = reduced
         // Костюм робота-компаньона (только вид) — выбор в диагностике, применяется сразу.
         lifecycleScope.launch { container.costume.costume.collect { two.costume = it } }
         two.textInput = !BuildConfig.IS_ROBOT
         two.diagnosticsHold = container.diagnostics.access != DiagAccess.DISABLED
-        two.buildLabel = getString(
+        // Подпись сборки — только эмулятор (в прототипе её нет; на роботе версия — в диагностике).
+        two.buildLabel = if (BuildConfig.IS_ROBOT) "" else getString(
             R.string.build_label, getString(R.string.flavor_name), BuildConfig.BUILD_TYPE, BuildConfig.VERSION_NAME,
         )
         // Шрифт грузится заранее и не на главном потоке: первый показ текста не теряет кадр на чтении .ttf.
@@ -263,8 +266,12 @@ class MainActivity : AppCompatActivity() {
 
     private val actions = object : ScreenTwoActions {
         override fun onTile(tile: Tile) {
+            // Прототип `.tile.sel`: нажатая плитка подсвечена, пока не пришёл ответ.
+            two.selectedTile = tile.key
+            if (tile.action == TileAction.Look) lookRequestedAt = SystemClock.uptimeMillis()
             when (val a = tile.action) {
-                is TileAction.Ask -> viewModel.submitButton(a.text)
+                is TileAction.Ask -> viewModel.submitButton(a.text, a.display)
+                TileAction.Where -> viewModel.whereListSoon(tile.label)
                 TileAction.Faq -> viewModel.openFaq()
                 TileAction.Look -> viewModel.lookAround()
             }
@@ -274,7 +281,10 @@ class MainActivity : AppCompatActivity() {
 
         override fun onAskVoice() = listenOnce()
 
-        override fun onStop() = viewModel.stop()
+        override fun onStop() {
+            speechCutAt = SystemClock.uptimeMillis()
+            viewModel.stop()
+        }
 
         override fun onSend(text: String) {
             if (text.isNotBlank()) viewModel.submit(text)
@@ -314,7 +324,10 @@ class MainActivity : AppCompatActivity() {
             showHomeView()
         }
 
-        override fun onLook() = viewModel.lookAround()
+        override fun onLook() {
+            lookRequestedAt = SystemClock.uptimeMillis()
+            viewModel.lookAround()
+        }
 
         override fun onPlace(index: Int) {
             placeChipTargets.getOrNull(index)?.let(viewModel::askWhere)
@@ -334,13 +347,15 @@ class MainActivity : AppCompatActivity() {
         timber.log.Timber.d("face tap: %s", tap)
         when (tap) {
             FaceInputMapper.Tap.WAKE -> viewModel.wake()
-            FaceInputMapper.Tap.STOP -> viewModel.stop()
-            FaceInputMapper.Tap.INTERRUPT_SPEECH -> viewModel.interruptSpeech()
-            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
-            FaceInputMapper.Tap.OPEN_MENU -> {
-                viewModel.openMenu()
-                refreshMenuOpen()
+            FaceInputMapper.Tap.STOP -> {
+                speechCutAt = SystemClock.uptimeMillis()
+                viewModel.stop()
             }
+            FaceInputMapper.Tap.INTERRUPT_SPEECH -> {
+                speechCutAt = SystemClock.uptimeMillis()
+                viewModel.interruptSpeech()
+            }
+            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
         }
     }
 
@@ -426,6 +441,9 @@ class MainActivity : AppCompatActivity() {
         override fun onPinErase() {
             pinBuffer.backspace()
             pin.length = pinBuffer.length
+            // Прототип: «⌫» тоже перезапускает таймер панели.
+            handler.removeCallbacks(pinTimeout)
+            handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
         }
 
         override fun onPinSubmit() {
@@ -458,6 +476,11 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPinCancel() = closePin()
     }
+
+    /** «Что это?» нажато (uptime, мс) и id последнего ответа робота на тот момент: карточка ожидания до нового ответа. */
+    private var lookRequestedAt = Long.MIN_VALUE / 2
+    private var selectedSawBusy = false
+    private var lookReplyFrom = 0L
 
     /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип): id последней реплики
      *  на момент «В начало» (id в чате только растут — и после сброса чата, и когда старые реплики уходят за лимит). */
@@ -501,18 +524,74 @@ class MainActivity : AppCompatActivity() {
         android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)?.asImageBitmap()
     }.onFailure { timber.log.Timber.w(it, "look photo decode") }.getOrNull()
 
-    /** Смена костюма (точки, свайп по роботу): робот «собирается», лицо радуется (как setSkin в прототипе). */
+    /**
+     * Смена костюма (точки, свайп по роботу; прототип `setSkin(k, true)`): робот «собирается» — и при повторном выборе
+     * того же костюма, лицо 1,8 с: обычный — «^ ^», казахский — смущение, айтишник — «смотрит», космонавт — звёзды.
+     */
     private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
-        if (c == container.costume.costume.value) return
         container.costume.set(c)
-        // Прототип: обычный / казахский — радость, айтишник / космонавт — широко раскрытые глаза (звёзды-глаза
-        // космонавта в нашем лице не нарисованы — ближайшее «удивление»).
+        two.assemble++
         face.onCue(
             when (c) {
-                kz.astanahub.robot.ui.screen.Costume.BUSINESS, kz.astanahub.robot.ui.screen.Costume.GALAXY -> kz.astanahub.robot.ui.face.FaceCue.SURPRISE
-                else -> kz.astanahub.robot.ui.face.FaceCue.ARRIVED
+                kz.astanahub.robot.ui.screen.Costume.CLASSIC -> FaceCue.COSTUME_HAPPY
+                kz.astanahub.robot.ui.screen.Costume.KAZAKH -> FaceCue.COSTUME_BLUSH
+                kz.astanahub.robot.ui.screen.Costume.BUSINESS -> FaceCue.COSTUME_WIDE
+                kz.astanahub.robot.ui.screen.Costume.GALAXY -> FaceCue.COSTUME_SPARKLE
             },
         )
+    }
+
+    // --- после речи (прототип `say` → `fin`) ---
+
+    private var wasSpeaking = false
+    private var wasOffline = false
+    private var lastPhraseShown: String? = null
+
+    /** Когда посетитель / оператор оборвал речь (Стоп, тап по лицу): такой конец речи — не «договорил». */
+    private var speechCutAt = Long.MIN_VALUE / 2
+    private val clearLinger = Runnable { two.linger = null }
+
+    /**
+     * Договорил (не оборвали): к последнему куску субтитров — эмодзи настроения, пузырь висит ещё max(8 с, 60 мс ×
+     * длина), лицо 2,2 с показывает настроение (🤔 — «не понял», 👋 — смущение, 🎉 — звёзды, 📶 — «смотрит», прочее —
+     * «^ ^»), экран головы кивает.
+     */
+    private fun afterSpeech(state: MainUiState) {
+        val said = state.answer?.takeIf { it.isNotBlank() } ?: lastPhraseShown ?: return
+        val emoji = kz.astanahub.robot.ui.MoodEmoji.forText(said)
+        face.onCue(kz.astanahub.robot.ui.face.FaceDirector.moodFor(emoji))
+        two.nod++
+        val piece = lastPhraseShown?.let { kz.astanahub.robot.ui.screen.SubtitleWindow.lastPiece(it) }
+        if (!piece.isNullOrBlank()) {
+            two.linger = kz.astanahub.robot.ui.screen.Linger(piece, emoji)
+            handler.removeCallbacks(clearLinger)
+            handler.postDelayed(clearLinger, maxOf(LINGER_MIN_MS, LINGER_MS_PER_CHAR * said.length))
+        }
+    }
+
+    private fun trackSpeech(state: MainUiState) {
+        val speaking = state.phase == Phase.SPEAKING
+        if (speaking) {
+            two.phrase?.let { lastPhraseShown = it }
+            if (two.linger != null) {
+                handler.removeCallbacks(clearLinger)
+                two.linger = null
+            }
+        } else if (wasSpeaking) {
+            val natural = (state.phase == Phase.IDLE || state.phase == Phase.LISTENING) &&
+                SystemClock.uptimeMillis() - speechCutAt > SPEECH_CUT_GRACE_MS
+            if (natural) afterSpeech(state)
+            lastPhraseShown = null
+        }
+        wasSpeaking = speaking
+        // Новый вопрос или сон — пузырь с прошлым ответом убираем.
+        if (two.linger != null && (state.processing || !state.partialQuestion.isNullOrBlank() || state.mode == ScreenMode.SLEEP)) {
+            handler.removeCallbacks(clearLinger)
+            two.linger = null
+        }
+        // Пропала связь — «кружится голова» 2,5 с (прототип: `dizzy`).
+        if (state.offline && !wasOffline) face.onCue(FaceCue.OFFLINE)
+        wasOffline = state.offline
     }
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -557,6 +636,7 @@ class MainActivity : AppCompatActivity() {
         // Уснул — диалог выхода закрывается (робот работает дальше).
         if (state.screensaver && two.exitConfirm) stayIn(wake = false)
         renderScreenTwo(state)
+        trackSpeech(state)
     }
 
     private fun renderScreenTwo(state: MainUiState) {
@@ -566,7 +646,9 @@ class MainActivity : AppCompatActivity() {
             two.texts = texts(lang)
         }
         two.lang = lang
-        two.status = str(statusRes(state.phase), lang)
+        // Посетитель говорит (есть промежуточный текст) — «Слушаю…», даже если фаза ещё «свободен» (прототип `listen`).
+        val hearingNow = !state.partialQuestion.isNullOrBlank() && (state.phase == Phase.IDLE || state.phase == Phase.LISTENING)
+        two.status = str(if (hearingNow) R.string.status_listening else statusRes(state.phase), lang)
         if (chatLog.update(state)) two.chat = chatLog.items
         two.partial = ScreenTwoMapper.partial(state)
         two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
@@ -575,11 +657,24 @@ class MainActivity : AppCompatActivity() {
         two.phrase = state.subtitle ?: state.answer?.takeIf { state.phase == Phase.SPEAKING && it.isNotBlank() }
         two.thinking = state.processing
         two.busy = ScreenTwoMapper.busy(state)
-        two.tilesEnabled = !state.processing
-        val tilesKey = listOf(lang, state.quickQuestions)
+        // Прототип: плитки не гаснут, пока робот думает (выбранная подсвечена `.sel`).
+        two.tilesEnabled = true
+        val tilesKey = listOf(lang)
         if (tilesFor != tilesKey) {
             tilesFor = tilesKey
-            two.tiles = Tiles.home(state.quickQuestions, str(R.string.tile_faq, lang), str(R.string.action_look, lang))
+            two.tiles = Tiles.home(
+                kz.astanahub.robot.ui.screen.TileTexts(
+                    where = str(R.string.tile_where, lang),
+                    events = str(R.string.tile_events, lang),
+                    eventsQuestion = str(R.string.tile_events_q, lang),
+                    about = str(R.string.tile_about, lang),
+                    aboutQuestion = str(R.string.tile_about_q, lang),
+                    wifi = str(R.string.tile_wifi, lang),
+                    wifiQuestion = str(R.string.tile_wifi_q, lang),
+                    faq = str(R.string.tile_faq, lang),
+                    look = str(R.string.action_look, lang),
+                ),
+            )
         }
         two.faq = ScreenTwoMapper.faq(
             state,
@@ -591,25 +686,62 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
-        two.tapToMenu = state.answerOnFace
         // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
         two.pose = when (state.phase) {
-            Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
+            Phase.IDLE, Phase.LISTENING -> if (hearingNow) kz.astanahub.robot.ui.screen.CompanionPose.LISTEN else kz.astanahub.robot.ui.screen.CompanionPose.IDLE
             Phase.THINKING, Phase.LOOKING -> kz.astanahub.robot.ui.screen.CompanionPose.THINK
             Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
             else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
         }
-        val home = state.screen == Screen.HOME && (chatLog.items.lastOrNull()?.id ?: 0L) <= homeLastId &&
-            state.partialQuestion.isNullOrBlank() && !state.processing
+        // Прототип: справа меняется, только когда пошёл ответ — пока посетитель говорит и робот думает, остаётся
+        // приветствие (или прежний ответ); после «В начало» — приветствие до нового ответа.
+        val lastReply = chatLog.items.lastOrNull { it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }?.id ?: 0L
+        val home = state.screen != Screen.FAQ && lastReply <= homeLastId && (state.screen == Screen.HOME || state.answer == null)
         two.homeView = home
         two.chatFrom = homeLastId
+        two.speaking = state.phase == Phase.SPEAKING
+        // «Услышанное» (прототип `.heard`): пока посетитель говорит — «…его слова (без закрывающей кавычки); пока робот
+        // думает — «вопрос».
+        val partial = state.partialQuestion?.takeIf { it.isNotBlank() }
+        two.heard = when {
+            partial != null -> "«$partial"
+            (state.phase == Phase.THINKING || state.phase == Phase.LOOKING) && state.screen != Screen.FAQ &&
+                !state.question.isNullOrBlank() -> "«${state.question}»"
+            else -> null
+        }
+        // «Что это?» ждёт ответа — справа карточка со снимком (прототип `look`).
+        val lookAsked = SystemClock.uptimeMillis() - lookRequestedAt < LOOK_PENDING_MS && state.processing
+        two.lookWaiting = lastReply <= lookReplyFrom && (state.phase == Phase.LOOKING || lookAsked || (two.photo != null && two.photoItemId < 0 && state.processing))
+        // Запрос мог ещё не дойти до «думаю» (первая отрисовка после нажатия) — сбрасываем только после паузы.
+        if (!state.processing && state.phase != Phase.LOOKING && SystemClock.uptimeMillis() - lookRequestedAt > LOOK_START_GRACE_MS) {
+            lookRequestedAt = Long.MIN_VALUE / 2
+        }
+        if (lookRequestedAt < 0) lookReplyFrom = lastReply
+        // «Что это?» (прототип `look`): «Смотрю…», глаза «смотрят», строки «услышанное» нет.
+        if (two.lookWaiting) {
+            two.status = str(R.string.status_looking, lang)
+            two.heard = null
+            face.engine.inputs.activity = kz.astanahub.robot.ui.face.FaceActivity.LOOKING
+        }
+        // Плитка подсвечена, пока не пришёл ответ (или робот не освободился без ответа).
+        if (state.processing) selectedSawBusy = true
+        if (!home || (selectedSawBusy && !state.processing && state.phase != Phase.THINKING)) {
+            two.selectedTile = null
+            selectedSawBusy = false
+        }
         bindLookPhoto(state.lookPhoto)
-        two.canGoBack = !home || state.screen != Screen.HOME
+        // Прототип: «Назад» есть всегда, кроме покоя на главной (и пока посетитель говорит, и пока робот думает).
+        two.canGoBack = !home || state.screen != Screen.HOME || hearingNow || state.processing || state.phase == Phase.SPEAKING
         // Чипы мест под ответом «где» (кроме места из ответа).
-        placeChipTargets = if (!home && (state.whereIs != null || state.guideTarget != null)) {
-            state.mapPlaces.filter { it.id != state.guideTarget?.id }.take(MAX_PLACE_CHIPS)
-        } else {
-            emptyList()
+        placeChipTargets = when {
+            home -> emptyList()
+            // «Где что находится» (прототип `placeList`): все места карты.
+            state.placeList -> state.mapPlaces.distinctBy { WayFinder.displayName(it, lang) }
+            state.whereIs != null || state.guideTarget != null -> state.mapPlaces
+                .filter { it.id != state.guideTarget?.id }
+                .distinctBy { WayFinder.displayName(it, lang) }
+                .take(MAX_PLACE_CHIPS)
+            else -> emptyList()
         }
         two.placeChips = placeChipTargets.map { WayFinder.displayName(it, lang) }
         two.faceAvailable = container.chatSettings.mode.value.usesAgent
@@ -653,6 +785,7 @@ class MainActivity : AppCompatActivity() {
         stopTrip = str(R.string.action_stop, lang), // прототип: «Стоп» и на слое поездки
         guide = str(R.string.action_guide_short, lang),
         arrived = str(R.string.island_arrived, lang),
+        arrivedSub = str(R.string.island_arrived_sub, lang),
         failed = str(R.string.island_failed, lang),
         stopped = str(R.string.island_stopped, lang),
         meters = str(R.string.island_meters, lang),
@@ -665,7 +798,7 @@ class MainActivity : AppCompatActivity() {
         greetTitle = str(R.string.greet_title, lang),
         greetSub = str(R.string.greet_sub, lang),
         tilesTitle = str(R.string.tiles_title, lang),
-        askVoice = str(R.string.action_ask_voice, lang),
+        askVoice = str(R.string.hint_voice, lang), // прототип `hint`: «Просто скажите вопрос, я слушаю»
         stop = str(R.string.action_stop, lang),
         inputHint = str(R.string.input_hint, lang),
         faqTitle = str(R.string.faq_title, lang),
@@ -683,12 +816,12 @@ class MainActivity : AppCompatActivity() {
         sourceMany = str(R.string.chat_sources, lang),
         back = str(R.string.action_back, lang),
         closed = str(R.string.app_closed, lang),
+        closedSub = str(R.string.app_closed_sub, lang),
         reopen = str(R.string.app_reopen, lang),
         home = str(R.string.action_home, lang),
         menu = str(R.string.action_menu, lang),
         look = str(R.string.action_look, lang),
-        faceHint = str(R.string.face_hint, lang),
-        tapHint = str(R.string.tap_hint, lang),
+        snapshot = str(R.string.look_snapshot, lang),
         costumes = listOf(
             str(R.string.costume_default, lang),
             str(R.string.costume_kazakh, lang),
@@ -748,10 +881,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** «Открыть снова» на слое «Приложение закрыто»: передумали — работаем дальше. */
+    /** «Открыть снова» (прототип `reopen`): русский язык, приветствие и лицо — как после пробуждения. */
     private fun reopen() {
         handler.removeCallbacks(closeNow)
         two.closed = false
         viewModel.wake()
+        if (viewModel.state.value.lang != Lang.RU) viewModel.selectLanguage(Lang.RU)
+        viewModel.goHome()
+        showHomeView()
+        viewModel.showFace()
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -788,11 +926,25 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         /** Начертания Inter экранов 1 и 2. */
-        const val PIN_TIMEOUT_MS = 60_000L
+        /** Панель пароля без ввода закрывается (прототип: 15 с, каждая клавиша и «⌫» перезапускают). */
+        const val PIN_TIMEOUT_MS = 15_000L
         const val MAX_PLACE_CHIPS = 5
+
+        /** «Что это?»: сколько ждём начала ответа с карточкой-снимком. */
+        const val LOOK_PENDING_MS = 30_000L
+
+        /** «Что это?» нажато, а ViewModel ещё не «думает»: столько не сбрасываем ожидание снимка. */
+        const val LOOK_START_GRACE_MS = 1_500L
+
+        /** Пузырь с последней фразой и эмодзи после речи: max(8 с, 60 мс × длина) — прототип `fin`. */
+        const val LINGER_MIN_MS = 8_000L
+        const val LINGER_MS_PER_CHAR = 60L
+
+        /** Речь кончилась вскоре после «Стоп» / тапа — её оборвали, настроения и кивка нет. */
+        const val SPEECH_CUT_GRACE_MS = 400L
         const val LOOK_THUMB_WIDTH = 480
         const val CLOSE_DELAY_MS = 1_500L
-        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
+        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_medium, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
         const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L

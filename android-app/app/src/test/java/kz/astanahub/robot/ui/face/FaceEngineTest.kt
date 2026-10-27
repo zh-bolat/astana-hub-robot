@@ -94,7 +94,7 @@ class FaceEngineTest {
         e.frames(5)
         val v = e.velocity(P.EYE_H)
         assertTrue("eyes are growing: $v", v > 50f)
-        e.director.forcedMood = FaceMood.SLEEP
+        e.director.forcedMood = FaceMood.WIDE
         now += frameNanos
         e.update(now)
         // После смены цели скорость меняется плавно (по ускорению), а не обнуляется и не меняет знак мгновенно.
@@ -102,7 +102,7 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `idle blinks every 2 to 6 seconds, sometimes twice`() {
+    fun `idle blinks every 2,6 to 5,8 seconds, sometimes twice - as the prototype`() {
         val e = engine()
         val starts = mutableListOf<Long>()
         var count = e.blinkCount
@@ -119,14 +119,14 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `blink closes the eyes fully and briefly`() {
+    fun `blink squeezes the eyes to a line and back in 220 ms - sblink`() {
         assertEquals(0f, FaceLife.blinkCurve(-1f), 0f)
-        assertEquals(1f, FaceLife.blinkCurve(FaceLife.BLINK_CLOSE_MS + 5f), 0f)
+        assertEquals(1f, FaceLife.blinkCurve(FaceLife.BLINK_MS * 0.5f), 0f)
         assertEquals(0f, FaceLife.blinkCurve(FaceLife.BLINK_MS), 0f)
-        assertTrue(FaceLife.BLINK_MS <= 250f)
+        assertEquals(220f, FaceLife.BLINK_MS, 0f)
         var prev = 0f
-        // Закрытие монотонно.
-        for (ms in 0..70 step 5) {
+        // Сжатие монотонно (до 45 %).
+        for (ms in 0..95 step 5) {
             val v = FaceLife.blinkCurve(ms.toFloat())
             assertTrue(v >= prev)
             prev = v
@@ -134,8 +134,8 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `no blinking while asleep or petted`() {
-        for (mood in listOf(FaceMood.SLEEP, FaceMood.PETTED, FaceMood.YAWN)) {
+    fun `no blinking while thinking or confused - as the prototype blink loop`() {
+        for (mood in listOf(FaceMood.THINKING, FaceMood.CONFUSED)) {
             val e = engine()
             e.director.forcedMood = mood
             e.frames(10)
@@ -196,25 +196,15 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `surprise while speaking keeps the mouth to the speech, in silence opens an o`() {
-        val e = engine(FakeAudio(playback = 0f))
-        e.inputs.emotion = FaceEmotion.SURPRISED
-        e.inputs.activity = FaceActivity.SPEAKING
-        e.frames(90)
-        assertEquals(0f, e.target(P.MOUTH_OPEN), 1e-4f)
-        e.inputs.activity = FaceActivity.IDLE
-        e.frames(90)
-        assertTrue(e.target(P.MOUTH_OPEN) > 0.2f)
-        assertTrue(e.pose[P.MOUTH_OPEN] > 0.2f)
-    }
-
-    @Test
-    fun `thinking emotion at rest looks up like thinking`() {
+    fun `server emotion does not change the face - the prototype shows a mood after the answer`() {
         val e = engine()
         e.inputs.emotion = FaceEmotion.THINKING
-        var up = 0
-        e.frames(600) { if (it.pose[P.GAZE_Y] < -0.3f) up++ }
-        assertTrue("frames looking up: $up of 600", up > 450)
+        e.frames(120)
+        assertEquals(ProtoExpr.NEUTRAL, e.pose.expr)
+        e.inputs.activity = FaceActivity.SPEAKING
+        e.inputs.emotion = FaceEmotion.HAPPY
+        e.frames(60)
+        assertEquals(ProtoExpr.SPEAK, e.pose.expr)
     }
 
     @Test
@@ -294,46 +284,55 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `sleep closes the eyes and breathes slowly`() {
+    fun `screensaver never sleeps - eyes open, wandering, sometimes bored, curious or happy`() {
         val e = engine()
         e.inputs.awake = false
-        e.frames(60 * 8)
+        val seen = mutableSetOf<ProtoExpr>()
+        var moved = 0
+        e.frames(60 * 90) {
+            seen += it.pose.expr
+            if (abs(it.pose[P.GAZE_X]) > 0.3f) moved++
+        }
         assertEquals(FaceMood.SLEEP, e.director.mood)
-        assertTrue(e.pose[P.OPEN_L] < 0.02f && e.pose[P.OPEN_R] < 0.02f)
-        assertEquals(0.15f, e.springValue(P.BREATH_RATE), 0.02f)
-        assertTrue(e.pose[P.ZZZ] > 0.9f)
+        assertTrue("seen $seen", ProtoExpr.NEUTRAL in seen && seen.any { it == ProtoExpr.BORED || it == ProtoExpr.WIDE || it == ProtoExpr.HAPPY })
+        assertTrue("eyes wander: $moved", moved > 60)
+        assertTrue(e.pose[P.ZZZ] < 0.01f)
+        e.inputs.awake = true
+        e.frames(30)
+        assertEquals(ProtoExpr.NEUTRAL, e.pose.expr)
     }
 
     @Test
-    fun `happy entry bounces the body, reduced motion does not`() {
+    fun `a new expression pops in - exprIn starts at the change`() {
         val e = engine()
         e.frames(30)
         e.cue(FaceCue.ARRIVED)
-        var peak = 0f
-        e.frames(30) { peak = maxOf(peak, abs(it.pose[P.SQUASH])) }
-        assertTrue("squash peak $peak", peak > 0.02f)
-
-        val calm = engine()
-        calm.reducedMotion = true
-        calm.frames(30)
-        calm.cue(FaceCue.ARRIVED)
-        calm.frames(30) { assertEquals(0f, it.pose[P.SQUASH], 1e-4f) }
+        e.frames(1)
+        assertEquals(ProtoExpr.HAPPY, e.pose.expr)
+        assertTrue(e.pose.nowMs - e.pose.exprSince in 0L..40L)
+        val since = e.pose.exprSince
+        e.frames(30)
+        assertEquals("same expression - no new pop", since, e.pose.exprSince)
     }
 
     @Test
-    fun `error shakes the head no`() {
-        val e = engine()
-        e.frames(30)
-        e.cue(FaceCue.ERROR)
-        var sign = 0
-        var flips = 0
-        e.frames(60) {
-            val s = it.springValue(P.SHAKE)
-            val now = if (s > 1f) 1 else if (s < -1f) -1 else 0
-            if (now != 0 && sign != 0 && now != sign) flips++
-            if (now != 0) sign = now
+    fun `moods of the prototype - error sad, costume reactions, offline dizzy`() {
+        val cases = mapOf(
+            FaceCue.ERROR to ProtoExpr.SAD,
+            FaceCue.COSTUME_HAPPY to ProtoExpr.HAPPY,
+            FaceCue.COSTUME_BLUSH to ProtoExpr.BLUSH,
+            FaceCue.COSTUME_WIDE to ProtoExpr.WIDE,
+            FaceCue.COSTUME_SPARKLE to ProtoExpr.SPARKLE,
+            FaceCue.OFFLINE to ProtoExpr.DIZZY,
+            FaceCue.MOOD_CONFUSED to ProtoExpr.CONFUSED,
+        )
+        for ((cue, expr) in cases) {
+            val e = engine()
+            e.frames(30)
+            e.cue(cue)
+            e.frames(2)
+            assertEquals("$cue", expr, e.pose.expr)
         }
-        assertTrue("shake swings: $flips", flips >= 1)
     }
 
     @Test

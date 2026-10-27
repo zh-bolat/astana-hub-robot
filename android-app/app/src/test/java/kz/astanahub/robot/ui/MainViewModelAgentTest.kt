@@ -552,10 +552,10 @@ class MainViewModelAgentTest {
         assertFalse(vm.state.value.offline)
     }
 
-    // --- лицо во время ответа (функция mynbay) ---
+    // --- лицо во время ответа (прототип `autoFace`) ---
 
     @Test
-    fun `answer to a menu question switches to the face, touch returns the menu without stopping speech`() = runTest(dispatcher) {
+    fun `answer to a menu question switches to the face, swipe returns the menu without stopping speech`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Phrase("Кафе на первом этаже."))
             delay(500)
@@ -570,11 +570,11 @@ class MainViewModelAgentTest {
         assertEquals(Phase.SPEAKING, vm.state.value.phase)
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
         assertTrue(vm.state.value.answerOnFace)
-        // Тап по лицу в этот момент — назад в приложение, а не «замолчать».
-        assertEquals(FaceInputMapper.Tap.OPEN_MENU, FaceInputMapper.tap(vm.state.value))
+        // Прототип v9: на лице только глаза, тап — наш («перебить»), в приложение — свайпом.
+        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(vm.state.value))
 
         val stopsBefore = voice.stops
-        vm.openMenu() // касание лица
+        vm.openMenu() // свайп с лица
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
         advanceTimeBy(1_000); runCurrent()
         // Договорил обе фразы, а экран остался в меню — следующая фраза обратно не перекинула.
@@ -584,7 +584,7 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `legacy mode - answer is shown on the face, touch returns the menu`() = runTest(dispatcher) {
+    fun `legacy mode - answer is shown on the face, swipe returns the menu`() = runTest(dispatcher) {
         mode = ChatMode.LEGACY
         val vm = vm()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
