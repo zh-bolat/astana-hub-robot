@@ -344,6 +344,8 @@ fun RobotScreens(
                     FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob + robotShift, slotH, morph)
                     scaleX = morph[0] * miniPress
                     scaleY = morph[0] * miniPress
+                    face.renderer.layerScale = morph[0] * miniPress
+                    face.renderer.density = density.density
                     translationX = morph[1]
                     // Кивок в конце речи (прототип `nod`: +14 / −4 dp за .8 с) — и на лице, и в голове компаньона.
                     translationY = morph[2] + two.nodDp.floatValue * density.density

@@ -98,6 +98,17 @@ class FaceRenderer {
     var unit: Float = 1f
         private set
 
+    /**
+     * Масштаб слоя лица на экране (лицо во весь экран — 1, в голове компаньона — меньше) и плотность (px на dp):
+     * свечение прототипа (`drop-shadow` 6 / 18 px) одного размера в dp на любом масштабе — у маленьких глаз в голове
+     * оно относительно больше, как в прототипе. Пишет слой лица ([kz.astanahub.robot.ui.screen.RobotScreens]).
+     */
+    var layerScale: Float = 1f
+    var density: Float = 1f
+
+    /** Единиц поля прототипа в одном dp на экране (для свечения). */
+    private var unitsPerDp = 0.2f
+
     fun draw(canvas: Canvas, pose: FacePose, width: Float, height: Float) {
         val v = pose.v
         val u = min(width / FaceLayout.WIDTH, height / FaceLayout.HEIGHT)
@@ -110,6 +121,7 @@ class FaceRenderer {
         canvas.translate(width * 0.5f + v[P.HEAD_X] * u, height * 0.5f + v[P.HEAD_Y] * u)
         canvas.rotate(v[P.HEAD_TILT])
         val sc = u * v[P.HEAD_SCALE] * PROTO * (1f + v[P.POP])
+        unitsPerDp = density / (u * PROTO * layerScale.coerceAtLeast(0.05f))
         canvas.scale(sc * (1f + v[P.SQUASH]), sc * (1f - v[P.SQUASH]))
         // Теперь единица — единица поля прототипа, (0, 0) — его центр (100, 50).
 
@@ -250,10 +262,10 @@ class FaceRenderer {
     }
 
     private fun strokePath(canvas: Canvas, p: Path, width: Float, alpha: Float) {
-        for (i in HALO_WIDTH.indices) {
+        for (i in HALO_DP.indices) {
             halo.color = HALO_COLOR[i]
             halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
-            halo.strokeWidth = width + HALO_WIDTH[i]
+            halo.strokeWidth = width + HALO_DP[i] * unitsPerDp
             canvas.drawPath(p, halo)
         }
         stroke.strokeWidth = width
@@ -265,10 +277,10 @@ class FaceRenderer {
      * несколько полупрозрачных обводок по контуру — мягкий ореол без размытия (дёшево, работает на любом GPU).
      */
     private fun glowFill(canvas: Canvas, p: Path, alpha: Float) {
-        for (i in HALO_WIDTH.indices) {
+        for (i in HALO_DP.indices) {
             halo.color = HALO_COLOR[i]
             halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
-            halo.strokeWidth = HALO_WIDTH[i]
+            halo.strokeWidth = HALO_DP[i] * unitsPerDp
             canvas.drawPath(p, halo)
         }
     }
@@ -336,8 +348,8 @@ class FaceRenderer {
         private const val BEAT_MS = 900L
         private const val SPIN_MS = 2_000L
 
-        /** Ореол: ширины обводки (единицы поля), цвета и прозрачность — два drop-shadow прототипа. */
-        private val HALO_WIDTH = floatArrayOf(1.6f, 3.4f, 6.4f, 10f)
+        /** Ореол: ширины обводки (dp на экране), цвета и прозрачность — два drop-shadow прототипа (6 и 18 px). */
+        private val HALO_DP = floatArrayOf(8f, 17f, 32f, 50f)
         private val HALO_ALPHA = floatArrayOf(0.32f, 0.2f, 0.12f, 0.06f)
         private val HALO_COLOR = intArrayOf(
             Color.rgb(58, 168, 245), Color.rgb(58, 168, 245), Color.rgb(40, 140, 240), Color.rgb(40, 140, 240),
