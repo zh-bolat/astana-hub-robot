@@ -1,7 +1,6 @@
 package kz.astanahub.robot.ui.screen
 
 import kz.astanahub.robot.backend.Citation
-import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.core.Lang
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -10,43 +9,39 @@ import org.junit.Test
 /** Плитки экрана 2, язык и подпись-источник. */
 class TilesTest {
 
-    private val questions = listOf(
-        QuickQuestion("cafe", "Где кафе?"),
-        QuickQuestion("wifi", "Какой пароль от Wi-Fi?"),
-        QuickQuestion("events", "Какие мероприятия сегодня?"),
-        QuickQuestion("hub", "Что такое Astana Hub?"),
-        QuickQuestion("toilet", "Где туалет?"),
+    private val ru = TileTexts(
+        where = "Где что находится", events = "Мероприятия", eventsQuestion = "Какие ближайшие мероприятия?",
+        about = "Об Astana Hub", aboutQuestion = "Расскажи про Astana Hub", wifi = "Wi-Fi и сервисы",
+        wifiQuestion = "Как подключиться к Wi-Fi?", faq = "Частые вопросы", look = "Что это?",
     )
 
     @Test
-    fun `home tiles - four questions, then all questions and look, as on the old screen`() {
-        val tiles = Tiles.home(questions, "Частые вопросы", "Что это?")
-        assertEquals(6, tiles.size)
-        assertEquals(listOf("Где кафе?", "Какой пароль от Wi-Fi?", "Какие мероприятия сегодня?", "Что такое Astana Hub?"), tiles.take(4).map { it.label })
-        assertEquals(TileAction.Ask("Где кафе?"), tiles[0].action)
+    fun `home tiles - the six topics of the prototype, each leads to our logic`() {
+        val tiles = Tiles.home(ru)
+        assertEquals(
+            listOf("Где что находится", "Мероприятия", "Об Astana Hub", "Wi-Fi и сервисы", "Частые вопросы", "Что это?"),
+            tiles.map { it.label },
+        )
+        assertEquals(TileAction.Where, tiles[0].action)
+        assertEquals(TileAction.Ask("Какие ближайшие мероприятия?", display = "Мероприятия"), tiles[1].action)
+        assertEquals(TileAction.Ask("Расскажи про Astana Hub", display = "Об Astana Hub"), tiles[2].action)
+        assertEquals(TileAction.Ask("Как подключиться к Wi-Fi?", display = "Wi-Fi и сервисы"), tiles[3].action)
         assertEquals(TileAction.Faq, tiles[4].action)
         assertEquals(TileAction.Look, tiles[5].action)
-        assertEquals(listOf("q:cafe", "q:wifi", "q:events", "q:hub", "faq", "look"), tiles.map { it.key })
+        assertEquals(listOf("where", "events", "about", "wifi", "faq", "look"), tiles.map { it.key })
     }
 
     @Test
-    fun `glyphs by meaning - place, wifi, event, info`() {
-        val tiles = Tiles.home(questions, "F", "L")
-        assertEquals(listOf(TileGlyph.PLACE, TileGlyph.WIFI, TileGlyph.EVENT, TileGlyph.INFO, TileGlyph.FAQ, TileGlyph.LOOK), tiles.map { it.glyph })
+    fun `glyphs as the prototype - place, event, info, wifi, help, camera`() {
+        assertEquals(
+            listOf(TileGlyph.PLACE, TileGlyph.EVENT, TileGlyph.INFO, TileGlyph.WIFI, TileGlyph.FAQ, TileGlyph.LOOK),
+            Tiles.home(ru).map { it.glyph },
+        )
         assertEquals(TileGlyph.CHAT, Tiles.glyphFor("Расскажи анекдот"))
     }
 
     @Test
-    fun `few questions from the server - no empty tiles`() {
-        val tiles = Tiles.home(questions.take(1), "F", "L")
-        assertEquals(listOf("Где кафе?", "F", "L"), tiles.map { it.label })
-        assertEquals(listOf("F", "L"), Tiles.home(emptyList(), "F", "L").map { it.label })
-    }
-
-    @Test
-    fun `labels follow the language (passed in localized)`() {
-        val kk = Tiles.home(emptyList(), "Жиі қойылатын сұрақтар", "Бұл не?")
-        assertEquals(listOf("Жиі қойылатын сұрақтар", "Бұл не?"), kk.map { it.label })
+    fun `languages`() {
         assertEquals(listOf(Lang.RU, Lang.KK, Lang.EN), Tiles.languages.map { it.first })
         assertEquals(listOf("RU", "KZ", "EN"), Tiles.languages.map { it.second })
     }

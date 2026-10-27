@@ -212,7 +212,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { container.costume.costume.collect { two.costume = it } }
         two.textInput = !BuildConfig.IS_ROBOT
         two.diagnosticsHold = container.diagnostics.access != DiagAccess.DISABLED
-        two.buildLabel = getString(
+        // Подпись сборки — только эмулятор (в прототипе её нет; на роботе версия — в диагностике).
+        two.buildLabel = if (BuildConfig.IS_ROBOT) "" else getString(
             R.string.build_label, getString(R.string.flavor_name), BuildConfig.BUILD_TYPE, BuildConfig.VERSION_NAME,
         )
         // Шрифт грузится заранее и не на главном потоке: первый показ текста не теряет кадр на чтении .ttf.
@@ -265,8 +266,12 @@ class MainActivity : AppCompatActivity() {
 
     private val actions = object : ScreenTwoActions {
         override fun onTile(tile: Tile) {
+            // Прототип `.tile.sel`: нажатая плитка подсвечена, пока не пришёл ответ.
+            two.selectedTile = tile.key
+            if (tile.action == TileAction.Look) lookRequestedAt = SystemClock.uptimeMillis()
             when (val a = tile.action) {
-                is TileAction.Ask -> viewModel.submitButton(a.text)
+                is TileAction.Ask -> viewModel.submitButton(a.text, a.display)
+                TileAction.Where -> viewModel.whereListSoon(tile.label)
                 TileAction.Faq -> viewModel.openFaq()
                 TileAction.Look -> viewModel.lookAround()
             }
@@ -319,7 +324,10 @@ class MainActivity : AppCompatActivity() {
             showHomeView()
         }
 
-        override fun onLook() = viewModel.lookAround()
+        override fun onLook() {
+            lookRequestedAt = SystemClock.uptimeMillis()
+            viewModel.lookAround()
+        }
 
         override fun onPlace(index: Int) {
             placeChipTargets.getOrNull(index)?.let(viewModel::askWhere)
@@ -465,6 +473,11 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPinCancel() = closePin()
     }
+
+    /** «Что это?» нажато (uptime, мс) и id последнего ответа робота на тот момент: карточка ожидания до нового ответа. */
+    private var lookRequestedAt = Long.MIN_VALUE / 2
+    private var selectedSawBusy = false
+    private var lookReplyFrom = 0L
 
     /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип): id последней реплики
      *  на момент «В начало» (id в чате только растут — и после сброса чата, и когда старые реплики уходят за лимит). */
@@ -639,11 +652,24 @@ class MainActivity : AppCompatActivity() {
         two.phrase = state.subtitle ?: state.answer?.takeIf { state.phase == Phase.SPEAKING && it.isNotBlank() }
         two.thinking = state.processing
         two.busy = ScreenTwoMapper.busy(state)
-        two.tilesEnabled = !state.processing
-        val tilesKey = listOf(lang, state.quickQuestions)
+        // Прототип: плитки не гаснут, пока робот думает (выбранная подсвечена `.sel`).
+        two.tilesEnabled = true
+        val tilesKey = listOf(lang)
         if (tilesFor != tilesKey) {
             tilesFor = tilesKey
-            two.tiles = Tiles.home(state.quickQuestions, str(R.string.tile_faq, lang), str(R.string.action_look, lang))
+            two.tiles = Tiles.home(
+                kz.astanahub.robot.ui.screen.TileTexts(
+                    where = str(R.string.tile_where, lang),
+                    events = str(R.string.tile_events, lang),
+                    eventsQuestion = str(R.string.tile_events_q, lang),
+                    about = str(R.string.tile_about, lang),
+                    aboutQuestion = str(R.string.tile_about_q, lang),
+                    wifi = str(R.string.tile_wifi, lang),
+                    wifiQuestion = str(R.string.tile_wifi_q, lang),
+                    faq = str(R.string.tile_faq, lang),
+                    look = str(R.string.action_look, lang),
+                ),
+            )
         }
         two.faq = ScreenTwoMapper.faq(
             state,
@@ -662,17 +688,51 @@ class MainActivity : AppCompatActivity() {
             Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
             else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
         }
-        val home = state.screen == Screen.HOME && (chatLog.items.lastOrNull()?.id ?: 0L) <= homeLastId &&
-            state.partialQuestion.isNullOrBlank() && !state.processing
+        // Прототип: справа меняется, только когда пошёл ответ — пока посетитель говорит и робот думает, остаётся
+        // приветствие (или прежний ответ); после «В начало» — приветствие до нового ответа.
+        val lastReply = chatLog.items.lastOrNull { it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }?.id ?: 0L
+        val home = state.screen != Screen.FAQ && lastReply <= homeLastId && (state.screen == Screen.HOME || state.answer == null)
         two.homeView = home
         two.chatFrom = homeLastId
+        two.speaking = state.phase == Phase.SPEAKING
+        // «Услышанное» (прототип `.heard`): пока посетитель говорит — «…его слова (без закрывающей кавычки); пока робот
+        // думает — «вопрос».
+        val partial = state.partialQuestion?.takeIf { it.isNotBlank() }
+        two.heard = when {
+            partial != null -> "«$partial"
+            (state.phase == Phase.THINKING || state.phase == Phase.LOOKING) && state.screen != Screen.FAQ &&
+                !state.question.isNullOrBlank() -> "«${state.question}»"
+            else -> null
+        }
+        // «Что это?» ждёт ответа — справа карточка со снимком (прототип `look`).
+        val lookAsked = SystemClock.uptimeMillis() - lookRequestedAt < LOOK_PENDING_MS && state.processing
+        two.lookWaiting = lastReply <= lookReplyFrom && (state.phase == Phase.LOOKING || lookAsked || (two.photo != null && two.photoItemId < 0 && state.processing))
+        if (!state.processing && state.phase != Phase.LOOKING) lookRequestedAt = Long.MIN_VALUE / 2
+        if (lookRequestedAt < 0) lookReplyFrom = lastReply
+        // «Что это?» (прототип `look`): «Смотрю…», глаза «смотрят», строки «услышанное» нет.
+        if (two.lookWaiting) {
+            two.status = str(R.string.status_looking, lang)
+            two.heard = null
+            face.engine.inputs.activity = kz.astanahub.robot.ui.face.FaceActivity.LOOKING
+        }
+        // Плитка подсвечена, пока не пришёл ответ (или робот не освободился без ответа).
+        if (state.processing) selectedSawBusy = true
+        if (!home || (selectedSawBusy && !state.processing && state.phase != Phase.THINKING)) {
+            two.selectedTile = null
+            selectedSawBusy = false
+        }
         bindLookPhoto(state.lookPhoto)
         two.canGoBack = !home || state.screen != Screen.HOME
         // Чипы мест под ответом «где» (кроме места из ответа).
-        placeChipTargets = if (!home && (state.whereIs != null || state.guideTarget != null)) {
-            state.mapPlaces.filter { it.id != state.guideTarget?.id }.take(MAX_PLACE_CHIPS)
-        } else {
-            emptyList()
+        placeChipTargets = when {
+            home -> emptyList()
+            // «Где что находится» (прототип `placeList`): все места карты.
+            state.placeList -> state.mapPlaces.distinctBy { WayFinder.displayName(it, lang) }
+            state.whereIs != null || state.guideTarget != null -> state.mapPlaces
+                .filter { it.id != state.guideTarget?.id }
+                .distinctBy { WayFinder.displayName(it, lang) }
+                .take(MAX_PLACE_CHIPS)
+            else -> emptyList()
         }
         two.placeChips = placeChipTargets.map { WayFinder.displayName(it, lang) }
         two.faceAvailable = container.chatSettings.mode.value.usesAgent
@@ -716,6 +776,7 @@ class MainActivity : AppCompatActivity() {
         stopTrip = str(R.string.action_stop, lang), // прототип: «Стоп» и на слое поездки
         guide = str(R.string.action_guide_short, lang),
         arrived = str(R.string.island_arrived, lang),
+        arrivedSub = str(R.string.island_arrived_sub, lang),
         failed = str(R.string.island_failed, lang),
         stopped = str(R.string.island_stopped, lang),
         meters = str(R.string.island_meters, lang),
@@ -728,7 +789,7 @@ class MainActivity : AppCompatActivity() {
         greetTitle = str(R.string.greet_title, lang),
         greetSub = str(R.string.greet_sub, lang),
         tilesTitle = str(R.string.tiles_title, lang),
-        askVoice = str(R.string.action_ask_voice, lang),
+        askVoice = str(R.string.hint_voice, lang), // прототип `hint`: «Просто скажите вопрос, я слушаю»
         stop = str(R.string.action_stop, lang),
         inputHint = str(R.string.input_hint, lang),
         faqTitle = str(R.string.faq_title, lang),
@@ -751,6 +812,7 @@ class MainActivity : AppCompatActivity() {
         home = str(R.string.action_home, lang),
         menu = str(R.string.action_menu, lang),
         look = str(R.string.action_look, lang),
+        snapshot = str(R.string.look_snapshot, lang),
         costumes = listOf(
             str(R.string.costume_default, lang),
             str(R.string.costume_kazakh, lang),
@@ -853,6 +915,9 @@ class MainActivity : AppCompatActivity() {
         const val PIN_TIMEOUT_MS = 60_000L
         const val MAX_PLACE_CHIPS = 5
 
+        /** «Что это?»: сколько ждём начала ответа с карточкой-снимком. */
+        const val LOOK_PENDING_MS = 30_000L
+
         /** Пузырь с последней фразой и эмодзи после речи: max(8 с, 60 мс × длина) — прототип `fin`. */
         const val LINGER_MIN_MS = 8_000L
         const val LINGER_MS_PER_CHAR = 60L
@@ -861,7 +926,7 @@ class MainActivity : AppCompatActivity() {
         const val SPEECH_CUT_GRACE_MS = 400L
         const val LOOK_THUMB_WIDTH = 480
         const val CLOSE_DELAY_MS = 1_500L
-        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
+        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_medium, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
         const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L

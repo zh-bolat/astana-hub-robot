@@ -139,6 +139,8 @@ data class MainUiState(
     val mapPlaces: List<Place> = emptyList(),
     /** Снимок «Что это?» (прототип: кадр в карточке ответа); null — новый вопрос, сон, новый разговор. */
     val lookPhoto: LookPhoto? = null,
+    /** Ответ «Где что находится»: под карточкой — чипы всех мест карты (прототип `placeList`). */
+    val placeList: Boolean = false,
 ) {
     /** Заставка после бездействия (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
@@ -240,6 +242,7 @@ class MainViewModel(
         val question: String?,
         val answer: String?,
         val guideTarget: Place?,
+        val placeList: Boolean = false,
     )
     private val history = ArrayDeque<Snapshot>()
 
@@ -718,10 +721,13 @@ class MainViewModel(
     /** Вопрос текстом (поле ввода на эмуляторе) или финальный ASR: ответ — на экране ответа. */
     fun submit(text: String) = submitInternal(text, faqId = null)
 
-    /** Плитка или кнопка частого вопроса. */
-    fun submitButton(text: String) = submitInternal(text, faqId = null)
+    /**
+     * Плитка или кнопка частого вопроса. [display] — что показать строкой «вопрос» (прототип: у плиток-тем — название
+     * темы «Мероприятия», у чипа места — «Кафе»), серверу уходит [text].
+     */
+    fun submitButton(text: String, display: String? = null) = submitInternal(text, faqId = null, display = display)
 
-    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой. */
+    /** Чип места (прототип): «где X» на языке экрана — тот же путь, что вопрос голосом или плиткой; строка «вопрос» — «X». */
     fun askWhere(place: Place) {
         val lang = _state.value.lang
         val name = WayFinder.displayName(place, lang)
@@ -731,10 +737,58 @@ class MainViewModel(
                 Lang.EN -> "Where is $name?"
                 else -> "Где $name?"
             },
+            display = name,
         )
     }
 
-    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false) {
+    /**
+     * Плитка «Где что находится» (прототип `placeList`): без сервера — «Куда вас проводить? Выберите место или назовите
+     * его.» и чипы всех мест карты под карточкой; чип — «где X» ([askWhere]) с направлением, метрами и «Проводить».
+     */
+    fun whereList(display: String) {
+        wake()
+        stopActivity()
+        remember()
+        val text = phrases.get(PhraseKey.WHERE_ASK, _state.value.lang)
+        _state.update {
+            it.copy(
+                screen = Screen.ANSWER, faqOpenId = null, question = display, partialQuestion = null, answer = text,
+                subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = true,
+            )
+        }
+        // Прототип: ответ темы — тоже на лице, когда робот заговорит (`showAnswer` → `autoFace`).
+        faceOnAnswer = true
+        requestJob = viewModelScope.launch { speakPhrases(PhraseSplitter.split(text), _state.value.lang) }
+    }
+
+    /** Прототип `tileTap`: «думаю» 700 мс с подсвеченной плиткой, потом ответ темы. */
+    fun whereListSoon(display: String) {
+        wake()
+        stopActivity()
+        val lang = _state.value.lang
+        requestJob = viewModelScope.launch {
+            setBusy(Phase.THINKING)
+            delay(WHERE_THINK_MILLIS)
+            setBusy(null)
+            if (_state.value.lang == lang) whereList(display)
+        }
+    }
+
+    /** Сказать фразу экрана (вступление частых вопросов): пузырь субтитров, в разговор не пишется. */
+    private fun sayAside(text: String) {
+        val lang = _state.value.lang
+        requestJob?.cancel()
+        requestJob = viewModelScope.launch {
+            _state.update { it.copy(subtitle = text) }
+            try {
+                speakPhrases(PhraseSplitter.split(text), lang)
+            } finally {
+                if (_state.value.subtitle == text) _state.update { it.copy(subtitle = null) }
+            }
+        }
+    }
+
+    private fun submitInternal(text: String, faqId: String?, lang: Lang? = null, fromVoice: Boolean = false, display: String? = null) {
         val question = text.trim()
         if (question.isEmpty()) {
             if (thinkingEarly) clearThinkingEarly(resetPhase = true)
@@ -770,8 +824,8 @@ class MainViewModel(
             try {
                 _state.update {
                     it.copy(
-                        question = question, partialQuestion = null, answer = null, subtitle = null, guideTarget = null,
-                        wayHint = null, citations = emptyList(), lookPhoto = null,
+                        question = display?.trim()?.takeIf(String::isNotEmpty) ?: question, partialQuestion = null, answer = null,
+                        subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = false,
                     )
                 }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
@@ -996,7 +1050,9 @@ class MainViewModel(
         if (_state.value.screen == Screen.FAQ) return
         stopActivity()
         remember()
-        _state.update { it.copy(screen = Screen.FAQ, faqPage = 0, faqOpenId = null) }
+        _state.update { it.copy(screen = Screen.FAQ, faqPage = 0, faqOpenId = null, placeList = false) }
+        // Прототип `openFaq`: робот читает вступление — «Вот частые вопросы. Нажмите на любой или спросите свой.»
+        sayAside(phrases.get(PhraseKey.FAQ_INTRO, _state.value.lang))
     }
 
     /** «Ещё вопросы»: следующая страница (по кругу). Текущую страницу можно вернуть кнопкой «Назад». */
@@ -1029,6 +1085,7 @@ class MainViewModel(
             it.copy(
                 screen = prev.screen, faqPage = prev.faqPage, faqOpenId = null,
                 question = prev.question, answer = prev.answer, guideTarget = prev.guideTarget, partialQuestion = null,
+                placeList = prev.placeList,
             )
         }
     }
@@ -1041,7 +1098,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null,
-                question = null, answer = null, guideTarget = null, partialQuestion = null,
+                question = null, answer = null, guideTarget = null, partialQuestion = null, placeList = false,
             )
         }
     }
@@ -1049,7 +1106,10 @@ class MainViewModel(
     /** Запомнить текущий экран для «Назад» (повтор того же экрана не копим). */
     private fun remember() {
         val s = _state.value
-        val snap = Snapshot(s.screen, s.faqPage, s.question.takeIf { s.screen == Screen.ANSWER }, s.answer.takeIf { s.screen == Screen.ANSWER }, s.guideTarget.takeIf { s.screen == Screen.ANSWER })
+        val snap = Snapshot(
+            s.screen, s.faqPage, s.question.takeIf { s.screen == Screen.ANSWER }, s.answer.takeIf { s.screen == Screen.ANSWER },
+            s.guideTarget.takeIf { s.screen == Screen.ANSWER }, s.placeList && s.screen == Screen.ANSWER,
+        )
         if (snap.screen == Screen.ANSWER && snap.answer == null) return // ответ ещё не пришёл — возвращаться некуда
         if (history.lastOrNull() == snap) return
         history.addLast(snap)
@@ -1686,7 +1746,7 @@ class MainViewModel(
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
                 answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
-                lookPhoto = null,
+                lookPhoto = null, placeList = false,
             )
         }
         if (!langChosenExplicitly && lang != null && lang != _state.value.lang) {
@@ -2246,6 +2306,9 @@ class MainViewModel(
 
         /** Меню без касаний столько — назад к лицу (agent). */
         const val MENU_IDLE_MILLIS = 90_000L
+
+        /** «Где что находится»: «думаю» перед ответом, как в прототипе (`tileTap` → 700 мс). */
+        const val WHERE_THINK_MILLIS = 700L
 
         /** Эмоция держится после ответа / события, потом лицо спокойное. */
         const val EMOTION_LINGER_MILLIS = 6_000L

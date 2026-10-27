@@ -5,7 +5,7 @@
     <string name="status_listening">Listening…</string>
     <string name="status_thinking">Thinking…</string>
     <string name="status_looking">Looking…</string>
-    <string name="status_navigating">Guiding…</string>
+    <string name="status_navigating">Leading the way</string>
     <string name="action_guide">Take me there: %1$s</string>
     <string name="status_speaking">Speaking…</string>
     <string name="offline_badge">No connection to the server</string>
@@ -20,7 +20,7 @@
     <string name="label_answer">Answer</string>
 
     <string name="phrase_no_connection">Sorry, there is no connection to the server right now. I can still tell you where things are without the internet.</string>
-    <string name="phrase_not_heard">Sorry, I didn\'t catch that. Please say it again.</string>
+    <string name="phrase_not_heard">Sorry, I didn’t catch that. Please say it again.</string>
     <string name="phrase_camera_unavailable">Sorry, the camera is not available right now.</string>
     <string name="phrase_cant_speak">Sorry, I can\'t speak right now. The answer is on the screen.</string>
     <string name="phrase_looking">Let me take a look.</string>
@@ -53,13 +53,13 @@
     <string name="action_ask_voice">Ask by voice</string>
     <string name="chat_you">You</string>
     <string name="tiles_title">Quick questions</string>
-    <string name="island_arrived">We\'re here: %1$s</string>
+    <string name="island_arrived">We are here!</string>
     <string name="island_failed">Couldn\'t get there</string>
     <string name="island_stopped">Stopped</string>
     <string name="island_meters">%1$d m</string>
     <string name="island_near">nearby</string>
-    <string name="exit_pin_sub">Only staff can exit. Enter the password.</string>
-    <string name="exit_pin_wrong">Wrong password. Attempts left: %1$d</string>
+    <string name="exit_pin_sub">Only staff can exit. Enter the PIN.</string>
+    <string name="exit_pin_wrong">Wrong PIN. Attempts left: %1$d</string>
     <string name="exit_pin_locked">Too many attempts. Try again in %1$d min.</string>
     <string name="app_closed">App closed</string>
     <string name="app_closed_sub">On the robot, the regular Android screen appears here.</string>
@@ -68,4 +68,16 @@
     <string name="costume_kazakh">Kazakh</string>
     <string name="costume_business">Developer</string>
     <string name="costume_galaxy">Astronaut</string>
+    <string name="tile_where">Find a place</string>
+    <string name="tile_events">Events</string>
+    <string name="tile_about">About Astana Hub</string>
+    <string name="tile_wifi">Wi-Fi &amp; services</string>
+    <string name="status_unclear">Didn’t catch that</string>
+    <string name="faq_intro">Here are common questions. Tap any of them or ask your own.</string>
+    <string name="island_arrived_sub">If you need anything else, just ask.</string>
+    <string name="where_ask">Where should I take you? Pick a place or say its name.</string>
+    <string name="look_snapshot">camera snapshot</string>
+    <string name="tile_events_q">What events are coming up at Astana Hub?</string>
+    <string name="tile_about_q">Tell me about Astana Hub</string>
+    <string name="tile_wifi_q">How do I connect to Wi-Fi and what services are here?</string>
 </resources>

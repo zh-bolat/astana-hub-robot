@@ -62,6 +62,12 @@ fun Companion(
     onSwipeCostume: (Int) -> Unit,
     modifier: Modifier = Modifier,
     reducedMotion: Boolean = false,
+    /** Сигнал «собраться» (смена / повторный выбор костюма): каждое новое значение — сборка заново. */
+    assemble: Int = 0,
+    /** Кивок экрана головы (dp, прототип `nod`). */
+    nod: MutableFloatState? = null,
+    /** Видимость корпуса, тела и наряда на переходе лицо ↔ страница (экран головы — у слоя лица). */
+    bodyAlpha: () -> Float = { 1f },
 ) {
     val time = remember { mutableLongStateOf(0L) }
     LaunchedEffect(reducedMotion) {
@@ -72,9 +78,10 @@ fun Companion(
     val poseNow by rememberUpdatedState(pose)
     val costumeNow by rememberUpdatedState(costume)
     // «Сборка» при смене костюма.
+    val assembleSignal = assemble
     val assemble = remember { Animatable(1f) }
-    LaunchedEffect(costume) {
-        if (reducedMotion) return@LaunchedEffect
+    LaunchedEffect(assembleSignal) {
+        if (reducedMotion || assembleSignal == 0) return@LaunchedEffect
         assemble.snapTo(0f)
         assemble.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 260f))
     }
@@ -107,6 +114,7 @@ fun Companion(
                 translationX = drag.value * density.density
                 rotationZ = (drag.value / 80f * 6f)
                 transformOrigin = TransformOrigin(0.5f, 0.85f)
+                alpha = bodyAlpha()
             },
     ) {
         Image(painterResource(R.drawable.mf_bot_glow), null, Modifier.fillMaxSize().graphicsLayer { alpha = assemble.value.coerceIn(0f, 1f) })

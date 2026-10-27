@@ -2,7 +2,6 @@ package kz.astanahub.robot.ui.face
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -42,6 +41,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
@@ -66,8 +67,10 @@ data class IslandTexts(
     val tripTitle: String = "%1\$s",
     val stopTrip: String = "",
     val guide: String = "",
-    /** «Пришли: %1$s». */
+    /** «Мы на месте!» (прототип `arrived`; место — в речи). */
     val arrived: String = "%1\$s",
+    /** «Если нужно что-то ещё, просто спросите.» (прототип `arrivedSub`). */
+    val arrivedSub: String = "",
     val failed: String = "",
     val stopped: String = "",
     /** «%1$d м». */
@@ -150,7 +153,8 @@ private fun WhereCard(c: IslandContent.WhereIs, texts: IslandTexts, guideAvailab
 
 /**
  * Поездка и её итог — слой прототипа поверх лица (`.guide-layer`): светлый фон, синяя стрелка, «Иду к: Кафе»,
- * «Следуйте за мной» и тёмно-синий «Стоп»; итог — «Пришли: Кафе» / «Не получилось дойти» / «Остановились», затем слой
+ * «Следуйте за мной» и тёмно-синий «Стоп»; итог — «Мы на месте!» + «Если нужно что-то ещё, просто спросите.» /
+ * «Не получилось дойти» / «Остановились» (наши), затем слой
  * уходит (сроки — [IslandModel]). Фон касания не забирает (тап по лицу работает как прежде), «Стоп» — забирает.
  */
 @Composable
@@ -168,7 +172,29 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Brush.radialGradient(listOf(Color(0xFFF8FAFE), Color(0xFFE3E9F4)), radius = 1400f)),
+                // Прототип `.layer`: radial-gradient(1000 × 700 at 50 % 40 %, #FFF, #EDF1F8 60 %, #DEE5F1).
+                .drawWithCache {
+                    val rx = 1000.dp.toPx()
+                    val ry = 700.dp.toPx()
+                    val c = androidx.compose.ui.geometry.Offset(size.width * 0.5f, size.height * 0.4f)
+                    val brush = Brush.radialGradient(
+                        0f to Color.White,
+                        0.6f to Color(0xFFEDF1F8),
+                        1f to Color(0xFFDEE5F1),
+                        center = c,
+                        radius = rx,
+                    )
+                    onDrawBehind {
+                        drawRect(Color(0xFFDEE5F1))
+                        withTransform({ scale(1f, ry / rx, c) }) {
+                            drawRect(
+                                brush,
+                                topLeft = androidx.compose.ui.geometry.Offset(0f, c.y - c.y * rx / ry),
+                                size = androidx.compose.ui.geometry.Size(size.width, size.height * rx / ry),
+                            )
+                        }
+                    }
+                },
             contentAlignment = Alignment.Center,
         ) {
             AnimatedContent(
@@ -186,7 +212,7 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                     val dy by nudge.animateFloat(
                         0f,
                         1f,
-                        infiniteRepeatable(tween(NUDGE_MS / 2, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                        infiniteRepeatable(tween(NUDGE_MS / 2, easing = androidx.compose.animation.core.CubicBezierEasing(0.42f, 0f, 0.58f, 1f)), RepeatMode.Reverse),
                         label = "nudgeDy",
                     )
                     Image(
@@ -200,7 +226,7 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                     val (title, sub) = when (c) {
                         is IslandContent.Trip -> texts.tripTitle.format(c.place) to texts.follow
                         is IslandContent.Outcome -> when (c.kind) {
-                            TripOutcome.ARRIVED -> texts.arrived.format(c.place) to ""
+                            TripOutcome.ARRIVED -> texts.arrived.format(c.place) to texts.arrivedSub
                             TripOutcome.FAILED -> texts.failed to ""
                             TripOutcome.STOPPED -> texts.stopped to ""
                         }
@@ -209,7 +235,7 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                     BasicText(
                         title,
                         style = HubType.Display.copy(
-                            color = HubColors.Navy,
+                            color = HubColors.Ink,
                             fontSize = 72.sp,
                             lineHeight = 83.sp,
                             fontWeight = FontWeight.Bold,
@@ -221,7 +247,7 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
                     )
                     if (sub.isNotEmpty()) {
                         Spacer(Modifier.height(40.dp))
-                        BasicText(sub, style = HubType.Body.copy(color = HubColors.Muted, fontSize = 34.sp, lineHeight = 44.sp, textAlign = TextAlign.Center))
+                        BasicText(sub, style = HubType.Body.copy(color = HubColors.Muted, fontSize = 34.sp, lineHeight = 46.sp, textAlign = TextAlign.Center))
                     }
                     if (c is IslandContent.Trip) {
                         Spacer(Modifier.height(60.dp))

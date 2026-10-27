@@ -51,6 +51,7 @@ import kz.astanahub.robot.ui.face.faceSurface
 import kz.astanahub.robot.ui.face.GuideLayer
 import kz.astanahub.robot.ui.design.HubType
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
@@ -221,6 +222,17 @@ fun RobotScreens(
             label = "miniPress",
         )
         val galaxy = two.costume == Costume.GALAXY
+        // Кивок экрана головы в конце речи (прототип `nod`, .8 с ease-in-out: 30 % — +14, 60 % — −4).
+        LaunchedEffect(two.nod) {
+            if (two.nod == 0 || reduced) return@LaunchedEffect
+            val nod = Animatable(0f)
+            nod.animateTo(0f, keyframes {
+                durationMillis = NOD_MS
+                14f at (NOD_MS * 0.3f).toInt() using NOD_EASE
+                -4f at (NOD_MS * 0.6f).toInt() using NOD_EASE
+                0f at NOD_MS using NOD_EASE
+            }) { two.nodDp.floatValue = value }
+        }
 
         // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
         // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
@@ -230,6 +242,7 @@ fun RobotScreens(
             actions = actions,
             progress = ::visual,
             interactive = settled,
+            opening = { targetNow == 1f },
             modifier = Modifier
                 .graphicsLayer {
                     translationX = if (visual() > 1f) -(visual() - 1f) * w else 0f
@@ -276,9 +289,10 @@ fun RobotScreens(
             val t = if (mini < 0.999f) ((1f - s) / (1f - mini)).coerceIn(0f, 1f) else pc
             val shift = if (p < 0f) -p * w else 0f
             val left = screenRect[0] * t + shift
-            val top = screenRect[1] * t
+            // Экран головы опускается вместе с роботом, пока под ним пузырь субтитров.
+            val top = (screenRect[1] + two.robotShift.floatValue * density.density) * t
             val right = w + (screenRect[0] + screenRect[2] - w) * t + shift
-            val bottom = h + (screenRect[1] + screenRect[3] - h) * t
+            val bottom = h + (screenRect[1] + two.robotShift.floatValue * density.density + screenRect[3] - h) * t
             val r = screenRadius * t
             drawRoundRect(
                 color = Color.Black,
@@ -326,11 +340,13 @@ fun RobotScreens(
                 .graphicsLayer {
                     // Глаза в экране головы компаньона двигаются вместе с её покачиванием.
                     val bob = two.headBob.floatValue * density.density * visual().coerceIn(0f, 1f)
-                    FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob, slotH, morph)
+                    val robotShift = two.robotShift.floatValue * density.density
+                    FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob + robotShift, slotH, morph)
                     scaleX = morph[0] * miniPress
                     scaleY = morph[0] * miniPress
                     translationX = morph[1]
-                    translationY = morph[2]
+                    // Кивок в конце речи (прототип `nod`: +14 / −4 dp за .8 с) — и на лице, и в голове компаньона.
+                    translationY = morph[2] + two.nodDp.floatValue * density.density
                     transformOrigin = TransformOrigin.Center
                     // Под диалогом выхода — тоже за «стеклом».
                     alpha = 1f - 0.6f * blur
@@ -478,6 +494,10 @@ private val STAR_COLORS = listOf(Color.White, Color.White, Color(0xFFC8D7FF), Co
 /** Космос на экране лица: эллипс свечения (прототип: 900 × 600 px). */
 private const val SPACE_RX = 900
 private const val SPACE_RY = 600
+
+/** Кивок экрана головы (прототип `nod`). */
+private const val NOD_MS = 800
+private val NOD_EASE = androidx.compose.animation.core.CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 
 /** Переход лицо ↔ приложение без пальца (прототип `morph`: 900 мс, cubic-bezier(.45, 0, .15, 1)). */
 private const val MORPH_MS = 900

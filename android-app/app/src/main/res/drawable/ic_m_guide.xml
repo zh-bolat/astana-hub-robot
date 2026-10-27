@@ -1,12 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Экран 2: «Проводить» — монохромная линия (белый штрих; цвет задаёт tint), сетка 24. -->
+<!-- Значок прототипа (`IC.nav` в docs/design/robot-mvp.html): Material с заливкой, сетка 24; цвет задаёт tint. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
     <path
-        android:pathData="M5,12h13.5M12.5,6l6,6l-6,6"
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.7"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
 </vector>
