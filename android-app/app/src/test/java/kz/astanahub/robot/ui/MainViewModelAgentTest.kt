@@ -443,16 +443,14 @@ class MainViewModelAgentTest {
     // --- режимы экрана, человек, приветствие ---
 
     @Test
-    fun `menu opens by button and returns to the face after 30 s`() = runTest(dispatcher) {
+    fun `menu opens by swipe and stays - no timer back to the face, swipe back to the face`() = runTest(dispatcher) {
         chat { emit(done) }
         val vm = vm()
         vm.openMenu()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
-        advanceTimeBy(MainViewModel.MENU_IDLE_MILLIS - 1_000); runCurrent()
+        // MF5: прежний таймер (90 с) больше не возвращает к лицу.
+        advanceTimeBy(150_000); runCurrent()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
-        advanceTimeBy(2_000); runCurrent()
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        vm.openMenu()
         vm.showFace()
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
     }
@@ -555,10 +553,10 @@ class MainViewModelAgentTest {
         assertFalse(vm.state.value.offline)
     }
 
-    // --- лицо во время ответа (прототип `autoFace`) ---
+    // --- ответ там, где посетитель (MF5: без прототипного `autoFace`) ---
 
     @Test
-    fun `answer to a menu question switches to the face, swipe returns the menu without stopping speech`() = runTest(dispatcher) {
+    fun `answer to a menu question stays on the page, speech is not cut, nothing switches the screen`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Phrase("Кафе на первом этаже."))
             delay(500)
@@ -571,32 +569,30 @@ class MainViewModelAgentTest {
         assertEquals(ScreenMode.MENU, vm.state.value.mode) // пока думает — меню на месте
         advanceTimeBy(50); runCurrent()
         assertEquals(Phase.SPEAKING, vm.state.value.phase)
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        assertTrue(vm.state.value.answerOnFace)
-        // MF4: тап по лицу больше не перебивает — в приложение свайпом, остановить — «Стоп» на странице.
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
 
         val stopsBefore = voice.stops
-        vm.openMenu() // свайп с лица
-        assertEquals(ScreenMode.MENU, vm.state.value.mode)
         advanceTimeBy(1_000); runCurrent()
-        // Договорил обе фразы, а экран остался в меню — следующая фраза обратно не перекинула.
+        // Договорил обе фразы на странице — экран не менялся.
         assertEquals(listOf("Кафе на первом этаже.", "Проводить вас?"), voice.spoken)
         assertEquals(stopsBefore, voice.stops)
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
     }
 
     @Test
-    fun `legacy mode - answer is shown on the face, swipe returns the menu`() = runTest(dispatcher) {
+    fun `legacy mode - answer stays on the page, swipes go both ways`() = runTest(dispatcher) {
         mode = ChatMode.LEGACY
         val vm = vm()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
         vm.submitButton("Что такое Astana Hub?")
         advanceTimeBy(50); runCurrent()
         assertEquals(listOf("Ответ ask."), voice.spoken)
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        vm.openMenu()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
         advanceUntilIdle()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        vm.showFace()
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.openMenu()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
     }
 
@@ -612,7 +608,6 @@ class MainViewModelAgentTest {
         vm.submit("Есть коворкинг?")
         advanceTimeBy(50); runCurrent()
         assertEquals(Phase.SPEAKING, vm.state.value.phase)
-        assertFalse(vm.state.value.answerOnFace)
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
     }
 }

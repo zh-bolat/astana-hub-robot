@@ -150,14 +150,14 @@ fun RobotScreens(
     LaunchedEffect(target) {
         val h = held
         if (h != null) {
-            // Режим сменился, пока палец держит экран (началась поездка, таймер меню): источник истины — ViewModel.
+            // Режим сменился, пока палец держит экран: источник истины — ViewModel.
             gesture.abort()
             settle(h, target, null)
             return@LaunchedEffect
         }
         if (progress.isRunning && progress.targetValue == target) return@LaunchedEffect
-        // Смена режима без жеста (таймер меню, начало ответа, тап по голове): как `morph` прототипа — 900 мс
-        // по кривой (.45, 0, .15, 1); прерываемо касанием.
+        // Смена режима без жеста (MF5: только тап по голове робота на странице и системная «Назад»): как `morph`
+        // прототипа — 900 мс по кривой (.45, 0, .15, 1); прерываемо касанием.
         if (reduced) progress.snapTo(target) else progress.animateTo(target, tween(MORPH_MS, easing = MORPH_EASE))
     }
 
@@ -271,7 +271,7 @@ fun RobotScreens(
                         drag(dragX.floatValue, w, locked = false)
                     },
                     orientation = Orientation.Horizontal,
-                    // В поездке экран 2 не тянется (его и нет: ViewModel ведёт к лицу).
+                    // В поездке экран 2 не тянется: поверх него слой поездки.
                     enabled = menuOpenNow && !two.exitConfirm && !screen.traveling,
                     onDragStarted = { dragX.floatValue = 0f },
                     onDragStopped = { velocity -> release(velocity, w, allowOpen = true) },
@@ -411,11 +411,13 @@ fun RobotScreens(
                 visible = screenOne && !screen.traveling && screen.island == null,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = FACE_HINT_TOP),
             )
-            // Поездка — светлый слой прототипа поверх лица (стрелка, «Иду к…», «Стоп»), «где» — карточка внизу.
+            // Поездка — светлый слой прототипа поверх любого экрана (стрелка, «Иду к…», «Стоп»; MF5: экран под ним не
+            // меняется, после поездки слой уходит); над страницей касания до неё не доходят. «Где» — карточка внизу лица.
             GuideLayer(
-                content = screen.island.takeIf { !screen.menuOpen },
+                content = screen.island,
                 texts = screen.islandTexts,
                 onStop = { hostNow.onTravelStop() },
+                blockTouches = screen.menuOpen,
             )
             Island(
                 content = screen.island.takeIf { !screen.menuOpen },

@@ -19,13 +19,13 @@ class ScreenTwoMapperTest {
     private val questions = (1..7).map { QuickQuestion("q$it", "Вопрос $it") }
 
     @Test
-    fun `screen 2 is open in menu mode, but never during a trip`() {
+    fun `screen 2 is open in menu mode - a trip does not close it (its layer lies on top)`() {
         assertTrue(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU)))
-        assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU, guidingTo = "Кафе")))
+        assertTrue(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU, guidingTo = "Кафе")))
+        assertTrue(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU, asleep = true)))
         assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.FACE)))
+        assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.FACE, guidingTo = "Кафе")))
         assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.SLEEP)))
-        // Поездка кончилась, остров ещё показывает итог — экран 2 подождёт.
-        assertFalse(ScreenTwoMapper.menuOpen(MainUiState(mode = ScreenMode.MENU), islandHoldsFace = true))
     }
 
     @Test

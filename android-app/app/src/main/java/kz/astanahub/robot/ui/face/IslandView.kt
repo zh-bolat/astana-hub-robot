@@ -152,13 +152,20 @@ private fun WhereCard(c: IslandContent.WhereIs, texts: IslandTexts, guideAvailab
 }
 
 /**
- * Поездка и её итог — слой прототипа поверх лица (`.guide-layer`): светлый фон, синяя стрелка, «Иду к: Кафе»,
+ * Поездка и её итог — слой прототипа поверх любого экрана (`.guide-layer`): светлый фон, синяя стрелка, «Иду к: Кафе»,
  * «Следуйте за мной» и тёмно-синий «Стоп»; итог — «Мы на месте!» + «Если нужно что-то ещё, просто спросите.» /
- * «Не получилось дойти» / «Остановились» (наши), затем слой
- * уходит (сроки — [IslandModel]). Фон касания не забирает (тап по лицу работает как прежде), «Стоп» — забирает.
+ * «Не получилось дойти» / «Остановились» (наши), затем слой уходит (сроки — [IslandModel]), под ним тот же экран (MF5).
+ * Над лицом фон касания не забирает (двойной тап по лицу работает как прежде); над страницей ([blockTouches]) —
+ * забирает, чтобы не нажать невидимую плитку. «Стоп» забирает всегда.
  */
 @Composable
-fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, modifier: Modifier = Modifier) {
+fun GuideLayer(
+    content: IslandContent?,
+    texts: IslandTexts,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+    blockTouches: Boolean = false,
+) {
     val trip = content.takeIf { it is IslandContent.Trip || it is IslandContent.Outcome }
     val last = remember { mutableStateOf(trip) }
     SideEffect { if (trip != null) last.value = trip }
@@ -172,6 +179,21 @@ fun GuideLayer(content: IslandContent?, texts: IslandTexts, onStop: () -> Unit, 
         Box(
             Modifier
                 .fillMaxSize()
+                .then(
+                    if (blockTouches) {
+                        Modifier.pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false).consume()
+                                do {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
                 // Прототип `.layer`: radial-gradient(1000 × 700 at 50 % 40 %, #FFF, #EDF1F8 60 %, #DEE5F1).
                 .drawWithCache {
                     val rx = 1000.dp.toPx()

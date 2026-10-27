@@ -246,7 +246,7 @@ class MainViewModelSleepTest {
         vm.submitButton("Мероприятия в хабе?", display = "Мероприятия")
         advanceTimeBy(500); runCurrent()
         assertFalse(vm.state.value.asleep)
-        assertTrue("the answer plays on the face (autoFace)", vm.state.value.answerOnFace)
+        assertEquals("MF5: the answer stays on the page", ScreenMode.MENU, vm.state.value.mode)
         assertEquals("Мероприятия в хабе?", chatRequests.single().question)
         assertEquals(listOf("Здравствуйте!"), voice.spoken)
         vm.viewModelScope.cancel()

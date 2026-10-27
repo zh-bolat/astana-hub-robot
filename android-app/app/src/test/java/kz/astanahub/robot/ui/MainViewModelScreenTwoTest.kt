@@ -114,7 +114,7 @@ class MainViewModelScreenTwoTest {
     }
 
     @Test
-    fun `back from diagnostics - screen 2 stays open unless the chat mode really changed`() = runTest(dispatcher) {
+    fun `back from diagnostics - screen 2 stays open, even if the chat mode changed (MF5)`() = runTest(dispatcher) {
         var mode = ChatMode.AGENT
         val vm = MainViewModel(
             backend, TestVoice(), mockk<CameraGateway>(), phrases, clock = { testScheduler.currentTime },
@@ -130,8 +130,8 @@ class MainViewModelScreenTwoTest {
         vm.onSettingsChanged()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
         mode = ChatMode.AGENT
-        vm.onSettingsChanged() // legacy → agent: «бодрый» экран — лицо
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.onSettingsChanged() // legacy → agent: экран тот же — меняет только свайп
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
         vm.viewModelScope.cancel()
     }
 

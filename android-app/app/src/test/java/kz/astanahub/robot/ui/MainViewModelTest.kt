@@ -381,22 +381,24 @@ class MainViewModelTest {
     }
 
     @Test
-    fun `screensaver after inactivity resets session and wakes on touch`() = runTest(dispatcher) {
+    fun `sleep after inactivity resets session, the menu stays, a page action wakes`() = runTest(dispatcher) {
         coEvery { backend.ask(any(), any()) } returns answer("Ответ.", lang = Lang.EN)
         val vm = createVmWithMap(mapRobot(), screensaverMillis = 60_000)
         vm.submit("Hello")
         testScheduler.advanceTimeBy(5_000)
         assertEquals(Lang.EN, vm.state.value.lang)
-        assertFalse(vm.state.value.screensaver)
+        assertFalse(vm.state.value.asleep)
 
         testScheduler.advanceTimeBy(61_000)
         testScheduler.runCurrent()
-        assertTrue(vm.state.value.screensaver)
+        assertTrue(vm.state.value.asleep)
+        assertEquals("MF5: the menu stays open in sleep", ScreenMode.MENU, vm.state.value.mode)
         assertNull(vm.state.value.answer)
         assertEquals(Lang.RU, vm.state.value.lang)
 
         vm.wake()
-        assertFalse(vm.state.value.screensaver)
+        assertFalse(vm.state.value.asleep)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
     }
 
     @Test
