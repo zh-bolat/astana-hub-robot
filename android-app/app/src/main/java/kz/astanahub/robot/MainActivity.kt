@@ -622,7 +622,9 @@ class MainActivity : AppCompatActivity() {
         screen.traveling = state.guidingTo != null
         screen.islandGuide = state.guideTarget != null && state.guidingTo == null
         screen.asleep = state.asleep
-        if (state.asleep && !wasAsleep) homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
+        // Уснул — страница (если открыта, MF5: остаётся открытой) снова с приветствия.
+        val fellAsleep = state.asleep && !wasAsleep
+        if (fellAsleep) homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
         wasAsleep = state.asleep
         // MF4: мини-подсказка сверху экрана лица — на языке экрана.
         screen.hint = str(if (state.asleep) R.string.face_hint_asleep else R.string.face_hint_awake, state.lang)
@@ -641,8 +643,8 @@ class MainActivity : AppCompatActivity() {
         if (changed) applyIsland() else refreshMenuOpen()
         // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
         screen.holdEnabled = ScreenTwoMapper.faceHoldEnabled(state, container.diagnostics.access != DiagAccess.DISABLED)
-        // Уснул — диалог выхода закрывается (робот работает дальше).
-        if (state.screensaver && two.exitConfirm) stayIn(wake = false)
+        // Уснул — диалог выхода закрывается (робот работает дальше); открыт уже во сне — остаётся.
+        if (fellAsleep && two.exitConfirm) stayIn(wake = false)
         renderScreenTwo(state)
         trackSpeech(state)
     }
@@ -756,13 +758,10 @@ class MainActivity : AppCompatActivity() {
         two.exitVisible = exitMode() != ExitMode.HIDDEN
     }
 
-    /** Экран 2 открыт: режим MENU, не едем и остров не досказывает поездку. */
+    /** Экран 2 открыт: режим MENU (MF5: и в поездке — слой поездки лежит поверх, экран не меняется). */
     private fun refreshMenuOpen() {
         val c = island.content
-        val menuOpen = ScreenTwoMapper.menuOpen(
-            viewModel.state.value,
-            islandHoldsFace = c is IslandContent.Trip || c is IslandContent.Outcome,
-        )
+        val menuOpen = ScreenTwoMapper.menuOpen(viewModel.state.value)
         face.screen.menuOpen = menuOpen
         // Глаза смотрят в сторону места, пока остров where_is на экране лица (на экране 2 острова нет).
         val inputs = face.engine.inputs
@@ -888,8 +887,10 @@ class MainActivity : AppCompatActivity() {
         handler.postDelayed(closeNow, CLOSE_DELAY_MS)
     }
 
-    /** «Открыть снова» на слое «Приложение закрыто»: передумали — работаем дальше. */
-    /** «Открыть снова» (прототип `reopen`): русский язык, приветствие и лицо — как после пробуждения. */
+    /**
+     * «Открыть снова» на слое «Приложение закрыто» (прототип `reopen`): передумали — русский язык и приветствие; экран
+     * тот же, где был посетитель (MF5: к лицу — только свайпом).
+     */
     private fun reopen() {
         handler.removeCallbacks(closeNow)
         two.closed = false
@@ -897,7 +898,6 @@ class MainActivity : AppCompatActivity() {
         if (viewModel.state.value.lang != Lang.RU) viewModel.selectLanguage(Lang.RU)
         viewModel.goHome()
         showHomeView()
-        viewModel.showFace()
     }
 
     // ---------------------------------------------------------------------------------------------

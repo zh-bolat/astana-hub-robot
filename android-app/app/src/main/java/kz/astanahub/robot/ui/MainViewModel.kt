@@ -111,7 +111,11 @@ data class MainUiState(
     val guideTarget: Place? = null,
     /** Куда сейчас ведём (название), null — не ведём. */
     val guidingTo: String? = null,
-    /** SLEEP — спящее лицо, FACE — лицо на весь экран (agent), MENU — плитки и ответы. */
+    /**
+     * Какой экран открыт: SLEEP — лицо спящего робота, FACE — лицо, MENU — страница приложения. MF5 (решение
+     * пользователя): лицо ↔ страница меняются только свайпом посетителя — ни таймер, ни ответ, ни сон, ни пробуждение,
+     * ни поездка экран не переключают (сон на лице — FACE ↔ SLEEP, на странице — MENU остаётся).
+     */
     val mode: ScreenMode = ScreenMode.MENU,
     /**
      * Робот спит (MF4, шумный зал): live закрыт, микрофон на сервер не идёт, голос и подошедший не будят. Страницу
@@ -135,11 +139,6 @@ data class MainUiState(
     val conversation: Int = 0,
     /** Последний ответ «где X» с направлением по карте — остров where_is на экране лица; null — не было. */
     val whereIs: WhereIsHint? = null,
-    /**
-     * Ответ на вопрос с экрана приложения звучит на лице (функция mynbay): лицо с крупными субтитрами, тап по лицу
-     * возвращает в приложение, речь продолжается.
-     */
-    val answerOnFace: Boolean = false,
     /** Места карты (чипы мест под ответом «где», прототип mynbay). */
     val mapPlaces: List<Place> = emptyList(),
     /** Снимок «Что это?» (прототип: кадр в карточке ответа); null — новый вопрос, сон, новый разговор. */
@@ -147,7 +146,7 @@ data class MainUiState(
     /** Ответ «Где что находится»: под карточкой — чипы всех мест карты (прототип `placeList`). */
     val placeList: Boolean = false,
 ) {
-    /** Заставка после бездействия (режим SLEEP). */
+    /** На экране лицо спящего робота (режим SLEEP). */
     val screensaver: Boolean get() = mode == ScreenMode.SLEEP
 
     /** Кнопка «Назад» видна везде, кроме приветствия. */
@@ -232,7 +231,6 @@ class MainViewModel(
     private var guidingPlaceId: String? = null
     private var idleJob: Job? = null
     private var emotionJob: Job? = null
-    private var menuJob: Job? = null
     private var busy = false
 
     private val turnRunner = AgentTurnRunner(backend, chatTimeouts)
@@ -368,16 +366,6 @@ class MainViewModel(
         loadQuickQuestions()
         refreshPlaces()
         presence?.let { flow -> viewModelScope.launch { flow.collect(::onPresence) } }
-        viewModelScope.launch {
-            var last = _state.value.phase
-            _state.collect { st ->
-                if (st.phase != last) {
-                    val from = last
-                    last = st.phase
-                    onPhaseChanged(from, st.phase)
-                }
-            }
-        }
         head?.let { h ->
             // Робот начинает говорить (после «слушает» / «думает») — лёгкое движение головой (редко, если свободна).
             viewModelScope.launch {
@@ -550,7 +538,6 @@ class MainViewModel(
             if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
             return
         }
-        // Прототип `autoFace`: к лицу — когда робот начнёт отвечать (submitInternal ставит faceOnAnswer).
         submitInternal(text, faqId = null, lang = t.lang, fromVoice = true)
     }
 
@@ -589,18 +576,16 @@ class MainViewModel(
         sleepAfterTrip = false
         if (s.asleep) {
             Timber.i("wake: action on the app page")
-            _state.update { it.copy(asleep = false, mode = if (it.mode == ScreenMode.SLEEP) awakeMode() else it.mode) }
+            _state.update { it.copy(asleep = false, mode = awakeScreen(it.mode)) }
         }
         ensureLive(greet = false)
         restartIdleTimer()
-        if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
     }
 
     /** Касание экрана (любое): не спит — разговор идёт, таймер сна заново. Во сне касание само не будит. */
     fun onTouch() {
         if (_state.value.asleep) return
         restartIdleTimer()
-        if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
     }
 
     /**
@@ -611,7 +596,7 @@ class MainViewModel(
         if (!_state.value.asleep) return
         Timber.i("wake: tap on the face")
         sleepAfterTrip = false
-        _state.update { it.copy(asleep = false, mode = awakeMode()) }
+        _state.update { it.copy(asleep = false, mode = awakeScreen(it.mode)) }
         cue(FaceCue.GREET)
         if (!ensureLive(greet = true)) greet()
         restartIdleTimer()
@@ -650,71 +635,32 @@ class MainViewModel(
         }
     }
 
-    /** Режим «бодрого» экрана при прошлой проверке настроек (null — ещё не проверяли). */
-    private var lastAwakeMode: ScreenMode? = null
-
-    /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
+    /** Первый экран без сна (запуск): agent — лицо, legacy — прежнее меню. Дальше экран меняет только свайп (MF5). */
     private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
-    /** Свайп с лица: страница приложения. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
+    /** Экран после пробуждения — тот же: спящее лицо → лицо, страница остаётся страницей (MF5). */
+    private fun awakeScreen(mode: ScreenMode): ScreenMode = if (mode == ScreenMode.SLEEP) ScreenMode.FACE else mode
+
+    /** Свайп с лица: страница приложения. Сама к лицу не возвращается (MF5: ни таймера, ни ответа на лице). */
     fun openMenu() {
-        // Свайп с лица во время ответа: только меняем вид, речь не прерываем и обратно не перекидываем.
-        faceOnAnswer = false
         // Во сне страница открывается, а робот спит дальше (проснётся от плитки или вопроса).
         if (!_state.value.asleep) wake()
-        if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
-            _state.update { it.copy(mode = ScreenMode.MENU, answerOnFace = false) }
-        }
-        restartMenuTimer()
+        if (_state.value.mode != ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.MENU) }
     }
 
-    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; прототип `autoFace`). */
-    private var faceOnAnswer = false
-
-    /**
-     * Смена фазы: робот заговорил в ответ на вопрос, пока открыта страница приложения, — лицо на весь экран (прототип
-     * `autoFace`; субтитры остаются в пузыре страницы); договорил — в legacy, где «дом» — меню, назад в меню (в agent
-     * лицо и есть дом).
-     */
-    private fun onPhaseChanged(from: Phase, to: Phase) {
-        val s = _state.value
-        if (to == Phase.SPEAKING && faceOnAnswer) {
-            faceOnAnswer = false
-            if (s.mode == ScreenMode.MENU && s.guidingTo == null) {
-                menuJob?.cancel()
-                _state.update { it.copy(mode = ScreenMode.FACE, answerOnFace = true) }
-            }
-        } else if (from == Phase.SPEAKING && to != Phase.SPEAKING && s.answerOnFace) {
-            _state.update {
-                it.copy(
-                    answerOnFace = false,
-                    mode = if (awakeMode() == ScreenMode.MENU && it.mode == ScreenMode.FACE) ScreenMode.MENU else it.mode,
-                )
-            }
-        }
-    }
-
-    /** «К роботу»: из меню обратно к лицу (только agent). */
+    /** Свайп со страницы: к лицу (спит — к спящему лицу). */
     fun showFace() {
-        menuJob?.cancel()
         if (_state.value.asleep) {
             _state.update { it.copy(mode = ScreenMode.SLEEP) }
             return
         }
         wake()
-        if (awakeMode() == ScreenMode.FACE && _state.value.mode == ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.FACE) }
+        if (_state.value.mode == ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.FACE) }
     }
 
-    /** Сменили режим разговора на экране диагностики. */
+    /** Сменили режим разговора на экране диагностики: экран не меняется (MF5), только live. */
     fun onSettingsChanged() {
-        val mode = _state.value.mode
-        // Режим «бодрого» экрана меняем, только если его правда сменили (agent ↔ legacy): оператор, вернувшийся из
-        // диагностики на экран 2, остаётся на нём (ревью M3-r1, M7).
-        val awake = awakeMode()
-        val awakeChanged = lastAwakeMode != null && lastAwakeMode != awake
-        lastAwakeMode = awake
         val asleep = _state.value.asleep
-        if (awakeChanged && !asleep && mode != awake) _state.update { it.copy(mode = awake) }
         if (chatMode() != ChatMode.LIVE) {
             closeLive()
         } else if (!asleep) {
@@ -723,26 +669,10 @@ class MainViewModel(
         }
     }
 
-    private fun restartMenuTimer() {
-        menuJob?.cancel()
-        if (awakeMode() != ScreenMode.FACE) return
-        menuJob = viewModelScope.launch {
-            delay(MENU_IDLE_MILLIS)
-            val s = _state.value
-            // Прототип `armMenu`: не уходит, пока робот говорит, слушает, думает или ведёт.
-            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true && phaseIdle(s.phase) &&
-                s.guidingTo == null
-            ) {
-                _state.update { it.copy(mode = if (it.asleep) ScreenMode.SLEEP else ScreenMode.FACE) }
-            } else if (s.mode == ScreenMode.MENU) {
-                restartMenuTimer()
-            }
-        }
-    }
-
     /**
-     * Уснуть (MF4): говорит — оборвать (`interrupt`, затем live закрывается), запрос — отменить; сброс сессии и экрана к
-     * начальному виду. Во сне нет live, микрофон на сервер не идёт, голос и подошедший не будят.
+     * Уснуть (MF4): говорит — оборвать (`interrupt`, затем live закрывается), запрос — отменить; сброс сессии и
+     * страницы к приветствию. Экран не меняется (MF5): на лице — спящее лицо, открытая страница остаётся открытой.
+     * Во сне нет live, микрофон на сервер не идёт, голос и подошедший не будят.
      */
     private fun goIdle() {
         Timber.i("sleep: session reset")
@@ -766,12 +696,12 @@ class MainViewModel(
         langChosenExplicitly = false
         val langChanged = _state.value.lang != Lang.RU
         emotionJob?.cancel()
-        menuJob?.cancel()
         head?.release()
         _state.update {
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
-                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, asleep = true, emotion = Emotion.NEUTRAL, wayHint = null,
+                guideTarget = null, offline = false, mode = if (it.mode == ScreenMode.MENU) ScreenMode.MENU else ScreenMode.SLEEP,
+                asleep = true, emotion = Emotion.NEUTRAL, wayHint = null,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
                 lookPhoto = null,
             )
@@ -836,8 +766,6 @@ class MainViewModel(
                 subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = true,
             )
         }
-        // Прототип: ответ темы — тоже на лице, когда робот заговорит (`showAnswer` → `autoFace`).
-        faceOnAnswer = true
         launchRequest { speakPhrases(PhraseSplitter.split(text), _state.value.lang) }
     }
 
@@ -884,8 +812,6 @@ class MainViewModel(
         touchSession()
         wake()
         voice.stopSpeaking()
-        // Ответ на этот вопрос покажем на лице, если вопрос задан с экрана приложения (mynbay).
-        faceOnAnswer = true
         // Вопрос кнопкой/текстом при живом режиме: звук live обрываем, отвечает agent (/v1/chat, та же сессия).
         live?.interrupt()
         requestJob?.cancel()
@@ -1795,9 +1721,6 @@ class MainViewModel(
             return
         }
         touchLiveSession()
-        // Прототип `autoFace`: лицо на весь экран — когда робот начнёт отвечать (страница приложения остаётся, пока
-        // слушает и думает).
-        faceOnAnswer = true
         // На экране предложение «Проводить?» (where_is), посетитель сказал «да / давай / проводи / иә / yes» —
         // едем сразу, не дожидаясь сервера. Проверка — ДО сброса guideTarget ниже.
         val offered = _state.value.guideTarget
@@ -2379,7 +2302,6 @@ class MainViewModel(
         const val LIVE_LOOK_SPEAK_FALLBACK_MILLIS = 4_000L
 
         /** Меню без касаний столько — назад к лицу (agent). */
-        const val MENU_IDLE_MILLIS = 90_000L
 
         /** «Где что находится»: «думаю» перед ответом, как в прототипе (`tileTap` → 700 мс). */
         const val WHERE_THINK_MILLIS = 700L
