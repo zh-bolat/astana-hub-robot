@@ -477,7 +477,8 @@ def test_noise_is_ignored_without_model(live_server):
     async def scenario() -> None:
         async with session(url) as c:
             c.speak(0.5)
-            await c.wait("ignored")
+            ignored = await c.wait("ignored")
+            assert ignored == {"type": "ignored", "reason": "noise"}
             assert c.events("user_final")[0]["text"] == "Угу."
             assert not c.events("turn_start") and not c.events("thinking")
 
@@ -486,8 +487,11 @@ def test_noise_is_ignored_without_model(live_server):
 
 
 def test_barge_in_stops_audio_and_remembers_only_said(live_server):
+    """LIVE_BARGE_IN=speech (прежнее поведение): перебивает любая речь не шум."""
     model = FakeModel(say(LONG), say("[happy] Кафе справа."))
-    url, app, _ = live_server(model, script=["Расскажи про кафе", "Стоп, а где туалет?"])
+    url, app, _ = live_server(
+        model, script=["Расскажи про кафе", "Стоп, а где туалет?"], live_barge_in="speech"
+    )
 
     async def scenario() -> None:
         async with session(url) as c:
@@ -563,7 +567,10 @@ def test_segmented_stt_full_turn_waits_for_slow_text(live_server):
 def test_segmented_stt_barge_in_by_segment_text(live_server):
     model = FakeModel(say(LONG), say("Туалет слева."))
     url, app, _ = live_server(
-        model, script=["Расскажи про кафе", "Стоп, а где туалет?"], segmented_delay=0.3
+        model,
+        script=["Расскажи про кафе", "Стоп, а где туалет?"],
+        segmented_delay=0.3,
+        live_barge_in="speech",
     )
 
     async def scenario() -> None:
@@ -618,6 +625,238 @@ def test_short_noise_during_answer_does_not_interrupt(live_server):
             assert len(c.events("user_final")) == 1
 
     run(scenario())
+
+
+# ---------- шумный зал (v1.4): перебивание только командой «стоп», «не мне» ----------
+async def _audio_started(c: LiveClient) -> None:
+    for _ in range(200):
+        if any(isinstance(i, int) for i in c.items):
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"no audio in {c.kinds()}")
+
+
+def _question_log(app) -> list[tuple]:
+    assert app.state.log_writer.wait_idle(5)
+    with app.state.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT endpoint, category, found, answer, interrupted FROM question_log ORDER BY id"
+            )
+        )
+        return [tuple(r) for r in rows]
+
+
+@pytest.mark.parametrize(
+    "stop", ["Стоп-стоп, пожалуйста.", "Хватит уже", "Тоқта!", "Жетеді", "Stop it, please.", "Wait"]
+)
+def test_stop_only_stop_command_interrupts(live_server, stop):
+    """По умолчанию (LIVE_BARGE_IN=stop_only) «стоп» на любом из трёх языков останавливает робота сразу, как
+    пришёл текст отрезка; сама команда — не новый ход и не вопрос агенту."""
+    model = FakeModel(say(LONG))
+    url, app, _ = live_server(model, script=["Расскажи про кафе", stop], segmented_delay=0.3)
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            start = await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.4)
+            got = await c.wait("interrupted")
+            assert got["turn_id"] == start["turn_id"]
+            await c.wait("listening", count=2)  # робот замолчал и слушает
+            await asyncio.sleep(0.5)
+            assert len(c.events("turn_start")) == 1 and len(c.events("user_final")) == 1
+            assert not [e for e in c.events("turn_end") if e["turn_id"] == start["turn_id"]]
+
+    run(scenario())
+    assert len(model.requests) == 1
+    rows = messages_of(app)
+    assert len(rows) == 2 and rows[0] == ("visitor", "Расскажи про кафе", None)
+    assert rows[1][0] == "assistant" and len(rows[1][1]) < len(LONG) - 30
+    assert [r[4] for r in _question_log(app)] == [True]
+    stops = [(ms, extra) for stage, ms, extra, _ in live_rows(app) if stage == "live_interrupt_ms"]
+    assert len(stops) == 1 and stops[0][1]["reason"] == "stop" and stops[0][0] < 3000
+
+
+@pytest.mark.parametrize("segmented", [True, False])
+def test_stop_only_other_speech_during_answer_is_dropped(live_server, segmented):
+    """Чужой разговор во время ответа: робот договаривает, реплики нет, и текст не прилипает к следующей."""
+    model = FakeModel(say(LONG), say("[happy] Лифт справа."))
+    url, app, _ = live_server(
+        model,
+        script=["Расскажи про кафе", "Ты по нему тапнул? Тапнул и он", "Где лифт?"],
+        segmented_delay=0.3 if segmented else None,
+        live_fast_places=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.6)  # люди рядом говорят между собой
+            end = await c.wait("turn_end", timeout=12)
+            assert not c.events("interrupted")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            await asyncio.sleep(0.6)  # текст отброшенного отрезка точно пришёл
+            assert len(c.events("user_final")) == 1 and len(c.events("turn_start")) == 1
+            c.speak(0.5)
+            final = await c.wait("user_final", count=2)
+            assert final["text"] == "Где лифт?"
+            end = await c.wait("turn_end", count=2)
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=3)
+
+    run(scenario())
+    assert len(model.requests) == 2
+    # сообщения хода, без системного промпта (в нём есть примеры «не мне»)
+    turn = json.dumps(model.requests[1]["messages"][1:], ensure_ascii=False).lower()
+    assert "тапнул" not in turn and "где лифт?" in turn
+    assert [r[4] for r in _question_log(app)] == [False, False]
+
+
+def test_stop_only_speech_right_after_stop_is_a_new_turn(live_server):
+    """«Стоп.» и сразу «Где туалет?»: вторая фраза началась до того, как пришёл текст «стоп», — это уже вопрос."""
+    model = FakeModel(say(LONG), say("[happy] Туалет слева."))
+    url, app, _ = live_server(
+        model,
+        script=["Расскажи про кафе", "Стоп.", "Где туалет?"],
+        segmented_delay=0.8,
+        live_fast_places=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            start = await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.35)
+            await asyncio.sleep(0.75)
+            c.speak(0.6)
+            got = await c.wait("interrupted")
+            assert got["turn_id"] == start["turn_id"]
+            final = await c.wait("user_final", count=2)
+            assert final["text"] == "Где туалет?"
+            await c.wait("turn_end")
+
+    run(scenario())
+    assert len(model.requests) == 2
+    rows = messages_of(app)
+    assert rows[2] == ("visitor", "Где туалет?", None)
+
+
+def test_stop_only_streaming_stop_and_question_in_one_breath(live_server):
+    """Потоковый STT: промежуточный текст «Стоп, а» — команда, робот замолкает сразу; продолжение фразы — вопрос."""
+    model = FakeModel(say(LONG), say("[happy] Туалет слева."))
+    url, _, _ = live_server(model, script=["Расскажи про кафе", "Стоп, а где туалет?"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.6)
+            await c.wait("interrupted")
+            final = await c.wait("user_final", count=2)
+            assert final["text"] == "Стоп, а где туалет?"
+            await c.wait("turn_end")
+
+    run(scenario())
+    assert len(model.requests) == 2
+
+
+def test_stop_only_streaming_pure_stop_is_not_a_turn(live_server):
+    model = FakeModel(say(LONG))
+    url, _, _ = live_server(model, script=["Расскажи про кафе", "Стоп стоп"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.5)
+            await c.wait("interrupted")
+            await c.wait("listening", count=2)
+            await asyncio.sleep(0.8)
+            assert len(c.events("turn_start")) == 1 and len(c.events("user_final")) == 1
+
+    run(scenario())
+    assert len(model.requests) == 1
+
+
+def test_speech_mode_question_during_answer_interrupts(live_server):
+    """LIVE_BARGE_IN=speech — как раньше: вопрос во время ответа перебивает и становится новой репликой."""
+    model = FakeModel(say(LONG), say("[happy] Лифт справа."))
+    url, _, _ = live_server(
+        model,
+        script=["Расскажи про кафе", "А где лифт?"],
+        segmented_delay=0.3,
+        live_barge_in="speech",
+        live_fast_places=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            await c.wait("turn_start")
+            await _audio_started(c)
+            c.speak(0.5)
+            await c.wait("interrupted")
+            final = await c.wait("user_final", count=2)
+            assert final["text"] == "А где лифт?"
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "answer", ["[not_for_me]", "[neutral] [not_for_me] Это люди говорят между собой."]
+)
+def test_not_addressed_is_ignored_silently(live_server, answer):
+    """Агент решил «не мне»: ignored с reason not_addressed, ни хода, ни звука, ни фраз; тег не звучит."""
+    model = FakeModel(say(answer))
+    url, app, fakes = live_server(model, script=["Ты по нему тапнул?"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            c.speak(0.5)
+            got = await c.wait("ignored")
+            assert got == {"type": "ignored", "reason": "not_addressed"}
+            await c.wait("listening", count=2)
+            await asyncio.sleep(0.3)
+            assert not c.events("turn_start") and not c.events("phrase") and not c.events("emotion")
+            assert not any(isinstance(i, int) for i in c.items)
+
+    run(scenario())
+    assert len(model.requests) == 1
+    assert fakes.tts[0].texts == []
+    assert messages_of(app) == []  # чужой разговор не в памяти агента
+    assert _question_log(app) == [("live", "not_addressed", False, "", False)]
+    assert app.state.log_repo.session_history(SESSION, 50) == []  # и не в чате робота
+    assert app.state.log_repo.all(only_unanswered=True) == []  # и не «вопрос без ответа»
+    extra = next(e for s, _, e, _ in live_rows(app) if s == "live_ignored")
+    assert extra["ignored_reason"] == "not_addressed"
+
+
+def test_not_addressed_keeps_guide_offer(live_server):
+    """«Где кафе?» → «Проводить вас?»; чужая реплика проигнорирована; «Да» всё ещё провожает (без модели)."""
+    model = FakeModel(say("[not_for_me]"))
+    url, _, _ = live_server(model, script=["Где кафе?", "Ты по нему тапнул?", "Да"])
+
+    async def scenario() -> None:
+        async with session(url) as c:
+            await _turn(c, 1)
+            c.speak(0.5)
+            await c.wait("ignored")
+            await c.wait("listening", count=3)
+            start, _ = await _turn(c, 2)
+            action = await c.wait("action", count=2)
+            assert (action["type_"], action["place_id"]) == ("guide_to", "cafe")
+            assert action["turn_id"] == start["turn_id"]
+
+    run(scenario())
+    assert len(model.requests) == 1  # модель — только для чужой реплики
 
 
 def test_client_interrupt_command(live_server):

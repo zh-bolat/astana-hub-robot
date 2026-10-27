@@ -148,7 +148,8 @@ class SegmentedProviderSTT(SegmentedSTTService):
                 detected = getattr(res, "detected", None)
                 if detected is not None and stt_lang_code(detected) is None:
                     lang = None  # STT услышал другой язык — решит язык сессии
-            except (SpeechError, TimeoutError) as exc:
+            # любой сбой — пустой финал: LiveConversation ждёт ровно один финал на отрезок
+            except Exception as exc:
                 logger.warning("live_segment_stt_failed", extra={"error": type(exc).__name__})
         yield TranscriptionFrame(
             text, "", time_now_iso8601(), language=Language(lang) if lang else None

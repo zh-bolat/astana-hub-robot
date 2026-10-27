@@ -1,0 +1,50 @@
+# Eval «не мне» (v1.4, docs/api-contract.md «Шумный зал»): обращена ли реплика к роботу.
+#   expect: ignore — робот должен промолчать (done с ignored: true, category not_addressed)
+#   expect: answer — робот должен ответить (не ignored, есть фразы)
+# Главное — ни одного ложного ignore: пропустить вопрос посетителя хуже, чем ответить лишний раз.
+# Примеры из промпта (app/agent/prompts.py, правило 14) сюда не входят, кроме реплик с теста в хабе
+# (source: hub-2026-10-27) — набор проверяет обобщение, а не заучивание.
+cases:
+  # --- не мне: люди говорят между собой ---
+  - {id: ru-ignore-1, lang: ru, expect: ignore, source: hub-2026-10-27, question: "Ты по нему тапнул?"}
+  - {id: ru-ignore-2, lang: ru, expect: ignore, source: hub-2026-10-27, question: "Ну да, короче, один тап — это то, что он начинает"}
+  - {id: ru-ignore-3, lang: ru, expect: ignore, source: hub-2026-10-27, question: "Мне не нравится, подожди, мне не нравится тут"}
+  - {id: ru-ignore-4, lang: ru, expect: ignore, question: "Смотри, у него глаза моргают"}
+  - {id: ru-ignore-5, lang: ru, expect: ignore, question: "Давай сфоткаемся с ним, пока никого нет"}
+  - {id: ru-ignore-6, lang: ru, expect: ignore, question: "Короче, я завтра не приду, у меня созвон в десять"}
+  - {id: ru-ignore-7, lang: ru, expect: ignore, question: "Ты презентацию Аслану скинул?"}
+  - {id: ru-ignore-8, lang: ru, expect: ignore, question: "Пошли уже, лифт приехал"}
+  - {id: ru-ignore-9, lang: ru, expect: ignore, question: "Блин, опять он заговорил"}
+  - {id: ru-ignore-10, lang: ru, expect: ignore, question: "Интересно, сколько такой стоит"}
+  - {id: ru-ignore-11, lang: ru, expect: ignore, question: "Да нет, там второй этаж, я же тебе говорил"}
+  - {id: ru-ignore-12, lang: ru, expect: ignore, question: "так я ему говорю а он мне короче нет и всё"}
+  - {id: kk-ignore-1, lang: kk, expect: ignore, question: "Мынау өзі не істейді?"}
+  - {id: kk-ignore-2, lang: kk, expect: ignore, question: "Асқар, бері кел, суретке түсейік"}
+  - {id: kk-ignore-3, lang: kk, expect: ignore, question: "Ол қазақша түсінеді ме екен?"}
+  - {id: kk-ignore-4, lang: kk, expect: ignore, question: "Мен саған кеше айттым ғой, жиналыс түстен кейін"}
+  - {id: en-ignore-1, lang: en, expect: ignore, question: "Dude, look, it's blinking at us"}
+  - {id: en-ignore-2, lang: en, expect: ignore, question: "I'll send you the deck after the call"}
+  - {id: en-ignore-3, lang: en, expect: ignore, question: "Does it understand Russian, you think?"}
+  - {id: en-ignore-4, lang: en, expect: ignore, question: "Come on, we're late for the demo"}
+
+  # --- мне: вопросы и просьбы к роботу, приветствия, склейки с чужими словами ---
+  - {id: ru-answer-1, lang: ru, expect: answer, question: "Где здесь кафе?"}
+  - {id: ru-answer-2, lang: ru, expect: answer, question: "Здравствуйте!"}
+  - {id: ru-answer-3, lang: ru, expect: answer, question: "Подскажите, как пройти к коворкингу?"}
+  - {id: ru-answer-4, lang: ru, expect: answer, question: "А ты кто такой?"}
+  - {id: ru-answer-5, lang: ru, expect: answer, question: "Ты умеешь танцевать?"}
+  - {id: ru-answer-6, lang: ru, expect: answer, question: "Ну давай, спроси его. Где тут туалет?"}
+  - {id: ru-answer-7, lang: ru, expect: answer, question: "Слушай, робот, а где ресепшен?"}
+  - {id: ru-answer-8, lang: ru, expect: answer, question: "Можешь проводить меня до конференц-зала?"}
+  - {id: ru-answer-9, lang: ru, expect: answer, question: "Извините, а какие сегодня мероприятия?"}
+  - {id: ru-answer-10, lang: ru, expect: answer, question: "А это что за место?"}
+  - {id: ru-answer-11, lang: ru, expect: answer, question: "Он нас слышит? Привет!"}
+  - {id: kk-answer-1, lang: kk, expect: answer, question: "Сәлеметсіз бе!"}
+  - {id: kk-answer-2, lang: kk, expect: answer, question: "Асхана қайда орналасқан?"}
+  - {id: kk-answer-3, lang: kk, expect: answer, question: "Маған көмектесе аласың ба?"}
+  - {id: kk-answer-4, lang: kk, expect: answer, question: "Astana Hub деген не?"}
+  - {id: en-answer-1, lang: en, expect: answer, question: "Hi there!"}
+  - {id: en-answer-2, lang: en, expect: answer, question: "Where can I get a coffee?"}
+  - {id: en-answer-3, lang: en, expect: answer, question: "What is Astana Hub?"}
+  - {id: en-answer-4, lang: en, expect: answer, question: "Can you show me the way to the coworking?"}
+  - {id: en-answer-5, lang: en, expect: answer, question: "Wait, let me ask it. Excuse me, where's the reception?"}

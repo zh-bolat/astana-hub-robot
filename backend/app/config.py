@@ -218,7 +218,12 @@ class Settings(BaseSettings):
     # Передавать STT язык экрана; false (по умолчанию) — автоопределение: язык реплики — по тексту и языку от STT,
     # а если STT вернул язык не из ru/kk/en — язык сессии (hello.lang)
     live_stt_language_hint: bool = False
-    # Перебивание: речь посетителя во время ответа не короче, мс, и текст не шум (app/noise.py)
+    # Перебивание голосом (v1.4, шумный зал): stop_only — только команда остановки («стоп», «хватит», «тоқта»,
+    # «stop»…, app/live/stop.py), любая другая речь во время ответа отбрасывается (не перебивание и не новый
+    # ход); speech — прежнее: любая речь не короче live_barge_in_min_ms с текстом не шум перебивает и
+    # становится новой репликой.
+    live_barge_in: Literal["stop_only", "speech"] = "stop_only"
+    # speech: речь посетителя во время ответа не короче, мс, и текст не шум (app/noise.py)
     live_barge_in_min_ms: int = 300
     live_barge_in_require_text: bool = True
     # Без эхоподавления на роботе (hello.aec=false), пока звучит ответ: тихий звук (RMS PCM16 ниже порога)
