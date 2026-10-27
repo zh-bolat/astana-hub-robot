@@ -163,10 +163,13 @@ class AnswerService:
         provider_id: str,
         started: float,
         interrupted: bool = False,
+        event: str | None = None,  # имя события в логе вместо answered/interrupted (not_addressed)
     ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
+        if event is None:
+            event = "interrupted" if interrupted else "answered"
         logger.info(
-            f"{endpoint}_interrupted" if interrupted else f"{endpoint}_answered",
+            f"{endpoint}_{event}",
             extra={
                 "session_id": session_id,
                 "question": question,

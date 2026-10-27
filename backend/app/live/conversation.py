@@ -32,11 +32,25 @@ eleven_v3. Текст для синтеза нормализуется (app/tts_
 Язык реплики — по тексту и языку от STT (app/lang.py utterance_lang); язык не из ru/kk/en — язык сессии.
 
 Перебивание. Речь посетителя, пока ход робота не закончен (модель думает или звук ещё играет), — кандидат.
-Перебиванием он становится, когда речь длится ≥ LIVE_BARGE_IN_MIN_MS (без AEC — LIVE_ECHO_MIN_MS) и
-промежуточный текст — не шум (app/noise.py) и не эхо собственной фразы робота. Тогда: отмена агента,
-InterruptionFrame вниз (TTS бросает синтез, транспорт — очередь звука), событие interrupted, в память —
-только прозвучавшее (по часам воспроизведения Playout, последняя фраза обрезается по словам). Кандидат,
-не дотянувший до порога («угу» во время ответа), отбрасывается целиком.
+LIVE_BARGE_IN=stop_only (по умолчанию, v1.4 «шумный зал»): перебиванием он становится, только если текст
+отрезка (или промежуточный текст) — команда остановки («стоп», «хватит», «тоқта», «stop», app/live/stop.py)
+и не эхо фразы робота; порога длительности нет — решает текст, поэтому «стоп» срабатывает сразу, как пришёл
+его текст. Любая другая речь во время ответа отбрасывается целиком: не перебивание и не новый ход, в следующую
+реплику не попадает. Речь, которая идёт сразу после «стоп» (тот же или следующий отрезок), — новая реплика
+посетителя («Стоп. А где кафе?»); если и она только команда — ход не начинается, робот слушает.
+LIVE_BARGE_IN=speech (прежнее): перебиванием кандидат становится, когда речь длится ≥ LIVE_BARGE_IN_MIN_MS (без
+AEC — LIVE_ECHO_MIN_MS) и текст — не шум (app/noise.py) и не эхо; перебившая речь — новая реплика.
+Перебивание: отмена агента, InterruptionFrame вниз (TTS бросает синтез, транспорт — очередь звука), событие
+interrupted, в память — только прозвучавшее (по часам воспроизведения Playout, последняя фраза обрезается по
+словам).
+
+Отрезки STT (segmented) приходят строго по очереди, по одному финалу на отрезок. Хозяин отрезка решается в
+начале речи: речь во время хода робота — кандидат, иначе — реплика посетителя. Отрезки отброшенного кандидата
+(и отрезки, текст которых не дождалась закрытая реплика) считаются отдельно и выбрасываются, когда придёт их
+текст, — поэтому чужая речь во время ответа не прилипает к следующей реплике.
+
+«Не мне». Агент сам решает, что реплика обращена не к роботу (ChatService, маркер в начале ответа модели):
+тогда ignored с reason not_addressed, без turn_start, звука и фраз; фильтр шума — ignored с reason noise.
 
 Тексты реплик в логи и метрики не попадают; latency_events — только миллисекунды и метки.
 """
@@ -77,6 +91,7 @@ from app.config import Settings
 from app.lang import Lang, normalize_lang, stt_lang_code, tts_lang, utterance_lang
 from app.live.playout import EchoGate, Playout
 from app.live.protocol import AUDIO_OUT_RATE, error_event, event, new_turn_id
+from app.live.stop import is_stop_command
 from app.live.tts_cache import PhraseAudioCache
 from app.logging_setup import logger, new_request_id
 from app.metrics import LatencyRecorder
@@ -194,7 +209,10 @@ class _BotTurn:
 class LiveStats:
     turns: int = 0
     interrupts: int = 0
-    ignored: int = 0
+    ignored: int = 0  # шум и «не мне»
+    not_addressed: int = 0  # из них — агент решил, что реплика не роботу
+    dropped: int = 0  # речь во время ответа, отброшенная без перебивания
+    stops: int = 0  # перебиваний командой остановки
     errors: int = 0
 
 
@@ -256,7 +274,13 @@ class LiveConversation(FrameProcessor):
         self._partial = ""  # промежуточный текст текущего сегмента (ещё без финала)
         self._final_at: float | None = None  # perf_counter последнего финала
         self._final_event = asyncio.Event()
-        self._segments_pending = 0  # segmented: отрезки ушли в STT, финал ещё не пришёл
+        # segmented: отрезки ушли в STT, финал ещё не пришёл. Финалы приходят по порядку: сначала
+        # выбрасываемые, затем кандидата, затем реплики посетителя
+        self._segments_pending = 0  # реплики посетителя
+        self._barge_pending = 0  # кандидата в перебивание
+        self._discard_pending = 0  # отброшенной речи — текст выбросить
+        self._seg_bot = False  # текущий отрезок речи начался во время хода робота (кандидат)
+        self._after_stop = False  # реплика — речь сразу после команды «стоп»
         self._eot_task: asyncio.Task | None = None
         # кандидат в перебивание (речь во время ответа робота)
         self._barge_start: float | None = None
@@ -291,6 +315,10 @@ class LiveConversation(FrameProcessor):
 
     def bot_active(self) -> bool:
         return self._turn is not None and not self._turn.finished
+
+    @property
+    def stop_only(self) -> bool:
+        return self.settings.live_barge_in == "stop_only"
 
     def _barge_min_s(self) -> float:
         ms = self.settings.live_barge_in_min_ms
@@ -343,12 +371,20 @@ class LiveConversation(FrameProcessor):
                 turn, interrupted=False
             )  # звук уже доиграл, таймер конца хода не успел
         if self.bot_active():
+            self._seg_bot = True  # отрезок — кандидат в перебивание
             if self._barge_start is None:
                 self._barge_start = now - start_secs
                 self._finals, self._partial = [], ""
-                wait = self._barge_start + self._barge_min_s() - now
-                self._barge_timer = self._spawn(self._barge_after(max(0.0, wait)), "live_barge")
+                if not self.stop_only:  # speech: перебивание по длительности речи
+                    wait = self._barge_start + self._barge_min_s() - now
+                    self._barge_timer = self._spawn(self._barge_after(max(0.0, wait)), "live_barge")
+            else:  # речь продолжилась, пока ждём текст кандидата
+                await self._cancel(self._barge_timer)
+                self._barge_timer = None
             return
+        self._seg_bot = False
+        if self._barge_start is not None:
+            await self._drop_barge()  # кандидат пережил ход робота — перебивать уже нечего
         self._speech_start = now - start_secs
         await self._cancel(self._eot_task)  # посетитель продолжил после паузы — та же реплика
         self._eot_task = None
@@ -361,27 +397,50 @@ class LiveConversation(FrameProcessor):
     async def _on_vad_stop(self, stop_secs: float) -> None:
         self._vad_speaking = False
         self._speech_end = time.monotonic() - stop_secs
-        if self.stt_segmented:
-            self._segments_pending += 1  # STT выше по пайплайну уже поставил отрезок в очередь
-        if self._barge_start is not None:
+        if self._seg_bot:  # отрезок начался во время хода робота
+            alive = self._barge_start is not None
+            if self.stt_segmented:  # STT выше по пайплайну уже поставил отрезок в очередь
+                if alive:
+                    self._barge_pending += 1
+                else:
+                    self._discard_pending += 1  # кандидата уже отбросили — текст не нужен
+            if not alive:
+                return
+            if self.stop_only:
+                # текст отрезка (segmented) или финал (потоковый STT) придёт после паузы: в нём может быть «стоп»
+                timeout = (
+                    self.settings.live_stt_segment_timeout_s
+                    if self.stt_segmented
+                    else self.settings.live_stt_final_timeout_s
+                )
+                await self._wait_barge_text(timeout)
+                return
             long_enough = self._speech_end - self._barge_start >= self._barge_min_s()
             if self.stt_segmented and long_enough and self.settings.live_barge_in_require_text:
                 # текст отрезка придёт после паузы — перебивание решаем по нему (_on_final), не дольше таймаута
-                await self._cancel(self._barge_timer)
-                self._barge_timer = self._spawn(
-                    self._drop_barge_after(self.settings.live_stt_segment_timeout_s), "live_barge"
-                )
+                await self._wait_barge_text(self.settings.live_stt_segment_timeout_s)
                 return
             await self._drop_barge()  # кандидат не дотянул до перебивания: «угу» во время ответа
             return
+        if self.stt_segmented:
+            self._segments_pending += 1
         if self._user_open:
             await self._cancel(self._eot_task)
             self._eot_task = self._spawn(self._end_of_turn(self._speech_end), "live_eot")
 
+    async def _wait_barge_text(self, timeout: float) -> None:
+        await self._cancel(self._barge_timer)
+        self._barge_timer = self._spawn(self._drop_barge_after(timeout), "live_barge")
+
     async def _drop_barge(self) -> None:
+        """Кандидат — не перебивание: его речь отбрасывается целиком, и та, текст которой ещё в пути."""
+        if self._barge_start is not None:
+            self.stats.dropped += 1
         self._barge_start = None
         await self._cancel(self._barge_timer)
         self._barge_timer = None
+        self._discard_pending += self._barge_pending
+        self._barge_pending = 0
         self._finals, self._partial = [], ""
         if self.turn_analyzer is not None:
             self.turn_analyzer.clear()
@@ -396,35 +455,76 @@ class LiveConversation(FrameProcessor):
         return " ".join([*self._finals, self._partial]).strip()
 
     async def _on_partial(self, text: str) -> None:
-        self._partial = text.strip()
+        text = text.strip()
         if self._barge_start is not None:
-            await self._maybe_barge()
+            await self._on_barge_text(text, final=False)
         elif self._user_open:
+            self._partial = text
             await self.send_now(event("user_partial", text=self._heard_text()))
 
     async def _on_final(self, text: str, lang: Lang | None = None) -> None:
         text = text.strip()
-        self._partial = ""
         if self.stt_segmented:
+            # отрезки приходят по порядку: выбрасываемые → кандидата → реплики посетителя
+            if self._discard_pending > 0:
+                self._discard_pending -= 1
+                return
+            if self._barge_pending > 0:
+                self._barge_pending -= 1
+                if self._barge_start is not None:
+                    await self._on_barge_text(text, final=True)
+                return
             self._segments_pending = max(0, self._segments_pending - 1)
+        elif self._barge_start is not None:
+            await self._on_barge_text(text, final=True)
+            return
+        elif not self._user_open:
+            return  # финал речи, которую уже никто не слушает (отброшенный кандидат, закрытая реплика)
+        self._partial = ""
         if text:
             self._finals.append(text)
             self._final_at = time.perf_counter()
             if lang is not None:
                 self._stt_lang = lang
         self._final_event.set()
-        if self._barge_start is not None:
-            await self._maybe_barge()
-            if self.stt_segmented and self._barge_start is not None and not self._vad_speaking:
-                await self._drop_barge()  # текст отрезка — шум, эхо или пусто: не перебивание
-        elif self._user_open and text:
+        if self._user_open and text:
             await self.send_now(event("user_partial", text=self._heard_text()))
+
+    async def _on_barge_text(self, text: str, final: bool) -> None:
+        """Текст речи во время хода робота: команда «стоп» (stop_only) или перебивание речью (speech)."""
+        # весь текст кандидата пришёл
+        last = final and not self._vad_speaking and self._barge_pending == 0
+        if self.stop_only:
+            turn = self._turn
+            if (
+                text
+                and self.bot_active()
+                and is_stop_command(text)
+                and not (turn is not None and is_echo(text, turn.phrases))
+            ):
+                await self._stop_barge()
+            elif last:
+                await self._drop_barge()  # речь кончилась, команды остановки не было
+            return
+        if final:
+            self._partial = ""
+            if text:
+                self._finals.append(text)
+                self._final_at = time.perf_counter()
+        else:
+            self._partial = text
+        await self._maybe_barge()
+        if self._barge_start is not None and (
+            not self.bot_active() or (last and self.stt_segmented)
+        ):
+            await self._drop_barge()  # текст — шум, эхо или пусто: не перебивание
 
     async def _barge_after(self, delay: float) -> None:
         await asyncio.sleep(delay)
         await self._maybe_barge()
 
     async def _maybe_barge(self) -> None:
+        """speech: кандидат дотянул до порога и текст — не шум и не эхо → перебивание, речь — новая реплика."""
         start = self._barge_start
         if start is None or not self.bot_active():
             return
@@ -439,9 +539,35 @@ class LiveConversation(FrameProcessor):
         await self._cancel(self._barge_timer)
         self._barge_timer = None
         await self.interrupt("speech", start)
-        # перебившая речь — начало новой реплики посетителя
+        await self._open_after_barge(start)
+
+    async def _stop_barge(self) -> None:
+        """stop_only: посетитель сказал «стоп» — перебить. Речь после команды (идёт сейчас или её текст ещё
+        в пути) — новая реплика посетителя; нет её — робот просто слушает."""
+        start = self._barge_start
+        self._barge_start = None
+        await self._cancel(self._barge_timer)
+        self._barge_timer = None
+        self.stats.stops += 1
+        await self.interrupt("stop", start)
+        self._finals, self._partial, self._final_at = [], "", None
+        if self.turn_analyzer is not None:
+            self.turn_analyzer.clear()
+        if not self._vad_speaking and self._barge_pending == 0:
+            await self.send_now(event("listening"))
+            return
+        self._after_stop = True
+        await self._open_after_barge(time.monotonic() if self._vad_speaking else start)
+
+    async def _open_after_barge(self, start: float | None) -> None:
+        """Речь кандидата после перебивания — реплика посетителя: её отрезки (текущий и ждущие текста)
+        теперь его."""
+        self._seg_bot = False
+        self._segments_pending += self._barge_pending
+        self._barge_pending = 0
         self._speech_start = start
         self._user_open = True
+        self._stt_lang = None
         await self.send_now(event("user_speaking"))
         if self._heard_text():
             await self.send_now(event("user_partial", text=self._heard_text()))
@@ -493,8 +619,12 @@ class LiveConversation(FrameProcessor):
         self._finals, self._partial, self._final_at = [], "", None
         self._stt_lang = None
         self._eot_task = None
-        if not text:
-            await self.send_now(event("listening"))
+        # текст отрезков, не дождавшихся конца реплики, придёт позже — в следующую реплику его не берём
+        self._discard_pending += self._segments_pending
+        self._segments_pending = 0
+        after_stop, self._after_stop = self._after_stop, False
+        if not text or (after_stop and is_stop_command(text)):
+            await self.send_now(event("listening"))  # «стоп» после «стоп» — робот уже молчит
             return
         await self._complete_turn(text, speech_end, stt_final_ms, stt_lang)
 
@@ -618,12 +748,15 @@ class LiveConversation(FrameProcessor):
                 turn.llm_first_token_ms = int((turn.live.first_token_at - turn.eot_at) * 1000)
         turn.stt_final_ms = stt_final_ms
         if ignored:
+            # шум (фильтр до модели) или «не мне» (решение агента): ни звука, ни фраз, робот слушает дальше
+            reason = (turn.live.ignored if turn.live is not None else None) or "noise"
             self.stats.ignored += 1
+            self.stats.not_addressed += reason == "not_addressed"
             turn.finished = True
             self._turn = None
-            await self.send_now(event("ignored"))
+            await self.send_now(event("ignored", reason=reason))
             await self.send_now(event("listening"))
-            self._record_turn(turn, ignored=True)
+            self._record_turn(turn, ignored=reason)
             return
         self.stats.errors += error is not None
         if not turn.started:  # ничего не прозвучало (ошибка до первой фразы)
@@ -703,6 +836,8 @@ class LiveConversation(FrameProcessor):
         turn.interrupted = interrupted
         if self._turn is turn:
             self._turn = None
+            if self._barge_start is not None:
+                await self._drop_barge()  # ход кончился — речь во время него ничего не перебила
         if interrupted:
             heard = self.playout.heard() if self.playout.turn_id == turn.turn_id else {}
             said = []
@@ -815,7 +950,7 @@ class LiveConversation(FrameProcessor):
         self,
         turn: _BotTurn,
         *,
-        ignored: bool = False,
+        ignored: str | None = None,  # причина: noise / not_addressed
         error: str | None = None,
     ) -> None:
         self.metrics.record(
@@ -837,7 +972,8 @@ class LiveConversation(FrameProcessor):
                 "interrupted": turn.interrupted,
                 "phrases": len(turn.phrases),
                 "aec": self.echo_gate.aec,
-                "ignored": ignored,
+                "ignored": ignored is not None,
+                "ignored_reason": ignored,
                 "error": error,
             },
             keep_null=("live_error",),

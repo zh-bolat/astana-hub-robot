@@ -19,7 +19,15 @@
   найденного не блокируются).
 
 Категории в логе вопросов (endpoint=chat): agent — ответ агента; small_talk — локальный быстрый ответ;
-out_of_scope — агент вызвал no_answer или промолчал; blocked — ответ не прошёл выходной фильтр.
+out_of_scope — агент вызвал no_answer или промолчал; blocked — ответ не прошёл выходной фильтр;
+not_addressed — реплика не роботу (v1.4).
+
+«Не мне» (v1.4, docs/api-contract.md «Шумный зал»): реплика явно не обращена к роботу (люди говорят между собой,
+о роботе в третьем лице, склейка чужих фраз) — модель отвечает только тегом [not_for_me] вместо тега эмоции.
+Сервер смотрит на начало ответа до того, как отдать первую фразу: пока текст может оказаться этим тегом, фраза
+не уходит; тег пришёл — модель больше не слушаем, done с ignored: true (live — ignored not_addressed), без фраз,
+действий и памяти, в журнал — category not_addressed. Тег в любом другом месте вырезается и не звучит.
+Обычный ответ начинается с тега эмоции и сразу текста — его первая фраза не задерживается.
 """
 
 from __future__ import annotations
@@ -58,6 +66,7 @@ from app.agent.fastpath import (
 from app.agent.prompts import (
     EMOTIONS,
     LOOKING,
+    NOT_ADDRESSED_TAG,
     VISITOR_ARRIVED_NOTE,
     agent_greeting_turn,
     agent_instructions,
@@ -117,7 +126,9 @@ class _ChatState:
     started: float = 0.0
     first_token_ms: int | None = None
     first_phrase_ms: int | None = None
-    ignored: bool = False  # v1.2: реплика — шум, модель не вызывалась
+    # v1.2: реплика — шум, модель не вызывалась; v1.4: или «не мне» (not_addressed)
+    ignored: bool = False
+    not_addressed: bool = False  # v1.4: модель ответила тегом «не мне»
     fallback: bool = False  # агент не ответил — ответ дал /v1/ask или готовое приветствие
     error: str | None = None
     live: LiveTurn | None = None  # WS /v1/live: фразы по мере генерации, журнал — по сказанному
@@ -138,6 +149,8 @@ class LiveTurn:
     endpoint: str = "live"
     directions: dict[str, dict[str, str]] = field(default_factory=dict)
     first_token_at: float | None = None  # time.perf_counter() первого токена модели
+    # done с ignored: причина — noise / not_addressed (live шлёт её в событии ignored)
+    ignored: str | None = None
     _commit: Callable[[list[str], bool], Awaitable[None]] | None = None
 
     @property
@@ -185,14 +198,32 @@ _WORD = re.compile(r"\w")
 # Тег эмоции в начале ответа модели: «[happy] Здравствуйте!» (v1.1). Сервер его вырезает и отдаёт
 # событием emotion перед первой фразой; теги в других местах текста тоже вырезаются, не озвучиваются.
 _EMOTION_TAG = re.compile(r"\[\s*(" + "|".join(EMOTIONS) + r")\s*\]\s*", re.IGNORECASE)
+# v1.4 «не мне»: тег [not_for_me] (и написания вроде «[not for me]», «[NOT-FOR-ME]»)
+_NOT_ADDRESSED = re.compile(r"\[\s*not[\s_-]*for[\s_-]*me\s*\]\s*", re.IGNORECASE)
+_TAG_HEAD_CHARS = len(NOT_ADDRESSED_TAG) + 8  # «[» без «]» длиннее — уже не наш тег
 
 
 def _take_emotion(st: _ChatState, text: str) -> str:
-    """Эмоция из тега в начале ответа (первая за реплику) + текст без тегов."""
+    """Эмоция из тега в начале ответа (первая за реплику) + текст без тегов (и без тега «не мне»)."""
     m = _EMOTION_TAG.search(text)
     if m and st.emotion is None and not text[: m.start()].strip():
         st.emotion = m.group(1).lower()
-    return _EMOTION_TAG.sub("", text)
+    return _NOT_ADDRESSED.sub("", _EMOTION_TAG.sub("", text))
+
+
+def not_addressed_head(text: str) -> bool | None:
+    """Начало ответа модели: True — ответ «не мне» (тег [not_for_me], можно после тега эмоции); None — пока
+    не ясно (пусто, только тег эмоции или начало тега в скобках — фразу не отдаём); False — обычный ответ."""
+    head = text.lstrip()
+    while m := _EMOTION_TAG.match(head):
+        head = head[m.end() :]
+    if not head:
+        return None
+    if _NOT_ADDRESSED.match(head):
+        return True
+    if head.startswith("[") and "]" not in head and len(head) < _TAG_HEAD_CHARS:
+        return None
+    return False
 
 
 def _phrase_events(st: _ChatState, phrase: str) -> list[tuple[str, dict]]:
@@ -552,7 +583,7 @@ class ChatService:
 
     def _record(self, req: ChatRequest, request_id: str, st: _ChatState, interrupted: bool) -> None:
         """Тайминги хода → latency_events (фоном; без текстов)."""
-        if st.ignored:  # шум: только счётчик
+        if st.ignored and not st.not_addressed:  # шум: только счётчик (модель не звали)
             self.metrics.record(
                 "chat",
                 {"ignored": elapsed_ms(st.started)},
@@ -703,6 +734,8 @@ class ChatService:
         if not st.greeting and await self._is_noise(req):
             # без модели, журнала вопросов и памяти: робот молчит и слушает дальше
             st.ignored, st.category, st.provider, st.logged = True, "ignored", "local:noise", True
+            if st.live is not None:
+                st.live.ignored = "noise"
             logger.info("chat_ignored_noise", extra={"session_id": req.session_id})
             yield (
                 "done",
@@ -823,7 +856,11 @@ class ChatService:
                             st.live.first_token_at = time.perf_counter()
                     if data.type == "response.output_text.delta":
                         turn_text.append(data.delta)
-                        if st.live is not None and not tool_started:
+                        head = self._head(st, "".join(turn_text))
+                        if head:  # «не мне»: ответ не нужен — модель больше не слушаем
+                            st.not_addressed = True
+                            break
+                        if st.live is not None and not tool_started and head is False:
                             text = "".join(turn_text)
                             ends = list(_SENTENCE_END.finditer(text, streamed))
                             if (
@@ -850,6 +887,9 @@ class ChatService:
                     ):
                         tool_started = True
                     elif data.type == "response.completed":
+                        if self._head(st, "".join(turn_text)):  # ответ — только тег «не мне»
+                            st.not_addressed = True
+                            break
                         text = "".join(turn_text)[streamed:]
                         turn_text.clear()
                         streamed, tool_started = 0, False
@@ -907,6 +947,10 @@ class ChatService:
                 return
             yield "done", await self._finish(req, request_id, st, started)
             return
+        if st.not_addressed:
+            async for event in self._not_addressed(req, request_id, st, started, offer):
+                yield event
+            return
         st.sources = ctx.sources
         st.citations = ctx.citations
         for action in ctx.actions[sent_actions:]:
@@ -942,6 +986,54 @@ class ChatService:
                 for event in _phrase_events(st, phrase):
                     yield event
         yield "done", await self._finish(req, request_id, st, started)
+
+    @staticmethod
+    def _head(st: _ChatState, text: str) -> bool | None:
+        """Начало ответа — тег «не мне»? Только до первой фразы и действия и не для приветствия."""
+        if st.greeting or st.emitted or st.actions:
+            return False
+        return not_addressed_head(text)
+
+    async def _not_addressed(
+        self,
+        req: ChatRequest,
+        request_id: str,
+        st: _ChatState,
+        started: float,
+        offer: _Offer | None,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """v1.4 «не мне»: робот молчит. Журнал — category not_addressed (без ответа), память агента не трогаем
+        (чужой разговор не вытесняет настоящий), предложение «Проводить вас?» ждёт «да» дальше."""
+        st.ignored, st.category, st.logged = True, "not_addressed", True
+        if offer is not None:
+            self._offers[req.session_id] = offer
+        if st.live is not None:
+            st.live.ignored = "not_addressed"
+        await self.answers._log(
+            endpoint=st.live.endpoint if st.live is not None else "chat",
+            request_id=request_id,
+            session_id=req.session_id,
+            question=req.question,
+            place_id=req.place_id,
+            resp=AnswerResponse(
+                request_id=request_id, answer="", phrases=[], lang=st.lang, found=False, sources=[]
+            ),
+            category="not_addressed",
+            provider_id=st.provider,
+            started=started,
+            event="not_addressed",
+        )
+        yield (
+            "done",
+            {
+                "request_id": request_id,
+                "lang": st.lang,
+                "found": False,
+                "sources": [],
+                "actions": [],
+                "ignored": True,
+            },
+        )
 
     def _agent(self, kb: KnowledgeBase) -> Agent[ChatContext]:
         """Промпт одинаковый для всех ходов (кеш): справка prefetch — в сообщении хода, не здесь."""

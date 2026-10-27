@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.db.repos import NOT_ADDRESSED
+
 
 class MemoryQuestionLog:
     def __init__(self) -> None:
@@ -13,7 +15,10 @@ class MemoryQuestionLog:
         self.rows.append(SimpleNamespace(id=len(self.rows) + 1, **fields))
 
     def all(self, only_unanswered: bool = False) -> list[SimpleNamespace]:
-        return [r for r in self.rows if not (only_unanswered and r.found)]
+        if not only_unanswered:
+            return list(self.rows)
+        # как QuestionLogRepo: «не мне» — не вопрос без ответа
+        return [r for r in self.rows if not r.found and r.category != NOT_ADDRESSED]
 
     def purge_older_than(self, days: int, now=None) -> int:
         return 0

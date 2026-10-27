@@ -25,6 +25,8 @@ from app.db.models import (
     SessionRow,
 )
 
+NOT_ADDRESSED = "not_addressed"  # v1.4: реплика не роботу (решение агента), робот промолчал
+
 CSV_FIELDS = [
     "id",
     "created_at",
@@ -72,8 +74,10 @@ class QuestionLogRepo:
 
     def all(self, only_unanswered: bool = False) -> list[QuestionLog]:
         stmt = select(QuestionLog).order_by(QuestionLog.id)
-        if only_unanswered:
-            stmt = stmt.where(QuestionLog.found.is_(False))
+        if only_unanswered:  # «не мне» (чужой разговор рядом с роботом) — не вопрос без ответа
+            stmt = stmt.where(
+                QuestionLog.found.is_(False), QuestionLog.category.is_distinct_from(NOT_ADDRESSED)
+            )
         with Session(self.engine) as s:
             return list(s.scalars(stmt))
 
@@ -81,7 +85,11 @@ class QuestionLogRepo:
         """Последние `limit` обменов разговора, по порядку (старые первыми)."""
         stmt = (
             select(QuestionLog)
-            .where(QuestionLog.session_id == session_id)
+            .where(
+                QuestionLog.session_id == session_id,
+                # «не мне» робот не отвечал и в чат на экране не выводил
+                QuestionLog.category.is_distinct_from(NOT_ADDRESSED),
+            )
             .order_by(QuestionLog.id.desc())
             .limit(limit)
         )
