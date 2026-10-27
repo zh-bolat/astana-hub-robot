@@ -32,6 +32,19 @@ class Bezier(private val x1: Float, private val y1: Float, private val x2: Float
         return curve(t, y1, y2)
     }
 
+    /** Обратная: доля времени, при которой кривая даёт [value] (кривая монотонна по y; деление пополам). */
+    fun inverse(value: Float): Float {
+        val y = value.coerceIn(0f, 1f)
+        if (y == 0f || y == 1f) return y
+        var lo = 0f
+        var hi = 1f
+        repeat(24) {
+            val mid = (lo + hi) * 0.5f
+            if (transform(mid) < y) lo = mid else hi = mid
+        }
+        return (lo + hi) * 0.5f
+    }
+
     private fun curve(t: Float, a: Float, b: Float): Float {
         val u = 1f - t
         return 3f * u * u * t * a + 3f * u * t * t * b + t * t * t
@@ -45,5 +58,8 @@ class Bezier(private val x1: Float, private val y1: Float, private val x2: Float
     companion object {
         /** CSS `ease-in-out`. */
         val EASE_IN_OUT = Bezier(0.42f, 0f, 0.58f, 1f)
+
+        /** CSS `ease`. */
+        val EASE = Bezier(0.25f, 0.1f, 0.25f, 1f)
     }
 }

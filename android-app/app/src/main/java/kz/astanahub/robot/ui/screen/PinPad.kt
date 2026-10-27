@@ -86,7 +86,8 @@ fun PinPad(state: PinPadState, actions: PinPadActions) {
                 // Прототип `.exit-main`: заголовок 52 / 700, пояснение 30, точки 44 (разрядка .3em), ошибка 26 красная,
                 // клавиатура и кнопки — через 12.
                 BasicText(state.texts.title, style = DIALOG_TITLE)
-                Spacer(Modifier.height(12.dp))
+                // Пояснение ближе к заголовку: так строки и клавиши совпадают со снимком прототипа.
+                Spacer(Modifier.height(4.dp))
                 BasicText(state.texts.sub, style = DIALOG_SUB)
                 Spacer(Modifier.height(12.dp))
                 BasicText(

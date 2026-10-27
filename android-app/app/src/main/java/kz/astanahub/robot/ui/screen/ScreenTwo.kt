@@ -112,6 +112,7 @@ import kz.astanahub.robot.ui.SubtitlePacer
 import kz.astanahub.robot.ui.design.HubColors
 import kz.astanahub.robot.ui.design.HubMotion
 import kz.astanahub.robot.ui.design.HubType
+import kz.astanahub.robot.ui.design.cssLines
 
 /** Пузырь после речи: последний кусок фразы (все слова сказаны) и эмодзи настроения. */
 @Immutable
@@ -397,20 +398,53 @@ fun ScreenTwo(
  */
 @Stable
 class TransitionLook(private val progress: () -> Float, private val opening: () -> Boolean) {
-    private fun p() = progress().coerceIn(0f, 1f)
+    private fun ms() = MorphTiming.ms(progress(), opening())
 
-    fun right(): Float = if (opening()) ENTER.transform(((p() - 0.5f) / 0.5f).coerceIn(0f, 1f)) else ((p() - 0.667f) / 0.333f).coerceIn(0f, 1f)
+    /** Правая колонка: открытие — `slideIn` с 450 мс; закрытие — гаснет за 300 мс (`ease`). */
+    fun right(): Float = MorphTiming.right(ms(), opening())
 
     /** Сдвиг правой колонки (доля от 40 dp): въезжает справа. */
-    fun rightShift(): Float = if (opening()) 1f - ENTER.transform(((p() - 0.5f) / 0.5f).coerceIn(0f, 1f)) else 0f
+    fun rightShift(): Float = if (opening()) 1f - MorphTiming.right(ms(), true) else 0f
 
-    fun leftOthers(): Float = if (opening()) ((p() - 0.8f) / 0.2f).coerceIn(0f, 1f) else ((p() - 0.778f) / 0.222f).coerceIn(0f, 1f)
+    /** Подпись костюма, точки, статус: во время перехода скрыты (прототип `.main.morph-top .left`). */
+    fun leftOthers(): Float = MorphTiming.leftOthers(ms(), opening())
 
-    fun companionBody(): Float = if (opening()) ((p() - 0.5f) / 0.39f).coerceIn(0f, 1f) else ((p() - 0.61f) / 0.39f).coerceIn(0f, 1f)
+    /** Тело, корпус головы и наряд робота (прототип `.zooming`): проявляются с 450 мс, гаснут сразу. */
+    fun companionBody(): Float = MorphTiming.body(ms(), opening())
+}
 
-    private companion object {
-        val ENTER = CubicBezierEasing(0.22f, 0.8f, 0.24f, 1f)
+/**
+ * Время перехода лицо ↔ страница по прототипу (`morph`, 900 мс, кривая (.45, 0, .15, 1)): прогресс уже сглажен
+ * кривой — по нему восстанавливаем миллисекунды и считаем слои как таймеры и CSS-переходы прототипа.
+ */
+object MorphTiming {
+    const val DURATION_MS = 900f
+    val CURVE = kz.astanahub.robot.ui.face.Bezier(0.45f, 0f, 0.15f, 1f)
+    private val ENTER = kz.astanahub.robot.ui.face.Bezier(0.22f, 0.8f, 0.24f, 1f)
+    private val EASE = kz.astanahub.robot.ui.face.Bezier.EASE
+
+    /** Миллисекунды от начала перехода: открытие — прогресс 0 → 1, закрытие — 1 → 0. */
+    fun ms(progress: Float, opening: Boolean): Float {
+        val p = progress.coerceIn(0f, 1f)
+        return DURATION_MS * CURVE.inverse(if (opening) p else 1f - p)
     }
+
+    fun right(ms: Float, opening: Boolean): Float =
+        // `slideIn` прототипа длится 600 мс и кончается после перехода; у нас — к его концу (без скачка в покое).
+        if (opening) ENTER.transform((ms - 450f) / 450f) else 1f - EASE.transform(ms / 300f)
+
+    fun leftOthers(ms: Float, opening: Boolean): Float =
+        if (opening) ((ms - 700f) / 200f).coerceIn(0f, 1f) else 1f - (ms / 200f).coerceIn(0f, 1f)
+
+    fun body(ms: Float, opening: Boolean): Float =
+        if (opening) EASE.transform((ms - 450f) / 350f) else 1f - EASE.transform(ms / 350f)
+
+    /**
+     * Чёрный слой лица на весь экран (прототип `faceLayer`): открытие — гаснет с 90 мс за 495 мс; закрытие —
+     * проявляется с 315 мс за 540 мс. Экран головы сжимается / растёт поверх него.
+     */
+    fun faceLayer(ms: Float, opening: Boolean): Float =
+        if (opening) 1f - EASE.transform((ms - 90f) / 495f) else EASE.transform((ms - 315f) / 540f)
 }
 
 @Composable
@@ -441,7 +475,8 @@ private fun ScreenTwoContent(state: ScreenTwoState, actions: ScreenTwoActions, p
                 val faq = state.faq
                 when {
                     faq != null -> FaqPanel(state, faq, actions)
-                    state.homeView -> Home(state, actions)
+                    // Прототип `look()`: карточка-снимок сменяет и приветствие (плитка «Что это?» на главной).
+                    state.homeView && !state.lookWaiting -> Home(state, actions)
                     else -> Conversation(state, actions)
                 }
             }
@@ -650,9 +685,10 @@ private fun DrawScope.drawBubbleTail() {
 @Composable
 private fun Home(state: ScreenTwoState, actions: ScreenTwoActions) {
     Column(Modifier.fillMaxSize()) {
-        BasicText(state.texts.greetTitle, style = HubType.Display.copy(color = HubColors.Navy))
+        // Высоты строк — как в CSS прототипа (заголовок 59,8, пояснение 38): плитки встают на 261,8 dp.
+        BasicText(state.texts.greetTitle, style = HubType.Display.copy(color = HubColors.Navy), modifier = Modifier.cssLines(HubType.Display))
         Spacer(Modifier.height(8.dp))
-        BasicText(state.texts.greetSub, style = HubType.Body.copy(color = HubColors.Muted))
+        BasicText(state.texts.greetSub, style = HubType.Body.copy(color = HubColors.Muted), modifier = Modifier.cssLines(HubType.Body))
         Spacer(Modifier.height(36.dp))
         TileGrid(state, actions)
     }
@@ -704,6 +740,7 @@ private fun TileCard(tile: Tile, selected: Boolean, enabled: Boolean, onClick: (
                 style = HubType.Tile.copy(color = HubColors.Ink),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.cssLines(HubType.Tile),
             )
         }
     }
@@ -760,10 +797,8 @@ private fun Conversation(state: ScreenTwoState, actions: ScreenTwoActions) {
         }
         if (answer == null) return@Column
         if (question != null) {
-            BasicText(
-                "«${question.text}»",
-                style = HubType.Body.copy(color = HubColors.Muted, lineHeight = 36.4.sp),
-            )
+            val qStyle = HubType.Body.copy(color = HubColors.Muted, lineHeight = 36.4.sp)
+            BasicText("«${question.text}»", style = qStyle, modifier = Modifier.cssLines(qStyle))
             Spacer(Modifier.height(20.dp))
         }
         androidx.compose.runtime.key(answer.id) {
@@ -800,7 +835,7 @@ private fun AnswerCard(item: ChatItem, texts: ScreenTexts, state: ScreenTwoState
                 BasicText(
                     item.text,
                     style = style,
-                    modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()).cssLines(style),
                 )
             } else {
                 BasicText(
@@ -809,6 +844,7 @@ private fun AnswerCard(item: ChatItem, texts: ScreenTexts, state: ScreenTwoState
                     maxLines = ANSWER_LINES,
                     overflow = TextOverflow.Ellipsis,
                     onTextLayout = { r -> overflow = r.hasVisualOverflow },
+                    modifier = Modifier.cssLines(style),
                 )
             }
             if (overflow || full) LinkButton(if (full) texts.showLess else texts.showMore) { full = !full }
@@ -991,11 +1027,8 @@ private fun Chip(label: String, @DrawableRes glyph: Int, enabled: Boolean, onCli
 private fun FaqPanel(state: ScreenTwoState, faq: FaqUi, actions: ScreenTwoActions) {
     val texts = state.texts
     Column(Modifier.fillMaxSize()) {
-        BasicText(
-            texts.faqTitle,
-            style = HubType.Title.copy(color = HubColors.Ink, fontWeight = FontWeight.Bold, lineHeight = 60.sp),
-            maxLines = 1,
-        )
+        val titleStyle = HubType.Title.copy(color = HubColors.Ink, fontWeight = FontWeight.Bold, lineHeight = 60.sp)
+        BasicText(texts.faqTitle, style = titleStyle, maxLines = 1, modifier = Modifier.cssLines(titleStyle))
         Spacer(Modifier.height(24.dp))
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -1058,7 +1091,7 @@ private fun FaqRow(
                     style = HubType.Tile.copy(color = HubColors.Ink, fontWeight = if (open) FontWeight.Bold else FontWeight.Normal),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).cssLines(HubType.Tile),
                 )
                 Spacer(Modifier.width(24.dp))
                 Glyph(
@@ -1077,9 +1110,11 @@ private fun FaqRow(
                 if (answer == null) {
                     TypingDots()
                 } else {
+                    val answerStyle = HubType.Body.copy(color = HubColors.Ink, fontSize = 32.sp, lineHeight = 41.6.sp)
                     BasicText(
                         answer,
-                        style = HubType.Body.copy(color = HubColors.Ink, fontSize = 32.sp, lineHeight = 41.6.sp),
+                        style = answerStyle,
+                        modifier = Modifier.cssLines(answerStyle),
                         maxLines = if (expanded) Int.MAX_VALUE else FAQ_LINES,
                         overflow = TextOverflow.Ellipsis,
                         onTextLayout = { r -> if (!expanded) overflow = r.hasVisualOverflow },

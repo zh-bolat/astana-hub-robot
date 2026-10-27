@@ -262,10 +262,10 @@ class FaceRenderer {
     }
 
     private fun strokePath(canvas: Canvas, p: Path, width: Float, alpha: Float) {
-        for (i in HALO_DP.indices) {
+        for (i in HALO_D.indices) {
             halo.color = HALO_COLOR[i]
             halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
-            halo.strokeWidth = width + HALO_DP[i] * unitsPerDp
+            halo.strokeWidth = width + 2f * HALO_D[i] * unitsPerDp
             canvas.drawPath(p, halo)
         }
         stroke.strokeWidth = width
@@ -277,10 +277,10 @@ class FaceRenderer {
      * несколько полупрозрачных обводок по контуру — мягкий ореол без размытия (дёшево, работает на любом GPU).
      */
     private fun glowFill(canvas: Canvas, p: Path, alpha: Float) {
-        for (i in HALO_DP.indices) {
+        for (i in HALO_D.indices) {
             halo.color = HALO_COLOR[i]
             halo.alpha = (HALO_ALPHA[i] * alpha * 255).toInt()
-            halo.strokeWidth = HALO_DP[i] * unitsPerDp
+            halo.strokeWidth = 2f * HALO_D[i] * unitsPerDp
             canvas.drawPath(p, halo)
         }
     }
@@ -348,12 +348,22 @@ class FaceRenderer {
         private const val BEAT_MS = 900L
         private const val SPIN_MS = 2_000L
 
-        /** Ореол: ширины обводки (dp на экране), цвета и прозрачность — два drop-shadow прототипа (6 и 18 px). */
-        private val HALO_DP = floatArrayOf(8f, 17f, 32f, 50f)
-        private val HALO_ALPHA = floatArrayOf(0.32f, 0.2f, 0.12f, 0.06f)
-        private val HALO_COLOR = intArrayOf(
-            Color.rgb(58, 168, 245), Color.rgb(58, 168, 245), Color.rgb(40, 140, 240), Color.rgb(40, 140, 240),
+        /**
+         * Ореол прототипа (`drop-shadow(0 0 6px rgba(58,168,245,.85)) drop-shadow(0 0 18px rgba(40,140,240,.45))`):
+         * яркость у края глаза ~0,55 и плавный спад до нуля к ~40 dp — сняли по пикселям с экрана лица прототипа
+         * (v9, 1 px = 1 dp). Рисуем вложенными обводками (полуширина [HALO_D], dp от края): прозрачность каждой
+         * подобрана так, что их наложение повторяет этот спад — свечение сразу от края, без колец и полос.
+         */
+        private val HALO_D = floatArrayOf(1f, 2f, 3f, 4f, 5.5f, 7f, 9f, 11.5f, 14.5f, 18f, 23f, 30f, 38f)
+        private val HALO_ALPHA = floatArrayOf(
+            0.154f, 0.118f, 0.077f, 0.085f, 0.079f, 0.080f, 0.068f, 0.056f, 0.029f, 0.029f, 0.027f, 0.025f, 0.014f,
         )
+
+        /** Цвет: у края — цвет глаза, к краю ореола — синее (вторая тень прототипа). */
+        private val HALO_COLOR = IntArray(HALO_D.size) { k ->
+            val f = k / (HALO_D.size - 1f)
+            Color.rgb(lerp(58f, 40f, f).toInt(), lerp(168f, 140f, f).toInt(), lerp(245f, 240f, f).toInt())
+        }
 
         private const val RING_RADIUS = 56f
         private const val RING_STROKE = 7f

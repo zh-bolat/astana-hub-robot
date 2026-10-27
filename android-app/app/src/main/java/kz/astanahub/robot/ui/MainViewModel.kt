@@ -489,6 +489,9 @@ class MainViewModel(
      * Фраза посетителя. Пока робот занят, принимаем только «стоп» или новую содержательную фразу
      * (≥ 3 слов, не «угу/ага/да»); остальное — шум/реплики в сторону, игнорируем (в лог — без текста).
      */
+    /** Только отладка на эмуляторе (FaceDebug `heard`): промежуточный текст распознавания, как от ASR. */
+    fun debugPartial(text: String) = onTranscript(Transcript(text, isFinal = false))
+
     private fun onTranscript(t: Transcript) {
         val busyNow = busyForVoice()
         if (voiceIgnoredAsleep()) {
@@ -753,7 +756,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = display, partialQuestion = null, answer = text,
-                subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = true,
+                subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = true,
             )
         }
         // Прототип: ответ темы — тоже на лице, когда робот заговорит (`showAnswer` → `autoFace`).
@@ -825,7 +828,7 @@ class MainViewModel(
                 _state.update {
                     it.copy(
                         question = display?.trim()?.takeIf(String::isNotEmpty) ?: question, partialQuestion = null, answer = null,
-                        subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = false,
+                        subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(), lookPhoto = null, placeList = false,
                     )
                 }
                 MoodRules.forUtterance(question)?.let { showEmotion(it) }
@@ -968,7 +971,7 @@ class MainViewModel(
             }
             _state.update {
                 it.copy(
-                    guideTarget = null, guidingTo = name, subtitle = null,
+                    guideTarget = null, whereIs = null, guidingTo = name, subtitle = null,
                     answer = if (announce) WayPhrases.guideStart(name, lang) else it.answer,
                 )
             }
@@ -1098,7 +1101,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null,
-                question = null, answer = null, guideTarget = null, partialQuestion = null, placeList = false,
+                question = null, answer = null, guideTarget = null, whereIs = null, partialQuestion = null, placeList = false,
             )
         }
     }
@@ -1745,7 +1748,7 @@ class MainViewModel(
         _state.update {
             it.copy(
                 screen = Screen.ANSWER, faqOpenId = null, question = question, partialQuestion = null,
-                answer = null, subtitle = null, guideTarget = null, wayHint = null, citations = emptyList(),
+                answer = null, subtitle = null, guideTarget = null, whereIs = null, wayHint = null, citations = emptyList(),
                 lookPhoto = null, placeList = false,
             )
         }

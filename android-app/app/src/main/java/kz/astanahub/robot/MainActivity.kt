@@ -646,7 +646,9 @@ class MainActivity : AppCompatActivity() {
             two.texts = texts(lang)
         }
         two.lang = lang
-        two.status = str(statusRes(state.phase), lang)
+        // Посетитель говорит (есть промежуточный текст) — «Слушаю…», даже если фаза ещё «свободен» (прототип `listen`).
+        val hearingNow = !state.partialQuestion.isNullOrBlank() && (state.phase == Phase.IDLE || state.phase == Phase.LISTENING)
+        two.status = str(if (hearingNow) R.string.status_listening else statusRes(state.phase), lang)
         if (chatLog.update(state)) two.chat = chatLog.items
         two.partial = ScreenTwoMapper.partial(state)
         two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
@@ -686,7 +688,7 @@ class MainActivity : AppCompatActivity() {
         two.offline = state.offline
         // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
         two.pose = when (state.phase) {
-            Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
+            Phase.IDLE, Phase.LISTENING -> if (hearingNow) kz.astanahub.robot.ui.screen.CompanionPose.LISTEN else kz.astanahub.robot.ui.screen.CompanionPose.IDLE
             Phase.THINKING, Phase.LOOKING -> kz.astanahub.robot.ui.screen.CompanionPose.THINK
             Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
             else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
@@ -710,7 +712,10 @@ class MainActivity : AppCompatActivity() {
         // «Что это?» ждёт ответа — справа карточка со снимком (прототип `look`).
         val lookAsked = SystemClock.uptimeMillis() - lookRequestedAt < LOOK_PENDING_MS && state.processing
         two.lookWaiting = lastReply <= lookReplyFrom && (state.phase == Phase.LOOKING || lookAsked || (two.photo != null && two.photoItemId < 0 && state.processing))
-        if (!state.processing && state.phase != Phase.LOOKING) lookRequestedAt = Long.MIN_VALUE / 2
+        // Запрос мог ещё не дойти до «думаю» (первая отрисовка после нажатия) — сбрасываем только после паузы.
+        if (!state.processing && state.phase != Phase.LOOKING && SystemClock.uptimeMillis() - lookRequestedAt > LOOK_START_GRACE_MS) {
+            lookRequestedAt = Long.MIN_VALUE / 2
+        }
         if (lookRequestedAt < 0) lookReplyFrom = lastReply
         // «Что это?» (прототип `look`): «Смотрю…», глаза «смотрят», строки «услышанное» нет.
         if (two.lookWaiting) {
@@ -725,7 +730,8 @@ class MainActivity : AppCompatActivity() {
             selectedSawBusy = false
         }
         bindLookPhoto(state.lookPhoto)
-        two.canGoBack = !home || state.screen != Screen.HOME
+        // Прототип: «Назад» есть всегда, кроме покоя на главной (и пока посетитель говорит, и пока робот думает).
+        two.canGoBack = !home || state.screen != Screen.HOME || hearingNow || state.processing || state.phase == Phase.SPEAKING
         // Чипы мест под ответом «где» (кроме места из ответа).
         placeChipTargets = when {
             home -> emptyList()
@@ -926,6 +932,9 @@ class MainActivity : AppCompatActivity() {
 
         /** «Что это?»: сколько ждём начала ответа с карточкой-снимком. */
         const val LOOK_PENDING_MS = 30_000L
+
+        /** «Что это?» нажато, а ViewModel ещё не «думает»: столько не сбрасываем ожидание снимка. */
+        const val LOOK_START_GRACE_MS = 1_500L
 
         /** Пузырь с последней фразой и эмодзи после речи: max(8 с, 60 мс × длина) — прототип `fin`. */
         const val LINGER_MIN_MS = 8_000L

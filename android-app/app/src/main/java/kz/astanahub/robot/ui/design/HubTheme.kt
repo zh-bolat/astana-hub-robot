@@ -2,7 +2,14 @@ package kz.astanahub.robot.ui.design
 
 import androidx.compose.animation.core.SpringSpec as ComposeSpring
 import androidx.compose.animation.core.spring
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.font.Font
@@ -153,4 +160,32 @@ class HubSpring(val dampingRatio: Float, val response: Float) {
         spring(dampingRatio = dampingRatio, stiffness = stiffness, visibilityThreshold = visibilityThreshold)
 
     fun toFaceSpec(): SpringSpec = SpringSpec(dampingRatio, response)
+}
+
+/** Подъём и спуск Nunito (hhea / typo, на em): по ним браузер строит строку. */
+private const val NUNITO_ASCENT = 1.011f
+private const val NUNITO_DESCENT = 0.353f
+
+/**
+ * Блок текста как в CSS. Когда высота строки меньше высоты шрифта (заголовок 52 / 59,8, плитка 30 / 36), Compose не
+ * даёт глифам обрезаться: добавляет сверху и снизу поля до их фактических границ — блок выходит выше, а текст ниже,
+ * чем в прототипе (заголовок главной — на ~6 dp, плитки под ним — на ~13 dp). Здесь базовая линия первой строки — как
+ * в CSS: (высота строки − (подъём + спуск)) / 2 + подъём, а высота блока = число строк × высота строки. Глифы
+ * по-прежнему рисуются целиком (выступают за блок, как в браузере). Ставить последним модификатором текста.
+ */
+fun Modifier.cssLines(style: TextStyle): Modifier = layout { measurable, constraints ->
+    val p = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+    val first = p[FirstBaseline]
+    val last = p[LastBaseline]
+    val lh = style.lineHeight
+    val fs = style.fontSize
+    if (first == AlignmentLine.Unspecified || last == AlignmentLine.Unspecified || !lh.isSp || !fs.isSp) {
+        return@layout layout(p.width, p.height) { p.place(0, 0) }
+    }
+    val lhPx = lh.toPx()
+    val fsPx = fs.toPx()
+    val cssFirst = (lhPx - (NUNITO_ASCENT + NUNITO_DESCENT) * fsPx) / 2f + NUNITO_ASCENT * fsPx
+    val lines = 1 + ((last - first) / lhPx).roundToInt()
+    val h = (lhPx * lines).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
+    layout(p.width, h) { p.place(0, (cssFirst - first).roundToInt()) }
 }

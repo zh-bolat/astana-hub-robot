@@ -283,6 +283,10 @@ fun RobotScreens(
         Canvas(Modifier.fillMaxSize()) {
             val p = visual()
             if (p >= 1f) return@Canvas
+            // Чёрный слой лица на весь экран гаснет / проявляется по времени прототипа; экран головы — поверх.
+            val opening = targetNow == 1f
+            val layer = MorphTiming.faceLayer(MorphTiming.ms(p, opening), opening)
+            if (layer > 0.001f) drawRect(Color.Black, alpha = layer * (1f - 0.6f * blur))
             val mini = FaceMorph.miniScale(w, h, slotH)
             val pc = p.coerceIn(0f, 1f)
             val s = mini.pow(pc)
@@ -293,7 +297,8 @@ fun RobotScreens(
             val top = (screenRect[1] + two.robotShift.floatValue * density.density) * t
             val right = w + (screenRect[0] + screenRect[2] - w) * t + shift
             val bottom = h + (screenRect[1] + two.robotShift.floatValue * density.density + screenRect[3] - h) * t
-            val r = screenRadius * t
+            // Прототип масштабирует голову целиком: скругление растёт вместе с экраном.
+            val r = if (screenRect[2] > 0f) screenRadius * (right - left) / screenRect[2] else screenRadius * t
             drawRoundRect(
                 color = Color.Black,
                 topLeft = Offset(left, top),
