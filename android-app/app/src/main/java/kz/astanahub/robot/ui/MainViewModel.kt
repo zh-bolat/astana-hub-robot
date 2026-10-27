@@ -111,8 +111,13 @@ data class MainUiState(
     val guideTarget: Place? = null,
     /** Куда сейчас ведём (название), null — не ведём. */
     val guidingTo: String? = null,
-    /** SLEEP — «спящее» лицо (заставка), FACE — лицо на весь экран (agent), MENU — плитки и ответы. */
+    /** SLEEP — спящее лицо, FACE — лицо на весь экран (agent), MENU — плитки и ответы. */
     val mode: ScreenMode = ScreenMode.MENU,
+    /**
+     * Робот спит (MF4, шумный зал): live закрыт, микрофон на сервер не идёт, голос и подошедший не будят. Страницу
+     * приложения можно открыть и во сне (свайпом) — тогда [mode] = MENU, а [asleep] остаётся true.
+     */
+    val asleep: Boolean = false,
     /** Выражение лица: `emotion` агента или событие на роботе; сбрасывается в NEUTRAL после ответа. */
     val emotion: Emotion = Emotion.NEUTRAL,
     /** Фраза ответа, которая звучит сейчас (крупные субтитры в FACE); null — показываем весь [answer]. */
@@ -196,8 +201,8 @@ class MainViewModel(
      * null — без периодической проверки (тесты); на старте сессии и после поездки фразы уходят всегда.
      */
     private val liveDirectionsPeriodMillis: Long? = null,
-    /** VAD: посетитель говорит (AudioLevels.voice) — голос будит из сна; null — нет (тесты). */
-    private val visitorVoice: Flow<Boolean>? = null,
+    /** После запуска робот спит (MF4, шумный зал): будит только тап по лицу. false — бодрствует сразу (тесты). */
+    private val startAsleep: Boolean = false,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -232,8 +237,11 @@ class MainViewModel(
 
     private val turnRunner = AgentTurnRunner(backend, chatTimeouts)
 
-    /** Перед роботом стоит человек (по PersonApi): не засыпаем по бездействию. */
+    /** Перед роботом стоит человек (по PersonApi). MF4: только данные — не будит и не мешает уснуть. */
     private var visitorPresent = false
+
+    /** Пора спать (двойной тап или 5 мин без разговора), но идёт поездка — уснуть, когда она кончится. */
+    private var sleepAfterTrip = false
 
     /** Экраны, на которые возвращает «Назад» (только устойчивые: приветствие, ответ, страница вопросов). */
     private data class Snapshot(
@@ -338,7 +346,7 @@ class MainViewModel(
     }
 
     init {
-        _state.update { it.copy(mode = awakeMode()) }
+        _state.update { it.copy(mode = if (startAsleep) ScreenMode.SLEEP else awakeMode(), asleep = startAsleep) }
         voice.setSessionId(sessionId)
         viewModelScope.launch {
             voice.transcripts.collect(::onTranscript)
@@ -346,7 +354,7 @@ class MainViewModel(
         viewModelScope.launch {
             voice.activity.collect {
                 // Своя озвучка мимо сервера (навигация, agent-ответ на кнопку) — live шлёт вместо микрофона тишину.
-                live?.setLocalSpeech(it == VoiceActivity.SPEAKING)
+                refreshLiveHold()
                 refreshPhase()
                 restartIdleTimer()
             }
@@ -382,13 +390,12 @@ class MainViewModel(
                 }
             }
         }
-        visitorVoice?.let { flow -> viewModelScope.launch { flow.collect { if (it) onVisitorVoice() } } }
         viewModelScope.launch {
             _state.map { it.answer }.distinctUntilChanged().collect { answerChangedAt = clock() }
         }
-        // Спим и рядом никого (есть PersonApi): постоянное прослушивание на паузе — голос не будит.
+        // Спим: постоянное прослушивание на паузе — голос не будит и на сервер не уходит.
         viewModelScope.launch {
-            _state.map { it.mode == ScreenMode.SLEEP }.distinctUntilChanged().collect { updateListeningPaused() }
+            _state.map { it.asleep }.distinctUntilChanged().collect { updateListeningPaused() }
         }
         foreground?.let { flow ->
             viewModelScope.launch { flow.collect(::onForegroundChanged) }
@@ -428,12 +435,8 @@ class MainViewModel(
         }
     }
 
-    /**
-     * Голос не будит: робот спит, а PersonApi рядом никого не видит (разговоры вдалеке, > 3 м).
-     * Без PersonApi ([presence] = null) будят касание и голос, как раньше.
-     */
-    private fun voiceIgnoredAsleep(): Boolean =
-        presence != null && _state.value.mode == ScreenMode.SLEEP && !visitorPresent
+    /** Робот спит (MF4): голос не будит и никуда не уходит — ни live, ни `/v1/chat`. Будит только тап по лицу. */
+    private fun voiceIgnoredAsleep(): Boolean = _state.value.asleep
 
     /** Робот только что задал вопрос: тогда «да / нет / иә / жоқ» — ответ, а не шум. */
     private fun robotAskedQuestion(): Boolean {
@@ -554,13 +557,14 @@ class MainViewModel(
     /** /v1/stt не прошёл из-за связи: бейдж + «нет связи» голосом (не чаще раза в минуту и не перебивая). */
     private fun onConnectionLost() {
         _state.update { it.copy(offline = true, partialQuestion = null) }
+        if (_state.value.asleep) return // во сне молчим
         val now = clock()
         if (now - lastNoConnectionPhrase < NO_CONNECTION_REPEAT_MILLIS) return
         if (busyForVoice() || requestJob?.isActive == true) return
         lastNoConnectionPhrase = now
         val lang = _state.value.lang
         // Лицо: «кружится голова» 2,5 с — по переходу в offline (MainActivity, прототип `dizzy`).
-        requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
+        launchRequest { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
     }
 
     private fun onConnectionRestored() {
@@ -576,23 +580,71 @@ class MainViewModel(
         refreshPlaces()
     }
 
-    /** Касание экрана / голос: убрать заставку и перезапустить таймер бездействия. */
+    /**
+     * Явное действие на странице приложения (плитка, вопрос, кнопка): спит — проснуться без приветствия (робот сразу
+     * отвечает); не спит — перезапустить таймер сна.
+     */
     fun wake() {
-        if (_state.value.mode == ScreenMode.SLEEP) _state.update { it.copy(mode = awakeMode()) }
+        val s = _state.value
+        sleepAfterTrip = false
+        if (s.asleep) {
+            Timber.i("wake: action on the app page")
+            _state.update { it.copy(asleep = false, mode = if (it.mode == ScreenMode.SLEEP) awakeMode() else it.mode) }
+        }
         ensureLive(greet = false)
         restartIdleTimer()
         if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
     }
 
+    /** Касание экрана (любое): не спит — разговор идёт, таймер сна заново. Во сне касание само не будит. */
+    fun onTouch() {
+        if (_state.value.asleep) return
+        restartIdleTimer()
+        if (_state.value.mode == ScreenMode.MENU) restartMenuTimer()
+    }
+
+    /**
+     * Один тап по спящему лицу (MF4): проснуться, открыть live (`hello` + `visitor_arrived`) — агент здоровается,
+     * робот слушает. Без live — приветствие через агента / своей фразой.
+     */
+    fun wakeByTap() {
+        if (!_state.value.asleep) return
+        Timber.i("wake: tap on the face")
+        sleepAfterTrip = false
+        _state.update { it.copy(asleep = false, mode = awakeMode()) }
+        cue(FaceCue.GREET)
+        if (!ensureLive(greet = true)) greet()
+        restartIdleTimer()
+    }
+
+    /**
+     * Двойной тап по лицу (MF4): уснуть. Говорит — оборвать (`interrupt`), затем закрыть live. Едет — уснуть после
+     * поездки.
+     */
+    fun sleepByTap() {
+        if (_state.value.asleep) return
+        if (navJob?.isActive == true) {
+            Timber.i("sleep: double tap in a trip — after the trip")
+            sleepAfterTrip = true
+            return
+        }
+        Timber.i("sleep: double tap")
+        goIdle()
+    }
+
     private fun restartIdleTimer(timeoutOverride: Long? = null) {
-        val timeout = timeoutOverride ?: screensaverMillis ?: return
+        val timeout = timeoutOverride ?: (if (sleepAfterTrip) SLEEP_RECHECK_MILLIS else screensaverMillis) ?: return
         idleJob?.cancel()
         idleJob = viewModelScope.launch {
             delay(timeout)
             val s = _state.value
-            if (phaseIdle(s.phase) && navJob?.isActive != true && requestJob?.isActive != true && !visitorPresent) {
+            if (s.asleep) return@launch
+            // Сон через 5 мин без разговора: робот молчит, не думает и не едет. Поездку не прерываем — после неё.
+            val trip = navJob?.isActive == true
+            if (!trip && phaseIdle(s.phase) && requestJob?.isActive != true && !robotSpeaking && liveActiveTurn == null) {
                 goIdle()
             } else {
+                if (trip) sleepAfterTrip = true
                 restartIdleTimer()
             }
         }
@@ -608,7 +660,8 @@ class MainViewModel(
     fun openMenu() {
         // Свайп с лица во время ответа: только меняем вид, речь не прерываем и обратно не перекидываем.
         faceOnAnswer = false
-        wake()
+        // Во сне страница открывается, а робот спит дальше (проснётся от плитки или вопроса).
+        if (!_state.value.asleep) wake()
         if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
             _state.update { it.copy(mode = ScreenMode.MENU, answerOnFace = false) }
         }
@@ -643,8 +696,12 @@ class MainViewModel(
 
     /** «К роботу»: из меню обратно к лицу (только agent). */
     fun showFace() {
-        wake()
         menuJob?.cancel()
+        if (_state.value.asleep) {
+            _state.update { it.copy(mode = ScreenMode.SLEEP) }
+            return
+        }
+        wake()
         if (awakeMode() == ScreenMode.FACE && _state.value.mode == ScreenMode.MENU) _state.update { it.copy(mode = ScreenMode.FACE) }
     }
 
@@ -656,10 +713,11 @@ class MainViewModel(
         val awake = awakeMode()
         val awakeChanged = lastAwakeMode != null && lastAwakeMode != awake
         lastAwakeMode = awake
-        if (awakeChanged && mode != ScreenMode.SLEEP && mode != awake) _state.update { it.copy(mode = awake) }
+        val asleep = _state.value.asleep
+        if (awakeChanged && !asleep && mode != awake) _state.update { it.copy(mode = awake) }
         if (chatMode() != ChatMode.LIVE) {
             closeLive()
-        } else if (mode != ScreenMode.SLEEP) {
+        } else if (!asleep) {
             liveDownUntil = Long.MIN_VALUE // включили live в диагностике — пробуем сразу
             ensureLive(greet = false)
         }
@@ -675,17 +733,35 @@ class MainViewModel(
             if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true && phaseIdle(s.phase) &&
                 s.guidingTo == null
             ) {
-                _state.update { it.copy(mode = ScreenMode.FACE) }
+                _state.update { it.copy(mode = if (it.asleep) ScreenMode.SLEEP else ScreenMode.FACE) }
             } else if (s.mode == ScreenMode.MENU) {
                 restartMenuTimer()
             }
         }
     }
 
-    /** Заставка: сброс сессии и экрана к начальному виду (шаг 7.4). */
+    /**
+     * Уснуть (MF4): говорит — оборвать (`interrupt`, затем live закрывается), запрос — отменить; сброс сессии и экрана к
+     * начальному виду. Во сне нет live, микрофон на сервер не идёт, голос и подошедший не будят.
+     */
     private fun goIdle() {
-        Timber.i("idle → screensaver, session reset")
-        closeLive()
+        Timber.i("sleep: session reset")
+        sleepAfterTrip = false
+        clearThinkingEarly(resetPhase = true)
+        requestJob?.cancel()
+        voice.stopSpeaking()
+        liveRetryJob?.cancel()
+        liveRetryJob = null
+        live?.let { session ->
+            live = null
+            liveJob?.cancel()
+            liveJob = null
+            stopLiveDirections()
+            session.interruptAndClose()
+            resetLiveTurn()
+        }
+        idleJob?.cancel()
+        setBusy(null)
         sessionId = newSessionId()
         langChosenExplicitly = false
         val langChanged = _state.value.lang != Lang.RU
@@ -695,12 +771,13 @@ class MainViewModel(
         _state.update {
             it.copy(
                 lang = Lang.RU, question = null, partialQuestion = null, answer = null, subtitle = null,
-                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, emotion = Emotion.NEUTRAL, wayHint = null,
+                guideTarget = null, offline = false, mode = ScreenMode.SLEEP, asleep = true, emotion = Emotion.NEUTRAL, wayHint = null,
                 screen = Screen.HOME, faqPage = 0, faqOpenId = null, citations = emptyList(), whereIs = null,
                 lookPhoto = null,
             )
         }
         history.clear()
+        updateListeningPaused()
         if (langChanged) {
             voice.setLanguage(Lang.RU)
             loadQuickQuestions()
@@ -761,7 +838,7 @@ class MainViewModel(
         }
         // Прототип: ответ темы — тоже на лице, когда робот заговорит (`showAnswer` → `autoFace`).
         faceOnAnswer = true
-        requestJob = viewModelScope.launch { speakPhrases(PhraseSplitter.split(text), _state.value.lang) }
+        launchRequest { speakPhrases(PhraseSplitter.split(text), _state.value.lang) }
     }
 
     /** Прототип `tileTap`: «думаю» 700 мс с подсвеченной плиткой, потом ответ темы. */
@@ -769,7 +846,7 @@ class MainViewModel(
         wake()
         stopActivity()
         val lang = _state.value.lang
-        requestJob = viewModelScope.launch {
+        launchRequest {
             setBusy(Phase.THINKING)
             delay(WHERE_THINK_MILLIS)
             setBusy(null)
@@ -781,7 +858,8 @@ class MainViewModel(
     private fun sayAside(text: String) {
         val lang = _state.value.lang
         requestJob?.cancel()
-        requestJob = viewModelScope.launch {
+        voice.stopSpeaking()
+        launchRequest {
             _state.update { it.copy(subtitle = text) }
             try {
                 speakPhrases(PhraseSplitter.split(text), lang)
@@ -823,7 +901,7 @@ class MainViewModel(
         utteranceEndAt = null
         val clockForTurn = TurnClock(origin = vadEnd ?: now, sttFinalMs = vadEnd?.let { now - it }, lang = lang ?: _state.value.lang)
         turn = clockForTurn
-        requestJob = viewModelScope.launch {
+        launchRequest {
             try {
                 _state.update {
                     it.copy(
@@ -1060,7 +1138,7 @@ class MainViewModel(
 
     /** «Ещё вопросы»: следующая страница (по кругу). Текущую страницу можно вернуть кнопкой «Назад». */
     fun faqNextPage() {
-        wake()
+        onTouch()
         val s = _state.value
         if (s.screen != Screen.FAQ || s.faqPageCount < 2) return
         stopActivity()
@@ -1081,7 +1159,7 @@ class MainViewModel(
 
     /** «Назад»: на предыдущий экран без повторной озвучки; истории нет — на приветствие. */
     fun back() {
-        wake()
+        onTouch()
         stopActivity()
         val prev = history.removeLastOrNull() ?: return goHome()
         _state.update {
@@ -1095,7 +1173,7 @@ class MainViewModel(
 
     /** «В начало»: приветствие, история сбрасывается. */
     fun goHome() {
-        wake()
+        onTouch()
         stopActivity()
         history.clear()
         _state.update {
@@ -1119,32 +1197,28 @@ class MainViewModel(
         while (history.size > MAX_HISTORY) history.removeFirst()
     }
 
+    /**
+     * Ответ не из live (плитка, частые вопросы, «Что это?», фразы экрана, приветствие без live): пока он готовится и
+     * звучит, live держим — вместо микрофона тишина, его ход обрывается (`interrupt`), звук не играет. Двух голосов нет.
+     */
+    private fun launchRequest(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job {
+        val job = viewModelScope.launch(block = block)
+        requestJob = job
+        refreshLiveHold()
+        job.invokeOnCompletion { viewModelScope.launch { refreshLiveHold() } }
+        return job
+    }
+
+    /** Звучит или готовится голос не из live — live молчит и не слушает. */
+    private fun refreshLiveHold() {
+        live?.holdForOtherVoice(requestJob?.isActive == true || voice.activity.value == VoiceActivity.SPEAKING)
+    }
+
     /** Остановить запрос и речь при уходе с экрана. Поездку не трогаем: её останавливает только «Стоп». */
     private fun stopActivity() {
         requestJob?.cancel()
         voice.stopSpeaking()
         setBusy(null)
-    }
-
-    /**
-     * Посетитель заговорил (VAD) — разбудить сразу, не дожидаясь первого распознанного слова. Те же правила, что у
-     * распознанной речи: спит, а PersonApi рядом никого не видит, — голос не будит (разговоры вдалеке).
-     */
-    private fun onVisitorVoice() {
-        if (_state.value.mode != ScreenMode.SLEEP || voiceIgnoredAsleep()) return
-        Timber.i("visitor voice (VAD) → wake")
-        wake()
-    }
-
-    /**
-     * Тап по лицу в поездке, пока робот говорит: замолчать (фраза пути, приезд), а поездка продолжается —
-     * её останавливает только «Стоп» на острове.
-     */
-    fun interruptSpeech() {
-        wake()
-        voice.stopSpeaking()
-        live?.interrupt()
-        if (_state.value.emotion != Emotion.NEUTRAL) relaxEmotion()
     }
 
     /** Звучит ли голос робота сейчас (своя озвучка или live-сервер). В поездке фаза NAVIGATING речь не показывает. */
@@ -1153,14 +1227,15 @@ class MainViewModel(
 
     /** Только отладка на эмуляторе (FaceDebug, adb broadcast): уснуть сейчас, не дожидаясь таймера. */
     internal fun sleepNow() {
-        if (_state.value.mode != ScreenMode.SLEEP) goIdle()
+        if (!_state.value.asleep) goIdle()
     }
 
     /** Кнопка «Что это?». */
     fun lookAround() = submitButton(LOOK_DEFAULT_QUESTION.getValue(_state.value.lang))
 
     fun stop() {
-        wake()
+        // Листать страницу, «Назад», «В начало», «Стоп» — не вопрос: во сне робот спит дальше (MF4).
+        onTouch()
         clearThinkingEarly(resetPhase = false)
         requestJob?.cancel()
         voice.stopSpeaking()
@@ -1192,16 +1267,12 @@ class MainViewModel(
         when (event) {
             is PresenceEvent.Arrived -> {
                 visitorPresent = true
+                // MF4: во сне подошедший не будит — только запоминаем, что человек рядом.
+                if (_state.value.asleep) return
                 // Кивок-приветствие до слежения (слежение начнётся после кивка — HeadController).
                 if (event.greet && inForeground()) head?.greet()
                 head?.follow(event.personId)
-                val wasSleeping = _state.value.mode == ScreenMode.SLEEP
-                if (wasSleeping) {
-                    // Новый посетитель — новый разговор (goIdle уже сменил session_id, но экран мог проснуться иначе).
-                    sessionId = newSessionId()
-                    langChosenExplicitly = false
-                }
-                wake()
+                restartIdleTimer()
                 showEmotion(MoodRules.visitorArrived)
                 cue(FaceCue.GREET)
                 // Приложение не на экране — не здороваемся (микрофон и голос выключены, говорить «из фона» нельзя).
@@ -1232,7 +1303,7 @@ class MainViewModel(
     private fun greet() {
         val lang = _state.value.lang
         requestJob?.cancel()
-        requestJob = viewModelScope.launch {
+        launchRequest {
             val agent = chatMode().usesAgent && !_state.value.offline && !chatUnsupported
             val outcome = if (agent) {
                 runAgentTurn(
@@ -1542,7 +1613,7 @@ class MainViewModel(
      */
     private fun ensureLive(greet: Boolean): Boolean {
         val factory = liveFactory ?: return false
-        if (chatMode() != ChatMode.LIVE || _state.value.mode == ScreenMode.SLEEP || !inForeground()) return false
+        if (chatMode() != ChatMode.LIVE || _state.value.asleep || !inForeground()) return false
         live?.takeIf { it.active }?.let { session ->
             if (greet) {
                 liveGreetPending = true
@@ -1561,6 +1632,7 @@ class MainViewModel(
         liveGreetPending = greet
         updateListeningPaused()
         liveJob = viewModelScope.launch { session.signals.collect { onLive(session, it) } }
+        refreshLiveHold()
         session.start(_state.value.lang, placeHint, greet)
         return true
     }
@@ -1619,13 +1691,9 @@ class MainViewModel(
         localGuideConfirm = null
     }
 
-    /**
-     * Обычное прослушивание (live STT / `/v1/stt`) на паузе: робот спит без человека рядом или микрофон
-     * у живого режима.
-     */
+    /** Обычное прослушивание (`/v1/stt`) на паузе: робот спит (MF4), приложение не на экране или микрофон у live. */
     private fun updateListeningPaused() {
-        val asleep = _state.value.mode == ScreenMode.SLEEP
-        voice.setListeningPaused(!inForeground() || (asleep && presence != null && !visitorPresent) || live != null)
+        voice.setListeningPaused(!inForeground() || _state.value.asleep || live != null)
     }
 
     private fun onLive(session: LiveSession, signal: LiveSignal) {
@@ -1637,21 +1705,19 @@ class MainViewModel(
                 startLiveDirections(session)
             }
             LiveSignal.Listening -> if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
-            LiveSignal.UserSpeaking -> {
-                restartIdleTimer()
-                if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
-            }
+            // Шум и чужая речь не продлевают бодрствование (MF4): таймер сна — по ходам робота.
+            LiveSignal.UserSpeaking -> if (!busy) _state.update { it.copy(phase = Phase.LISTENING) }
             is LiveSignal.UserPartial -> {
-                restartIdleTimer()
                 if (signal.text.isNotBlank()) _state.update { it.copy(partialQuestion = signal.text) }
             }
             is LiveSignal.UserFinal -> onLiveUserFinal(signal.text, signal.lang)
-            LiveSignal.Ignored -> onLiveIgnored()
+            is LiveSignal.Ignored -> onLiveIgnored(signal.reason)
             LiveSignal.Thinking -> {
                 markLiveEvent(phrase = false)
                 setBusy(Phase.THINKING)
             }
             is LiveSignal.TurnStart -> {
+                restartIdleTimer()
                 liveTurnStarts++
                 liveActiveTurn = signal.turnId
                 livePendingQuestion = null
@@ -1690,8 +1756,11 @@ class MainViewModel(
                 liveGuides.remove(signal.turnId)?.let {
                     NavJournal.log("live guide_to place=${it.placeId} turn=${signal.turnId}: ход оборван — не едем")
                 }
-                _state.update { it.copy(subtitle = null) }
-                setBusy(null)
+                // Обрыв live ради ответа не из live (плитка, «Что это?»): его «думаю» и пузырь не трогаем.
+                if (requestJob?.isActive != true) {
+                    _state.update { it.copy(subtitle = null) }
+                    setBusy(null)
+                }
                 finishLiveTurn(interrupted = true)
             }
             is LiveSignal.PlaybackDone -> {
@@ -1715,7 +1784,6 @@ class MainViewModel(
 
     private fun onLiveUserFinal(text: String, lang: Lang?) {
         val question = text.trim()
-        restartIdleTimer()
         if (question.isEmpty()) {
             _state.update { it.copy(partialQuestion = null) }
             return
@@ -1767,9 +1835,9 @@ class MainViewModel(
         livePendingQuestion = question
     }
 
-    /** Сервер счёл реплику шумом: лицо без реакции, экран как был. */
-    private fun onLiveIgnored() {
-        NoiseStats.utteranceFiltered("server_ignored")
+    /** Сервер счёл реплику шумом или не обращённой к роботу ([reason]: noise / not_addressed): экран как был. */
+    private fun onLiveIgnored(reason: String?) {
+        NoiseStats.utteranceFiltered(if (reason == "not_addressed") "server_not_addressed" else "server_ignored")
         val pending = livePendingQuestion
         livePendingQuestion = null
         liveTurn = null
@@ -2003,7 +2071,7 @@ class MainViewModel(
         liveRetryJob?.cancel()
         liveRetryJob = viewModelScope.launch {
             delay(after)
-            while (live == null && chatMode() == ChatMode.LIVE && _state.value.mode != ScreenMode.SLEEP && inForeground()) {
+            while (live == null && chatMode() == ChatMode.LIVE && !_state.value.asleep && inForeground()) {
                 // Не посреди ответа agent и не во время поездки: дождаться паузы в разговоре.
                 if (!busyNow()) {
                     Timber.i("live: retry")
@@ -2269,6 +2337,9 @@ class MainViewModel(
 
     companion object {
         const val SESSION_IDLE_MILLIS = 90_000L
+
+        /** Пора спать, но робот ещё занят (поездка, договаривает): проверить снова через столько. */
+        const val SLEEP_RECHECK_MILLIS = 2_000L
 
         /** Поездка без итога столько — сбой (страховка поверх таймаута шлюза [RobotGateway.TRIP_TIMEOUT_MS]). */
         const val MAX_TRIP_MILLIS = RobotGateway.TRIP_TIMEOUT_MS + 15_000L

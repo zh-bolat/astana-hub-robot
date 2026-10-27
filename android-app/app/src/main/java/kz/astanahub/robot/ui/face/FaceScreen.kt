@@ -65,8 +65,11 @@ class FaceScreenState {
     /** «Проводить» на острове where_is доступно (у ViewModel есть место, куда предложено проводить). */
     var islandGuide by mutableStateOf(false)
 
-    /** Спит: ручка свайпа гаснет. */
+    /** Робот спит (MF4): прикрытые глаза и значок сна. */
     var asleep by mutableStateOf(false)
+
+    /** Мини-подсказка сверху экрана лица (MF4): во сне — как разбудить, бодрствуя — как усыпить. */
+    var hint by mutableStateOf("")
 
     /** Удержание по лицу открывает админку (есть доступ и не едем). */
     var holdEnabled by mutableStateOf(false)

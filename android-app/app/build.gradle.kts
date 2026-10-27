@@ -76,11 +76,11 @@ android {
         buildConfigField("int", "VAD_END_SILENCE_MS", secret("VAD_END_SILENCE_MS").toIntOrNull()?.toString() ?: "500")
         // Потоковый /v1/tts (звук с первых байт), по умолчанию true.
         buildConfigField("boolean", "TTS_STREAMING", (secret("TTS_STREAMING").lowercase() != "false").toString())
-        // Сон лица (зевок → сон) и сброс сессии после N секунд бездействия, по умолчанию 3 мин (бриф M2); 0 — выключено.
+        // Сон (MF4): робот засыпает после N секунд без разговора, по умолчанию 5 мин; 0 — сам не засыпает.
         // Разговор: agent — POST /v1/chat (агент на сервере), legacy — локальные правила + /v1/ask,
         // live — живой голосовой режим WS /v1/live (сбой → agent). Меняется в диагностике.
         buildConfigField("String", "CHAT_MODE", secret("CHAT_MODE").ifEmpty { "agent" }.asBuildConfigString())
-        buildConfigField("int", "SCREENSAVER_SECONDS", secret("SCREENSAVER_SECONDS").toIntOrNull()?.toString() ?: "180")
+        buildConfigField("int", "SCREENSAVER_SECONDS", secret("SCREENSAVER_SECONDS").toIntOrNull()?.toString() ?: "300")
     }
 
     flavorDimensions += "target"

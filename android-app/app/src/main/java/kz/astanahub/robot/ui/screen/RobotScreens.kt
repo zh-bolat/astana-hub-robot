@@ -401,11 +401,16 @@ fun RobotScreens(
         ) {
             // Экран лица прототипа v9 — только глаза и подсказка свайпа «‹‹‹» на правом краю (без подписей и кнопок;
             // «нет связи» на лице прототип не показывает — только полоса на странице приложения).
-            if (swipeAllowed && !screen.asleep && screenOne) {
+            // Свайп в приложение работает и во сне (MF4).
+            if (swipeAllowed && screenOne) {
                 SwipeChevrons(Modifier.align(Alignment.CenterEnd).padding(end = 34.dp))
             }
-            // Заставка: приветствие внизу по очереди на трёх языках (прототип `#idleLayer`).
-            SleepGreeting(visible = screen.asleep && screenOne, modifier = Modifier.fillMaxSize())
+            // MF4: мини-подсказка сверху — во сне «Коснитесь, чтобы поговорить», бодрствуя «Дважды коснитесь — уснуть».
+            FaceHint(
+                text = screen.hint,
+                visible = screenOne && !screen.traveling && screen.island == null,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = FACE_HINT_TOP),
+            )
             // Поездка — светлый слой прототипа поверх лица (стрелка, «Иду к…», «Стоп»), «где» — карточка внизу.
             GuideLayer(
                 content = screen.island.takeIf { !screen.menuOpen },
@@ -514,73 +519,30 @@ private val MORPH_EASE = androidx.compose.animation.core.CubicBezierEasing(0.45f
 private val SCREEN_RADIUS = 86.dp
 
 /**
- * Заставка (прототип `#idleLayer`): «Здравствуйте!» (56 / 700, низ строки в 104 dp от края) и «Подойдите и спросите»
- * (34, α .55, низ в 54) по очереди на русском, казахском и английском — каждые 7 с: строки уходят вниз на 10 dp и гаснут
- * за .6 с, через 650 мс — новый язык и обратно; подзаголовок — с задержкой .12 с.
+ * Мини-подсказка экрана лица (MF4): маленькая и ненавязчивая — по центру сверху, мелким кеглем, низкий контраст.
+ * Меняется плавно (сон ↔ бодрствование).
  */
 @Composable
-private fun SleepGreeting(visible: Boolean, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible, modifier = modifier, enter = fadeIn(HubMotion.Gentle.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
-        var i by remember { mutableIntStateOf(0) }
-        var out by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) {
-            while (true) {
-                delay(SLEEP_LINE_MS)
-                out = true
-                delay(SLEEP_SWAP_MS)
-                i = (i + 1) % SLEEP_LINES.size
-                out = false
-            }
-        }
-        val hi by animateFloatAsState(if (out) 0f else 1f, tween(SLEEP_FADE_MS, easing = SLEEP_EASE), label = "saverHi")
-        val sub by animateFloatAsState(if (out) 0f else 1f, tween(SLEEP_FADE_MS, delayMillis = 120, easing = SLEEP_EASE), label = "saverSub")
-        Box(Modifier.fillMaxSize()) {
-            BasicText(
-                SLEEP_LINES[i].first,
-                style = HubType.Display.copy(
-                    color = Color.White,
-                    fontSize = 56.sp,
-                    lineHeight = 64.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                ),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 104.dp)
-                    .graphicsLayer {
-                        alpha = hi
-                        translationY = (1f - hi) * 10.dp.toPx()
-                    },
-            )
-            BasicText(
-                SLEEP_LINES[i].second,
-                style = HubType.Body.copy(
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 34.sp,
-                    lineHeight = 46.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                ),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 54.dp)
-                    .graphicsLayer {
-                        alpha = sub
-                        translationY = (1f - sub) * 10.dp.toPx()
-                    },
-            )
-        }
+private fun FaceHint(text: String, visible: Boolean, modifier: Modifier = Modifier) {
+    val shown = visible && text.isNotEmpty()
+    val a by animateFloatAsState(if (shown) 1f else 0f, tween(FACE_HINT_FADE_MS), label = "faceHint")
+    androidx.compose.animation.Crossfade(text, modifier.graphicsLayer { alpha = a }, animationSpec = tween(FACE_HINT_FADE_MS), label = "faceHintText") { t ->
+        BasicText(
+            t,
+            style = HubType.Body.copy(
+                color = Color.White.copy(alpha = FACE_HINT_ALPHA),
+                fontSize = 22.sp,
+                lineHeight = 30.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            ),
+        )
     }
 }
 
-private val SLEEP_LINES = listOf(
-    "Здравствуйте!" to "Подойдите и спросите",
-    "Сәлеметсіз бе!" to "Жақындап, сұраңыз",
-    "Hello!" to "Come closer and ask",
-)
-private const val SLEEP_LINE_MS = 7_000L
-private const val SLEEP_SWAP_MS = 650L
-private const val SLEEP_FADE_MS = 600
-private val SLEEP_EASE = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+private val FACE_HINT_TOP = 28.dp
+private const val FACE_HINT_ALPHA = 0.32f
+private const val FACE_HINT_FADE_MS = 600
+
 
 /** Размытие страницы под диалогом выхода и панелью пароля (прототип: backdrop-filter blur 10 px; API 31+). */
 private const val EXIT_BLUR_DP = 10

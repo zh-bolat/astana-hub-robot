@@ -35,7 +35,8 @@ sealed interface LiveSignal {
     data object UserSpeaking : LiveSignal
     data class UserPartial(val text: String) : LiveSignal
     data class UserFinal(val text: String, val lang: Lang?) : LiveSignal
-    data object Ignored : LiveSignal
+    /** Реплика без ответа: шум или не обращена к роботу ([reason]: `noise` / `not_addressed`, v1.4). */
+    data class Ignored(val reason: String? = null) : LiveSignal
     data object Thinking : LiveSignal
     data class TurnStart(val turnId: String?) : LiveSignal
     data class Emotion(val name: String) : LiveSignal
@@ -79,6 +80,9 @@ data class LiveConfig(
  *   `user_speaking` / `user_partial` экрану не показываются — это собственный голос робота.
  * - Своя озвучка робота мимо сервера ([setLocalSpeech]: фразы навигации) — вместо микрофона уходит тишина,
  *   чтобы сервер не принял её за посетителя.
+ * - Один голос за раз (v1.4, [holdForOtherVoice]): пока готовится или звучит ответ не из live (плитка, частые
+ *   вопросы, «Что это?», `/v1/tts`), вместо микрофона — тишина, идущий ход обрывается (`interrupt`), новый ход
+ *   сервера — тоже; их звук, фразы и события посетителя не доходят до динамика и экрана.
  *
  * Все события и звук обрабатываются на однопоточном [confined]; микрофон читается на [io].
  */
@@ -121,6 +125,9 @@ class LiveSession(
 
     /** Своя озвучка робота мимо сервера: вместо микрофона — тишина. */
     @Volatile private var localSpeech = false
+
+    /** Готовится или звучит ответ не из live: live молчит и не слушает ([holdForOtherVoice]). */
+    @Volatile private var otherVoice = false
 
     /** Ход, звук которого сейчас идёт / придёт; null — между ходами. */
     private var currentTurn: String? = null
@@ -200,6 +207,43 @@ class LiveSession(
         localSpeech = active
     }
 
+    /**
+     * Один голос за раз: [active] — сейчас готовится или звучит ответ не из live. Включили — вместо микрофона тишина,
+     * идущий ход live обрывается (`interrupt`, звук сброшен); пока включено, ходы сервера сразу обрываются и не
+     * играют. Выключили — микрофон снова уходит на сервер.
+     */
+    fun holdForOtherVoice(active: Boolean) {
+        if (otherVoice == active) return
+        otherVoice = active
+        Timber.i("live: other voice %s", if (active) "on — live muted" else "off")
+        if (active) scope.launch { if (!finished) cutForOtherVoice() }
+    }
+
+    private fun cutForOtherVoice() {
+        val turnLive = player.playing.value || player.queuedBytes > 0 || currentTurn != null
+        if (!turnLive || dropping) return
+        player.flush()
+        if (currentTurn != null) dropping = true
+        connection?.sendText(LiveFrames.interrupt())
+        emit(LiveSignal.Interrupted(currentTurn, local = true))
+    }
+
+    /**
+     * Уснуть (MF4): идёт ход — сначала `interrupt` (звук сброшен), затем соединение закрывается. Сигналов после этого
+     * нет, [LiveSignal.Failed] не приходит.
+     */
+    fun interruptAndClose() {
+        if (finished) return
+        finished = true
+        Timber.i("live: interrupt and close (sleep)")
+        scope.launch {
+            val turnLive = player.playing.value || player.queuedBytes > 0 || currentTurn != null
+            player.flush()
+            if (turnLive && !dropping) connection?.sendText(LiveFrames.interrupt())
+            shutdown()
+        }
+    }
+
     /** Штатно закрыть (посетитель ушёл, сон, смена режима). [LiveSignal.Failed] не приходит. */
     fun close() {
         if (finished) return
@@ -227,7 +271,7 @@ class LiveSession(
                     return
                 }
                 levels?.reportMic(AudioLevels.rmsPcm16(frame, 0, frame.size))
-                conn.sendAudio(if (localSpeech) silence else frame.copyOf())
+                conn.sendAudio(if (localSpeech || otherVoice) silence else frame.copyOf())
             }
         } finally {
             mic.close()
@@ -247,35 +291,45 @@ class LiveSession(
                 emit(LiveSignal.Ready(aec))
             }
             LiveEvent.Listening -> emit(LiveSignal.Listening)
-            LiveEvent.UserSpeaking -> if (!echoGuard()) {
+            // Пока звучит ответ не из live, микрофон не уходит: запоздавшие события посетителя — не к этому ответу.
+            LiveEvent.UserSpeaking -> if (!echoGuard() && !otherVoice) {
                 levels?.reportVoice(true, sticky = true) // VAD сервера: лицо «слушает» до user_final
                 emit(LiveSignal.UserSpeaking)
             }
-            is LiveEvent.UserPartial -> if (!echoGuard()) {
+            is LiveEvent.UserPartial -> if (!echoGuard() && !otherVoice) {
                 levels?.reportVoice(true, sticky = true)
                 emit(LiveSignal.UserPartial(event.text))
             }
             is LiveEvent.UserFinal -> {
                 levels?.reportVoice(false)
-                emit(LiveSignal.UserFinal(event.text, event.lang))
+                if (otherVoice) Timber.i("live: user_final while another voice plays — dropped")
+                else emit(LiveSignal.UserFinal(event.text, event.lang))
             }
-            LiveEvent.Ignored -> {
+            is LiveEvent.Ignored -> {
                 levels?.reportVoice(false)
-                emit(LiveSignal.Ignored)
+                emit(LiveSignal.Ignored(event.reason))
             }
             LiveEvent.Thinking -> {
                 levels?.reportVoice(false)
-                emit(LiveSignal.Thinking)
+                if (!otherVoice) emit(LiveSignal.Thinking)
             }
             is LiveEvent.TurnStart -> {
                 currentTurn = event.turnId
-                dropping = false
-                player.beginTurn(event.turnId)
-                emit(LiveSignal.TurnStart(event.turnId))
+                if (otherVoice) {
+                    // Звучит ответ не из live: этот ход сразу обрываем, его звук и фразы отбрасываем.
+                    Timber.i("live: turn %s while another voice plays — interrupt", event.turnId)
+                    dropping = true
+                    connection?.sendText(LiveFrames.interrupt())
+                    emit(LiveSignal.Interrupted(event.turnId, local = true))
+                } else {
+                    dropping = false
+                    player.beginTurn(event.turnId)
+                    emit(LiveSignal.TurnStart(event.turnId))
+                }
             }
-            is LiveEvent.Emotion -> if (!dropping) emit(LiveSignal.Emotion(event.name))
-            is LiveEvent.Phrase -> if (!dropping) emit(LiveSignal.Phrase(event.text))
-            is LiveEvent.Audio -> if (!dropping) player.enqueue(event.pcm)
+            is LiveEvent.Emotion -> if (!dropping && !otherVoice) emit(LiveSignal.Emotion(event.name))
+            is LiveEvent.Phrase -> if (!dropping && !otherVoice) emit(LiveSignal.Phrase(event.text))
+            is LiveEvent.Audio -> if (!dropping && !otherVoice) player.enqueue(event.pcm)
             is LiveEvent.Action -> {
                 // Ход берём из события; без `turn_id` (старый сервер) — текущий (null после `playback_done`).
                 val turn = event.turnId ?: currentTurn

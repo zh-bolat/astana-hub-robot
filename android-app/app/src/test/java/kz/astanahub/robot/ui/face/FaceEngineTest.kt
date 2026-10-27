@@ -284,22 +284,38 @@ class FaceEngineTest {
     }
 
     @Test
-    fun `screensaver never sleeps - eyes open, wandering, sometimes bored, curious or happy`() {
+    fun `asleep - closed eyes and the sleep sign, eyes still, no blinks`() {
         val e = engine()
         e.inputs.awake = false
+        var moved = 0
+        val blinksBefore = e.blinkCount
+        e.frames(60 * 20) {
+            assertEquals(ProtoExpr.SLEEP, it.pose.expr)
+            if (abs(it.pose[P.GAZE_X]) > 0.05f) moved++
+        }
+        assertEquals(FaceMood.SLEEP, e.director.mood)
+        assertEquals(0, moved)
+        assertEquals(blinksBefore, e.blinkCount)
+        e.inputs.awake = true
+        e.frames(90)
+        assertEquals(ProtoExpr.NEUTRAL, e.pose.expr)
+    }
+
+    @Test
+    fun `awake and quiet for 30 s - the screensaver eyes wander, sometimes bored, curious or happy`() {
+        val e = engine()
         val seen = mutableSetOf<ProtoExpr>()
         var moved = 0
+        e.frames(60 * 25) { seen += it.pose.expr }
+        assertEquals("first 25 s - just glances", setOf(ProtoExpr.NEUTRAL), seen)
+        seen.clear()
         e.frames(60 * 90) {
             seen += it.pose.expr
             if (abs(it.pose[P.GAZE_X]) > 0.3f) moved++
         }
-        assertEquals(FaceMood.SLEEP, e.director.mood)
+        assertEquals(FaceMood.IDLE, e.director.mood)
         assertTrue("seen $seen", ProtoExpr.NEUTRAL in seen && seen.any { it == ProtoExpr.BORED || it == ProtoExpr.WIDE || it == ProtoExpr.HAPPY })
         assertTrue("eyes wander: $moved", moved > 60)
-        assertTrue(e.pose[P.ZZZ] < 0.01f)
-        e.inputs.awake = true
-        e.frames(30)
-        assertEquals(ProtoExpr.NEUTRAL, e.pose.expr)
     }
 
     @Test

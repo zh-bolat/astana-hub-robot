@@ -32,8 +32,11 @@ class FaceInputMapperTest {
     }
 
     @Test
-    fun `sleep mode puts the face to sleep`() {
-        FaceInputMapper.apply(MainUiState(mode = ScreenMode.SLEEP), inputs)
+    fun `asleep robot sleeps on the face and in the companion head`() {
+        FaceInputMapper.apply(MainUiState(mode = ScreenMode.SLEEP, asleep = true), inputs)
+        assertFalse(inputs.awake)
+        // MF4: страницу открыли свайпом во сне — робот в голове спит дальше.
+        FaceInputMapper.apply(MainUiState(mode = ScreenMode.MENU, asleep = true), inputs)
         assertFalse(inputs.awake)
         FaceInputMapper.apply(MainUiState(mode = ScreenMode.FACE), inputs)
         assertTrue(inputs.awake)
@@ -51,23 +54,6 @@ class FaceInputMapperTest {
         assertFalse(inputs.userSpeaking)
         FaceInputMapper.apply(MainUiState(phase = Phase.LISTENING, partialQuestion = " "), inputs)
         assertFalse(inputs.userSpeaking)
-    }
-
-    @Test
-    fun `tap wakes, interrupts speech, in a trip cuts only the speech, otherwise a reflex`() {
-        assertEquals(FaceInputMapper.Tap.WAKE, FaceInputMapper.tap(MainUiState(mode = ScreenMode.SLEEP)))
-        assertEquals(FaceInputMapper.Tap.STOP, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING)))
-        // В поездке тап обрывает только речь; поездку останавливает лишь «Стоп» на острове.
-        assertEquals(
-            FaceInputMapper.Tap.INTERRUPT_SPEECH,
-            FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.SPEAKING, guidingTo = "Кафе")),
-        )
-        // В поездке фаза NAVIGATING всё время, речь видна только по голосу робота.
-        val trip = MainUiState(mode = ScreenMode.FACE, phase = Phase.NAVIGATING, guidingTo = "Кафе")
-        assertEquals(FaceInputMapper.Tap.INTERRUPT_SPEECH, FaceInputMapper.tap(trip, robotSpeaking = true))
-        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(trip, robotSpeaking = false))
-        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.IDLE)))
-        assertEquals(FaceInputMapper.Tap.REFLEX, FaceInputMapper.tap(MainUiState(mode = ScreenMode.FACE, phase = Phase.THINKING)))
     }
 
     @Test

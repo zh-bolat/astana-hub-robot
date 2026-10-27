@@ -47,6 +47,9 @@
     <string name="action_menu">Menu</string>
     <string name="action_face">Back to robot</string>
     <string name="face_hint">Just ask, I am listening</string>
+    <!-- MF4: мини-подсказка сверху экрана лица (во сне / бодрствуя). -->
+    <string name="face_hint_asleep">Tap to talk</string>
+    <string name="face_hint_awake">Double-tap to sleep</string>
     <string name="tap_hint">Tap the screen to open the menu</string>
     <string name="chat_source">Source: %1$s</string>
     <string name="chat_sources">Sources: %1$s</string>

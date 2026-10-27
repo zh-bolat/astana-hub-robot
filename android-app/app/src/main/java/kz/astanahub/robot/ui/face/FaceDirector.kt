@@ -40,7 +40,7 @@ enum class FaceCue {
 
 /** Входы лица: пишет контроллер экрана (главный поток), читает [FaceDirector] в кадре. */
 class FaceInputs {
-    /** false — режим SLEEP (заставка): зевок → сон. */
+    /** false — робот спит (MF4): прикрытые глаза и значок сна. */
     var awake: Boolean = true
     var activity: FaceActivity = FaceActivity.IDLE
     var emotion: FaceEmotion = FaceEmotion.NEUTRAL
@@ -168,7 +168,7 @@ class FaceDirector(private val voice: VoiceHold = VoiceHold()) {
         }
         if (wasAwake && !inputs.awake) {
             sleepStartedAt = nowMs
-            skipYawn = true // прототип «никогда не спит»: заставка сразу, без зевка
+            skipYawn = true // засыпает сразу, без зевка (прототип `sleep`)
             reaction = null
             reactionNext = null
         } else if (!wasAwake && inputs.awake) {

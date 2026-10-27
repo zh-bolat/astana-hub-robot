@@ -71,7 +71,7 @@ class LiveSessionTest {
         h.conn.server(LiveEvent.UserPartial("Где"))
         runCurrent()
         assertTrue(levels.voiceActive())
-        h.conn.server(LiveEvent.Ignored)
+        h.conn.server(LiveEvent.Ignored())
         runCurrent()
         assertFalse(levels.voiceActive())
     }
@@ -370,5 +370,91 @@ class LiveSessionTest {
         h.session.sendState("cafe", navigating = true)
         runCurrent()
         assertEquals(listOf("""{"type":"state","place_id":"cafe","navigating":true}"""), h.conn.framesOfType("state"))
+    }
+
+    @Test
+    fun `other voice - turn in progress is cut, silence instead of the mic, new turns are dropped`() = runTest(dispatcher) {
+        val h = harness(mic = FakeLiveMicrophone(frames = 20))
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.TurnStart("t1"))
+        h.conn.server(LiveEvent.Audio(pcm(600)))
+        advanceTimeBy(100); runCurrent()
+        assertTrue(h.sink.playing)
+        // Плитка: ответ не из live — live-ход обрывается, вместо микрофона тишина.
+        h.session.holdForOtherVoice(true)
+        runCurrent()
+        assertEquals(1, h.conn.framesOfType("interrupt").size)
+        assertFalse(h.sink.playing)
+        assertTrue(h.signals.contains(LiveSignal.Interrupted("t1", local = true)))
+        val sentBefore = h.conn.audio.size
+        advanceTimeBy(200); runCurrent()
+        assertTrue(h.conn.audio.drop(sentBefore).isNotEmpty())
+        assertTrue(h.conn.audio.drop(sentBefore).all { frame -> frame.all { it == 0.toByte() } })
+        // Сервер успел начать новый ход — сразу interrupt, звук и фразы не доходят.
+        h.conn.server(LiveEvent.UserFinal("шум", Lang.RU))
+        h.conn.server(LiveEvent.TurnStart("t2"))
+        h.conn.server(LiveEvent.Phrase("Чужой ответ."))
+        h.conn.server(LiveEvent.Audio(pcm(400)))
+        advanceTimeBy(300); runCurrent()
+        assertEquals(2, h.conn.framesOfType("interrupt").size)
+        assertEquals(0L, h.sink.writtenSinceFlush)
+        assertFalse(h.signals.any { it is LiveSignal.UserFinal || it is LiveSignal.Phrase || it == LiveSignal.TurnStart("t2") })
+        // Ответ не из live доиграл — следующий ход live снова звучит, микрофон снова уходит.
+        h.session.holdForOtherVoice(false)
+        h.conn.server(LiveEvent.TurnStart("t3"))
+        h.conn.server(LiveEvent.Audio(pcm(200)))
+        advanceTimeBy(100); runCurrent()
+        assertTrue(h.signals.contains(LiveSignal.TurnStart("t3")))
+        assertTrue(h.sink.writtenSinceFlush > 0)
+    }
+
+    @Test
+    fun `other voice with nothing playing - no interrupt frame`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.session.holdForOtherVoice(true)
+        runCurrent()
+        assertTrue(h.conn.framesOfType("interrupt").isEmpty())
+    }
+
+    @Test
+    fun `sleep while speaking - interrupt goes out before the connection closes, no signals after`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.TurnStart("t1"))
+        h.conn.server(LiveEvent.Audio(pcm(600)))
+        advanceTimeBy(100); runCurrent()
+        val before = h.signals.size
+        h.session.interruptAndClose()
+        runCurrent()
+        assertEquals(1, h.conn.framesOfType("interrupt").size)
+        assertTrue(h.conn.closed)
+        assertFalse(h.session.active)
+        assertFalse(h.sink.playing)
+        assertTrue(h.signals.drop(before).none { it is LiveSignal.Failed })
+    }
+
+    @Test
+    fun `sleep while silent - just closes`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.session.interruptAndClose()
+        runCurrent()
+        assertTrue(h.conn.framesOfType("interrupt").isEmpty())
+        assertTrue(h.conn.closed)
+    }
+
+    @Test
+    fun `ignored keeps its reason`() = runTest(dispatcher) {
+        val h = harness()
+        h.session.start(Lang.RU, null, greet = false)
+        runCurrent()
+        h.conn.server(LiveEvent.Ignored("not_addressed"))
+        runCurrent()
+        assertTrue(h.signals.contains(LiveSignal.Ignored("not_addressed")))
     }
 }

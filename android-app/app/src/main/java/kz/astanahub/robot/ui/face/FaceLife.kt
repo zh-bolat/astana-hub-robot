@@ -4,8 +4,9 @@ import kotlin.random.Random
 
 /**
  * «Жизнь» лица поверх выражения — как в прототипе (`docs/design/robot-mvp.html`): моргание (`blinkLoop`), взгляд по
- * сторонам на странице лица в тишине (`glanceAround`), на заставке — «свободное время» (`wanderLoop`: глаза бродят,
- * иногда скучают, удивляются или радуются; робот «никогда не спит»). Дыхания и микродвижений у прототипа нет.
+ * сторонам на странице лица в тишине (`glanceAround`), а после [WANDER_AFTER_MS] тишины — «свободное время» заставки
+ * (`wanderLoop`: глаза бродят, иногда скучают, удивляются или радуются). Во сне (MF4) глаза прикрыты и не двигаются,
+ * не моргают. Дыхания и микродвижений у прототипа нет.
  * Всё детерминировано от [random] и времени (мс), без аллокаций в кадре.
  */
 class FaceLife(private val random: Random) {
@@ -42,6 +43,9 @@ class FaceLife(private val random: Random) {
 
     private var mood = FaceMood.IDLE
 
+    /** С какого момента лицо в покое (для заставки с бродящими глазами); [UNSET] — с первого кадра. */
+    private var idleSince = UNSET
+
     // Моргание.
     private var nextBlinkAt = Long.MIN_VALUE
     private var blinkStart = Long.MIN_VALUE / 2
@@ -53,11 +57,13 @@ class FaceLife(private val random: Random) {
 
     /** Сменилось состояние: взгляд — к центру (кроме покоя и заставки), заставка — заново с обычного выражения. */
     fun onMood(m: FaceMood, nowMs: Long) {
-        val wasSleep = mood == FaceMood.SLEEP
+        if (m == FaceMood.IDLE && (mood != FaceMood.IDLE || idleSince == UNSET)) idleSince = nowMs
         mood = m
         returnAt = -1L
         if (m == FaceMood.SLEEP) {
-            if (!wasSleep) nextGazeAt = nowMs
+            idleExpr = ProtoExpr.NEUTRAL
+            gazeOffsetX = 0f
+            gazeOffsetY = 0f
         } else {
             idleExpr = ProtoExpr.NEUTRAL
             gazeOffsetX = 0f
@@ -69,12 +75,13 @@ class FaceLife(private val random: Random) {
     fun update(nowMs: Long, @Suppress("UNUSED_PARAMETER") dt: Float, @Suppress("UNUSED_PARAMETER") breathRate: Float, reducedMotion: Boolean) {
         if (nextBlinkAt == Long.MIN_VALUE) nextBlinkAt = nowMs + BLINK_MIN_MS + random.nextLong(BLINK_SPREAD_MS)
         if (nextGazeAt == Long.MIN_VALUE) nextGazeAt = nowMs + GLANCE_MIN_MS
+        if (idleSince == UNSET) idleSince = nowMs
         updateGaze(nowMs, reducedMotion)
         updateBlink(nowMs)
     }
 
     /** Прототип: `blinkLoop` пропускает «думает» и «не понял»; видно моргание только у овалов `bl`. */
-    private fun blinksAllowed(m: FaceMood) = m != FaceMood.THINKING && m != FaceMood.CONFUSED
+    private fun blinksAllowed(m: FaceMood) = m != FaceMood.THINKING && m != FaceMood.CONFUSED && m != FaceMood.SLEEP
 
     private fun updateBlink(nowMs: Long) {
         if (nowMs >= nextBlinkAt) {
@@ -108,7 +115,7 @@ class FaceLife(private val random: Random) {
         blinkCount++
     }
 
-    /** Взгляд: на странице лица в тишине — `glanceAround`, на заставке — `wanderLoop`, иначе — в центр. */
+    /** Взгляд: в тишине — `glanceAround`, после [WANDER_AFTER_MS] тишины — `wanderLoop`, во сне и в деле — в центр. */
     private fun updateGaze(nowMs: Long, reducedMotion: Boolean) {
         if (returnAt >= 0L && returnAt <= nowMs) {
             returnAt = -1L
@@ -116,15 +123,15 @@ class FaceLife(private val random: Random) {
         }
         if (nowMs < nextGazeAt) return
         val r = if (reducedMotion) 0.5f else 1f
-        when (mood) {
-            FaceMood.IDLE -> {
+        when {
+            mood == FaceMood.IDLE && nowMs - idleSince < WANDER_AFTER_MS -> {
                 // Прототип `glanceAround`: точка из первых семи SPOTS × 0,8, держит 1,1–1,7 с и обратно.
                 val i = random.nextInt(7)
                 setGaze(SPOTS[i * 2] * 0.8f * r / LOOK_RANGE_X, SPOTS[i * 2 + 1] * 0.8f * r / LOOK_RANGE_Y)
                 returnAt = nowMs + 1_100L + random.nextLong(600L)
                 nextGazeAt = nowMs + GLANCE_MIN_MS + random.nextLong(GLANCE_SPREAD_MS)
             }
-            FaceMood.SLEEP -> {
+            mood == FaceMood.IDLE -> {
                 // Прототип `wanderLoop`: 14 % скучает, 12 % удивилось и смотрит в сторону, 6 % радуется, иначе бродит.
                 val roll = random.nextFloat()
                 when {
@@ -168,6 +175,10 @@ class FaceLife(private val random: Random) {
         const val BLINK_MAX_MS = BLINK_MIN_MS + BLINK_SPREAD_MS
         const val DOUBLE_BLINK_CHANCE = 0.2f
         const val DOUBLE_BLINK_GAP_MS = 260L
+
+        /** Тишина, после которой бодрствующее лицо переходит к заставке с бродящими глазами (MF4). */
+        const val WANDER_AFTER_MS = 30_000L
+        private const val UNSET = Long.MIN_VALUE
 
         /** Взгляд в покое: раз в 4,5–8 с (прототип `glanceAround`). */
         const val GLANCE_MIN_MS = 4_500L

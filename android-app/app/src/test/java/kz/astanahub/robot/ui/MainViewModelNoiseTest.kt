@@ -213,7 +213,7 @@ class MainViewModelNoiseTest {
     }
 
     @Test
-    fun `asleep with nobody near - voice does not wake, listening paused, person wakes`() = runTest(dispatcher) {
+    fun `asleep - voice does not wake, listening paused, a person does not wake either`() = runTest(dispatcher) {
         val vm = vm(screensaverMillis = 60_000)
         advanceTimeBy(61_000); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
@@ -229,15 +229,21 @@ class MainViewModelNoiseTest {
         assertTrue(requests.isEmpty())
         assertEquals(1, NoiseStats.ignoredWhileAsleep)
 
-        // подошёл человек (PersonApi) — проснулся, голос снова слушается
+        // MF4: подошёл человек (PersonApi) — робот спит дальше, голос по-прежнему не слушается
         presence.emit(PresenceEvent.Arrived(1, greet = false))
         runCurrent()
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        assertEquals(true, voice.pausedHistory.last())
+        say("Где кафе?")
+        advanceTimeBy(2_000); runCurrent()
+        assertTrue(requests.isEmpty())
+        // явное действие на странице (плитка) — проснулся, голос снова слушается
+        vm.wake()
+        runCurrent()
         assertEquals(false, voice.pausedHistory.last())
         say("Где кафе?")
         advanceTimeBy(2_000); runCurrent()
         assertEquals(listOf("Где кафе?"), requests.map { it.question })
-        presence.emit(PresenceEvent.Left)
         advanceUntilIdle()
     }
 
@@ -255,14 +261,15 @@ class MainViewModelNoiseTest {
     }
 
     @Test
-    fun `without PersonApi voice still wakes from sleep`() = runTest(dispatcher) {
+    fun `without PersonApi voice does not wake from sleep either`() = runTest(dispatcher) {
         val vm = vm(screensaverMillis = 60_000, withPresence = false)
         advanceTimeBy(61_000); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
-        assertTrue(voice.pausedHistory.none { it })
+        assertEquals(true, voice.pausedHistory.last())
         say("Где кафе?")
         advanceTimeBy(2_000); runCurrent()
-        assertEquals(listOf("Где кафе?"), requests.map { it.question })
+        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        assertTrue(requests.isEmpty())
     }
 
     @Test

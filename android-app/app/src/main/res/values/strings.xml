@@ -57,6 +57,9 @@
     <string name="action_menu">Меню</string>
     <string name="action_face">К роботу</string>
     <string name="face_hint">Скажите вопрос, я слушаю</string>
+    <!-- MF4: мини-подсказка сверху экрана лица (во сне / бодрствуя). -->
+    <string name="face_hint_asleep">Коснитесь, чтобы поговорить</string>
+    <string name="face_hint_awake">Дважды коснитесь — уснуть</string>
     <string name="tap_hint">Коснитесь экрана, чтобы открыть меню</string>
     <!-- Экран 2 (M3): чат, подпись-источник, голос. -->
     <string name="chat_source">Источник: %1$s</string>
