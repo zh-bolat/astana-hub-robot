@@ -26,7 +26,8 @@ class ExpressionsTest {
     @Test
     fun `every mood except idle differs from neutral`() {
         for (m in FaceMood.entries) {
-            if (m == FaceMood.IDLE) continue
+            // Заставка — те же глаза, что в покое (фигуры выбирает FaceLife).
+            if (m == FaceMood.IDLE || m == FaceMood.SLEEP) continue
             val differs = (0 until P.COUNT).any { abs(value(m, it) - n[it]) > 1e-3f }
             assertTrue("$m looks like neutral", differs)
         }
@@ -34,7 +35,8 @@ class ExpressionsTest {
 
     @Test
     fun `every pair of moods is distinguishable`() {
-        val moods = FaceMood.entries
+        // Заставка рисуется глазами покоя (фигуру выбирает FaceLife) — её с покоем не сравниваем.
+        val moods = FaceMood.entries.filter { it != FaceMood.SLEEP }
         for (i in moods.indices) for (j in i + 1 until moods.size) {
             val a = moods[i]
             val b = moods[j]
@@ -51,32 +53,29 @@ class ExpressionsTest {
         // Слушает — глаза шире, реагирует на голос.
         assertTrue(value(FaceMood.LISTENING, P.EYE_H) > n[P.EYE_H])
         assertEquals(1f, value(FaceMood.LISTENING, P.LISTEN), 0f)
-        // Думает (вид прототипа) — взгляд вверх-в сторону, глаза-полоски и «?».
-        assertTrue(value(FaceMood.THINKING, P.GAZE_Y) < -0.5f)
-        assertTrue(abs(value(FaceMood.THINKING, P.GAZE_X)) > 0.3f)
+        // Думает (прототип `think`) — полоски и «?», всё на месте.
+        assertEquals(0f, value(FaceMood.THINKING, P.GAZE_Y), 0f)
+        assertEquals(0f, value(FaceMood.THINKING, P.HEAD_TILT), 0f)
         assertEquals(0f, value(FaceMood.THINKING, P.OPEN_L), 0f)
         assertEquals(1f, value(FaceMood.THINKING, P.QUESTION), 0f)
         assertTrue(abs(value(FaceMood.THINKING, P.BROW_L) - value(FaceMood.THINKING, P.BROW_R)) > 10f)
         // Говорит — рот от звука.
         assertEquals(1f, value(FaceMood.SPEAKING, P.TALK), 0f)
-        // Едет — взгляд по ходу, решительные брови.
-        assertTrue(value(FaceMood.TRAVEL, P.GAZE_X) > 0.3f)
+        // Едет (прототип `guide`) — глаза сдвинуты по ходу, решительные брови.
+        assertEquals(ProtoExpr.GUIDE, Expressions.proto(FaceMood.TRAVEL))
         assertTrue(value(FaceMood.TRAVEL, P.BROW_TILT_L) < 0f)
-        // Не понял — «?», брови вразнобой, наклон головы.
+        // Не понял (прототип `confused`) — полоски и «?», без наклона.
         assertEquals(1f, value(FaceMood.CONFUSED, P.QUESTION), 0f)
-        assertTrue(abs(value(FaceMood.CONFUSED, P.BROW_L) - value(FaceMood.CONFUSED, P.BROW_R)) > 15f)
-        assertTrue(abs(value(FaceMood.CONFUSED, P.HEAD_TILT)) > 5f)
+        assertEquals(0f, value(FaceMood.CONFUSED, P.OPEN_L), 0f)
+        assertEquals(0f, value(FaceMood.CONFUSED, P.HEAD_TILT), 0f)
         // Ошибка — огорчение формой: веко и брови «домиком», уголки вниз, капля.
         assertTrue(value(FaceMood.ERROR, P.MOUTH_SMILE) < 0f)
         assertTrue(value(FaceMood.ERROR, P.LID_L) > 0.2f && value(FaceMood.ERROR, P.LID_ANGLE) > 0f)
         assertTrue(value(FaceMood.ERROR, P.BROW_TILT_L) > 0f)
         assertEquals(1f, value(FaceMood.ERROR, P.SWEAT), 0f)
-        // Сон — глаза закрыты дугой вниз, «z», медленное глубокое дыхание.
-        assertEquals(0f, value(FaceMood.SLEEP, P.OPEN_L), 0f)
-        assertTrue(value(FaceMood.SLEEP, P.ARC) < 0f)
-        assertEquals(1f, value(FaceMood.SLEEP, P.ZZZ), 0f)
-        assertTrue(value(FaceMood.SLEEP, P.BREATH_RATE) < n[P.BREATH_RATE])
-        assertTrue(value(FaceMood.SLEEP, P.BREATH) > n[P.BREATH])
+        // Заставка — прототип «никогда не спит»: глаза открыты, без «z».
+        assertEquals(1f, value(FaceMood.SLEEP, P.OPEN_L), 0f)
+        assertEquals(0f, value(FaceMood.SLEEP, P.ZZZ), 0f)
         // Зевок — рот широко.
         assertEquals(1f, value(FaceMood.YAWN, P.MOUTH_OPEN), 0f)
         // Пробуждение — глаза распахнуты.
@@ -89,6 +88,26 @@ class ExpressionsTest {
         assertTrue(value(FaceMood.SURPRISED, P.EYE_H) > value(FaceMood.LISTENING, P.EYE_H))
         assertTrue(value(FaceMood.SURPRISED, P.BROW_L) > 25f)
         assertTrue(value(FaceMood.SURPRISED, P.MOUTH_OPEN) > 0.5f && value(FaceMood.SURPRISED, P.MOUTH_ROUND) == 1f)
+    }
+
+    @Test
+    fun `moods draw the prototype figures`() {
+        assertEquals(ProtoExpr.NEUTRAL, Expressions.proto(FaceMood.IDLE))
+        assertEquals(ProtoExpr.LISTEN, Expressions.proto(FaceMood.LISTENING))
+        assertEquals(ProtoExpr.THINK, Expressions.proto(FaceMood.THINKING))
+        assertEquals(ProtoExpr.SPEAK, Expressions.proto(FaceMood.SPEAKING))
+        assertEquals(ProtoExpr.WIDE, Expressions.proto(FaceMood.LOOKING))
+        assertEquals(ProtoExpr.GUIDE, Expressions.proto(FaceMood.TRAVEL))
+        assertEquals(ProtoExpr.HAPPY, Expressions.proto(FaceMood.HAPPY))
+        assertEquals(ProtoExpr.CONFUSED, Expressions.proto(FaceMood.CONFUSED))
+        assertEquals(ProtoExpr.SAD, Expressions.proto(FaceMood.ERROR))
+        assertEquals(ProtoExpr.BLUSH, Expressions.proto(FaceMood.PETTED))
+        assertEquals(ProtoExpr.SPARKLE, Expressions.proto(FaceMood.SPARKLE))
+        assertEquals(ProtoExpr.DIZZY, Expressions.proto(FaceMood.DIZZY))
+        assertEquals(ProtoExpr.BORED, Expressions.proto(FaceMood.SLEEP, ProtoExpr.BORED))
+        // Моргают только овалы `bl`: обычное, слушает, ведёт.
+        assertTrue(Expressions.blinks(ProtoExpr.NEUTRAL) && Expressions.blinks(ProtoExpr.LISTEN) && Expressions.blinks(ProtoExpr.GUIDE))
+        assertFalse(Expressions.blinks(ProtoExpr.SPEAK) || Expressions.blinks(ProtoExpr.WIDE) || Expressions.blinks(ProtoExpr.HAPPY))
     }
 
     @Test
@@ -117,8 +136,8 @@ class ExpressionsTest {
     }
 
     @Test
-    fun `sleep is slower than waking`() {
-        assertTrue(Expressions.tempo(FaceMood.SLEEP) > 1f)
+    fun `screensaver keeps the normal tempo, waking is perky`() {
+        assertEquals(1f, Expressions.tempo(FaceMood.SLEEP), 0f)
         assertTrue(Expressions.tempo(FaceMood.WAKE) < 1f)
         assertEquals(1f, Expressions.tempo(FaceMood.IDLE), 0f)
     }

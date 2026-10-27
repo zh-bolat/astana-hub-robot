@@ -541,8 +541,7 @@ class MainViewModel(
             if (_state.value.partialQuestion != null) _state.update { it.copy(partialQuestion = null) }
             return
         }
-        // Разговор голосом — лицом к лицу: из меню возвращаемся к лицу (agent).
-        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        // Прототип `autoFace`: к лицу — когда робот начнёт отвечать (submitInternal ставит faceOnAnswer).
         submitInternal(text, faqId = null, lang = t.lang, fromVoice = true)
     }
 
@@ -554,7 +553,7 @@ class MainViewModel(
         if (busyForVoice() || requestJob?.isActive == true) return
         lastNoConnectionPhrase = now
         val lang = _state.value.lang
-        cue(FaceCue.ERROR)
+        // Лицо: «кружится голова» 2,5 с — по переходу в offline (MainActivity, прототип `dizzy`).
         requestJob = viewModelScope.launch { say(phrases.get(PhraseKey.NO_CONNECTION, lang), offline = true) }
     }
 
@@ -599,9 +598,9 @@ class MainViewModel(
     /** Режим «проснувшегося» экрана: agent — лицо, legacy — прежнее меню. */
     private fun awakeMode(): ScreenMode = if (chatMode().usesAgent) ScreenMode.FACE else ScreenMode.MENU
 
-    /** Кнопка «Меню» / жест на лице: плитки и частые вопросы. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
+    /** Свайп с лица: страница приложения. Без касаний [MENU_IDLE_MILLIS] — назад к лицу. */
     fun openMenu() {
-        // Касание лица во время ответа (mynbay): только меняем вид, речь не прерываем и обратно не перекидываем.
+        // Свайп с лица во время ответа: только меняем вид, речь не прерываем и обратно не перекидываем.
         faceOnAnswer = false
         wake()
         if (_state.value.mode != ScreenMode.MENU || _state.value.answerOnFace) {
@@ -610,12 +609,13 @@ class MainViewModel(
         restartMenuTimer()
     }
 
-    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; mynbay). */
+    /** Ответ на вопрос ещё не начинал звучать: когда заговорит — показать лицо (один раз за вопрос; прототип `autoFace`). */
     private var faceOnAnswer = false
 
     /**
-     * Смена фазы: робот заговорил в ответ на вопрос с экрана приложения — лицо на весь экран с крупными субтитрами
-     * (функция mynbay); договорил — в legacy, где «дом» — меню, назад в меню (в agent лицо и есть дом).
+     * Смена фазы: робот заговорил в ответ на вопрос, пока открыта страница приложения, — лицо на весь экран (прототип
+     * `autoFace`; субтитры остаются в пузыре страницы); договорил — в legacy, где «дом» — меню, назад в меню (в agent
+     * лицо и есть дом).
      */
     private fun onPhaseChanged(from: Phase, to: Phase) {
         val s = _state.value
@@ -665,7 +665,10 @@ class MainViewModel(
         menuJob = viewModelScope.launch {
             delay(MENU_IDLE_MILLIS)
             val s = _state.value
-            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true) {
+            // Прототип `armMenu`: не уходит, пока робот говорит, слушает, думает или ведёт.
+            if (s.mode == ScreenMode.MENU && !s.processing && requestJob?.isActive != true && phaseIdle(s.phase) &&
+                s.guidingTo == null
+            ) {
                 _state.update { it.copy(mode = ScreenMode.FACE) }
             } else if (s.mode == ScreenMode.MENU) {
                 restartMenuTimer()
@@ -1661,7 +1664,9 @@ class MainViewModel(
             return
         }
         touchLiveSession()
-        if (_state.value.mode == ScreenMode.MENU && awakeMode() == ScreenMode.FACE) _state.update { it.copy(mode = ScreenMode.FACE) }
+        // Прототип `autoFace`: лицо на весь экран — когда робот начнёт отвечать (страница приложения остаётся, пока
+        // слушает и думает).
+        faceOnAnswer = true
         // На экране предложение «Проводить?» (where_is), посетитель сказал «да / давай / проводи / иә / yes» —
         // едем сразу, не дожидаясь сервера. Проверка — ДО сброса guideTarget ниже.
         val offered = _state.value.guideTarget
@@ -2240,7 +2245,7 @@ class MainViewModel(
         const val LIVE_LOOK_SPEAK_FALLBACK_MILLIS = 4_000L
 
         /** Меню без касаний столько — назад к лицу (agent). */
-        const val MENU_IDLE_MILLIS = 30_000L
+        const val MENU_IDLE_MILLIS = 90_000L
 
         /** Эмоция держится после ответа / события, потом лицо спокойное. */
         const val EMOTION_LINGER_MILLIS = 6_000L

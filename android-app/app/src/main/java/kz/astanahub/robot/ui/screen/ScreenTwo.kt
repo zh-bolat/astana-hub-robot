@@ -96,6 +96,10 @@ import kz.astanahub.robot.ui.design.HubColors
 import kz.astanahub.robot.ui.design.HubMotion
 import kz.astanahub.robot.ui.design.HubType
 
+/** Пузырь после речи: последний кусок фразы (все слова сказаны) и эмодзи настроения. */
+@Immutable
+data class Linger(val text: String, val emoji: String)
+
 /** Подписи экрана 2 на текущем языке (собирает MainActivity из ресурсов ru / kk / en). */
 @Immutable
 data class ScreenTexts(
@@ -123,12 +127,11 @@ data class ScreenTexts(
     val sourceMany: String = "%1\$s",
     val back: String = "",
     val closed: String = "",
+    val closedSub: String = "",
     val reopen: String = "",
     val home: String = "",
     val menu: String = "",
     val look: String = "",
-    val faceHint: String = "",
-    val tapHint: String = "",
     val costumes: List<String> = emptyList(),
 )
 
@@ -200,6 +203,13 @@ class ScreenTwoState {
     /** Разговор на экране — с реплик после последнего «В начало» (id > [chatFrom]); раньше — история выше. */
     var chatFrom by mutableLongStateOf(0L)
 
+    /** После речи (прототип `fin`): последний кусок субтитров с эмодзи настроения висит в пузыре; null — нет. */
+    var linger by mutableStateOf<Linger?>(null)
+
+    /** Счётчики-сигналы: кивок экрана головы в конце речи, «сборка» робота при выборе костюма. */
+    var nod by mutableIntStateOf(0)
+    var assemble by mutableIntStateOf(0)
+
     /** Снимок «Что это?» (прототип): в «думаю» и в карточке ответа [photoItemId] (−1 — ответа ещё нет). */
     var photo by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     var photoItemId by mutableLongStateOf(-1L)
@@ -218,9 +228,6 @@ class ScreenTwoState {
 
     /** Слой «Приложение закрыто» (прототип) — 1,5 с до закрытия, «Открыть снова» — передумать. */
     var closed by mutableStateOf(false)
-
-    /** Ответ на вопрос из приложения идёт на лице (mynbay): касание экрана вернёт в приложение — подсказка справа внизу. */
-    var tapToMenu by mutableStateOf(false)
 
     /** Палец на роботе-компаньоне: отклик на touch-down рисует слой лица (глаза сжимаются). */
     val miniPressed = mutableStateOf(false)

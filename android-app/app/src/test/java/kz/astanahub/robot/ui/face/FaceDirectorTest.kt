@@ -71,12 +71,11 @@ class FaceDirectorTest {
     }
 
     @Test
-    fun `falling asleep yawns first then sleeps`() {
+    fun `falling asleep goes straight to the screensaver - the prototype never yawns`() {
         tick()
         inputs.awake = false
-        assertEquals(FaceMood.YAWN, tick())
-        assertEquals(FaceMood.YAWN, advance(FaceDirector.YAWN_MS - 100))
-        assertEquals(FaceMood.SLEEP, advance(200))
+        assertEquals(FaceMood.SLEEP, tick())
+        assertEquals(FaceMood.SLEEP, advance(FaceDirector.YAWN_MS + 100))
     }
 
     @Test
@@ -158,11 +157,11 @@ class FaceDirectorTest {
         inputs.awake = false
         inputs.petting = true
         director.cue(FaceCue.ERROR, now)
-        assertEquals(FaceMood.YAWN, tick())
+        assertEquals(FaceMood.SLEEP, tick())
         director.forcedMood = FaceMood.HAPPY
         assertEquals(FaceMood.HAPPY, tick())
         director.forcedMood = null
-        assertEquals(FaceMood.YAWN, tick())
+        assertEquals(FaceMood.SLEEP, tick())
     }
 
     @Test
@@ -191,11 +190,27 @@ class FaceDirectorTest {
     }
 
     @Test
-    fun `emotion overlay weight depends on mood`() {
-        assertEquals(1f, Expressions.overlayWeight(FaceMood.IDLE), 0f)
-        assertTrue(Expressions.overlayWeight(FaceMood.SPEAKING) in 0.5f..1f)
-        assertEquals(0f, Expressions.overlayWeight(FaceMood.THINKING), 0f)
-        assertEquals(0f, Expressions.overlayWeight(FaceMood.SLEEP), 0f)
-        assertEquals(0f, Expressions.overlayWeight(FaceMood.ERROR), 0f)
+    fun `server emotion is not laid over the face - the prototype has no overlay`() {
+        for (m in FaceMood.entries) assertEquals("$m", 0f, Expressions.overlayWeight(m), 0f)
+    }
+
+    @Test
+    fun `greeting - eyes open wide, then listen, then follow activity`() {
+        tick()
+        director.cue(FaceCue.GREET, now)
+        assertEquals(FaceMood.WIDE, tick())
+        assertEquals(FaceMood.LISTENING, advance(500))
+        assertEquals(FaceMood.LISTENING, advance(600))
+        assertEquals(FaceMood.IDLE, advance(200))
+    }
+
+    @Test
+    fun `answer mood by the emoji - as the prototype MOOD_FACE`() {
+        assertEquals(FaceCue.MOOD_CONFUSED, FaceDirector.moodFor("🤔"))
+        assertEquals(FaceCue.MOOD_BLUSH, FaceDirector.moodFor("👋"))
+        assertEquals(FaceCue.MOOD_SPARKLE, FaceDirector.moodFor("🎉"))
+        assertEquals(FaceCue.MOOD_WIDE, FaceDirector.moodFor("📶"))
+        assertEquals(FaceCue.MOOD_HAPPY, FaceDirector.moodFor("☕"))
+        assertEquals(FaceCue.MOOD_HAPPY, FaceDirector.moodFor("🙂"))
     }
 }

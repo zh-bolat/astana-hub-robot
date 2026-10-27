@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -154,8 +155,9 @@ fun RobotScreens(
             return@LaunchedEffect
         }
         if (progress.isRunning && progress.targetValue == target) return@LaunchedEffect
-        // Смена режима без жеста: пружина от текущего прогресса и скорости (прерываемо).
-        if (reduced) progress.snapTo(target) else progress.animateTo(target, HubMotion.Gentle.compose())
+        // Смена режима без жеста (таймер меню, начало ответа, тап по голове): как `morph` прототипа — 900 мс
+        // по кривой (.45, 0, .15, 1); прерываемо касанием.
+        if (reduced) progress.snapTo(target) else progress.animateTo(target, tween(MORPH_MS, easing = MORPH_EASE))
     }
 
     /** Касание: летящий экран замирает под пальцем (apple-design §3); покоящийся — не трогаем. */
@@ -211,28 +213,18 @@ fun RobotScreens(
             screenRadius = SCREEN_RADIUS.toPx()
         }
         val menuOpenNow by rememberUpdatedState(screen.menuOpen)
-        val blur by animateFloatAsState(if (two.exitConfirm) 1f else 0f, HubMotion.Default.compose(), label = "exitBlur")
+        val blur by animateFloatAsState(if (two.exitConfirm || pin.visible) 1f else 0f, HubMotion.Default.compose(), label = "exitBlur")
         val morph = remember { FloatArray(3) }
         val miniPress by animateFloatAsState(
             if (two.miniPressed.value) MINI_PRESS_SCALE else 1f,
             HubMotion.Press.compose(),
             label = "miniPress",
         )
-        // Экран лица с подписями (прототип v8): глаза поменьше и выше, под ними — состояние, субтитры, кнопки.
-        // Сон и поездка — глаза во весь экран (заставка, слой поездки).
-        val islandNow = screen.island
-        val faceUi = !screen.asleep && !screen.traveling &&
-            islandNow !is kz.astanahub.robot.ui.face.IslandContent.Trip && islandNow !is kz.astanahub.robot.ui.face.IslandContent.Outcome
-        val startScale by animateFloatAsState(if (faceUi) FACE_UI_SCALE else 1f, HubMotion.Gentle.compose(), label = "faceScale")
-        val startDyDp by animateFloatAsState(if (faceUi) FACE_UI_SHIFT.value else 0f, HubMotion.Gentle.compose(), label = "faceDy")
         val galaxy = two.costume == Costume.GALAXY
 
         // Экран 2 (страница приложения) лежит под лицом: чёрный экран лица сжимается в голову робота-компаньона
         // (прототип). Закрытие — свайп вправо; за краем (rubber-band) страница едет за пальцем.
         val settled by remember { derivedStateOf { visual() >= 0.98f && !progress.isRunning } }
-        // Лицо на месте (не едет и не тянется пальцем): только тогда его подписи и кнопки (прототип: на время
-        // перехода `.face-layer.morphing` прячет всё, кроме глаз).
-        val faceSettled by remember { derivedStateOf { visual() <= 0.02f && !progress.isRunning } }
         ScreenTwo(
             state = two,
             actions = actions,
@@ -295,24 +287,32 @@ fun RobotScreens(
                 cornerRadius = CornerRadius(r * 1.2f, r),
                 alpha = 1f - 0.6f * blur,
             )
-            // Костюм «Космонавт»: на экране лица — космос (прототип: тёмно-фиолетовое свечение и звёзды).
+            // Костюм «Космонавт»: на экране лица — космос (прототип: эллипс 900 × 600 от #0E0B2E к чёрному на 70 %
+            // и 6 звёзд по 1–2 px).
             if (galaxy && t < 0.5f) {
                 val a = (1f - t * 2f) * (1f - 0.6f * blur)
-                drawRoundRect(
-                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        listOf(Color(0xFF0E0B2E), Color.Black),
-                        center = Offset((left + right) / 2f, (top + bottom) / 2f),
-                        radius = (right - left) * 0.45f,
-                    ),
-                    topLeft = Offset(left, top),
-                    size = Size(right - left, bottom - top),
-                    cornerRadius = CornerRadius(r * 1.2f, r),
-                    alpha = a,
-                )
-                for (i in STARS.indices step 3) {
+                val cx = (left + right) / 2f
+                val cy = (top + bottom) / 2f
+                val k = (right - left) / w
+                val rx = SPACE_RX.dp.toPx() * k
+                val ry = SPACE_RY.dp.toPx() * k
+                withTransform({ scale(1f, ry / rx, Offset(cx, cy)) }) {
+                    drawRect(
+                        brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                            0f to Color(0xFF0E0B2E),
+                            0.7f to Color.Black,
+                            center = Offset(cx, cy),
+                            radius = rx,
+                        ),
+                        topLeft = Offset(left, cy - (cy - top) * rx / ry),
+                        size = Size(right - left, (bottom - top) * rx / ry),
+                        alpha = a,
+                    )
+                }
+                for (i in STARS.indices step 4) {
                     drawCircle(
-                        Color.White.copy(alpha = STARS[i + 2] * a),
-                        radius = 1.6f * density.density,
+                        STAR_COLORS[i / 4].copy(alpha = STARS[i + 2] * a),
+                        radius = STARS[i + 3] / 2f * density.density * k.coerceAtLeast(0.3f),
                         center = Offset(left + (right - left) * STARS[i], top + (bottom - top) * STARS[i + 1]),
                     )
                 }
@@ -326,7 +326,7 @@ fun RobotScreens(
                 .graphicsLayer {
                     // Глаза в экране головы компаньона двигаются вместе с её покачиванием.
                     val bob = two.headBob.floatValue * density.density * visual().coerceIn(0f, 1f)
-                    FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob, slotH, morph, startScale, startDyDp * density.density)
+                    FaceMorph.compute(visual(), w, h, slotCx, slotCy + bob, slotH, morph)
                     scaleX = morph[0] * miniPress
                     scaleY = morph[0] * miniPress
                     translationX = morph[1]
@@ -376,36 +376,13 @@ fun RobotScreens(
                     },
                 ),
         ) {
-            // Подсказка свайпа (прототип: «‹‹‹» на правом краю).
+            // Экран лица прототипа v9 — только глаза и подсказка свайпа «‹‹‹» на правом краю (без подписей и кнопок;
+            // «нет связи» на лице прототип не показывает — только полоса на странице приложения).
             if (swipeAllowed && !screen.asleep && screenOne) {
                 SwipeChevrons(Modifier.align(Alignment.CenterEnd).padding(end = 34.dp))
             }
-            // Экран лица прототипа: логотип, язык, выход, состояние, субтитры, чипы, «Меню», «Спросить голосом» / «Стоп».
-            AnimatedVisibility(
-                visible = faceUi && screenOne && faceSettled,
-                enter = fadeIn(HubMotion.Default.compose()),
-                exit = fadeOut(HubMotion.Snappy.compose()),
-            ) {
-                FaceOverlay(
-                    state = two,
-                    actions = actions,
-                    onMenu = {
-                        if (hostNow.onSwitch(true)) scope.launch { progress.animateTo(1f, HubMotion.Gentle.compose()) }
-                    },
-                    bottom = islandNow !is kz.astanahub.robot.ui.face.IslandContent.WhereIs,
-                )
-            }
-            // Нет связи — и на экране лица видно (не только тишина): янтарная плашка под верхом.
-            AnimatedVisibility(
-                visible = two.offline && !screen.asleep && screenOne,
-                enter = fadeIn(HubMotion.Default.compose()),
-                exit = fadeOut(HubMotion.Default.compose()),
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 96.dp),
-            ) {
-                OfflinePill(two.texts.offline)
-            }
-            // Сон: приветствие внизу по очереди на трёх языках (прототип, заставка).
-            SleepGreeting(visible = screen.asleep && screenOne, modifier = Modifier.align(Alignment.BottomCenter))
+            // Заставка: приветствие внизу по очереди на трёх языках (прототип `#idleLayer`).
+            SleepGreeting(visible = screen.asleep && screenOne, modifier = Modifier.fillMaxSize())
             // Поездка — светлый слой прототипа поверх лица (стрелка, «Иду к…», «Стоп»), «где» — карточка внизу.
             GuideLayer(
                 content = screen.island.takeIf { !screen.menuOpen },
@@ -436,21 +413,6 @@ fun RobotScreens(
 /** Мини-лицо под пальцем (тап по нему — к лицу): сжимается, как кнопка (apple-design: отклик на touch-down). */
 private const val MINI_PRESS_SCALE = 0.9f
 
-/** Плашка «нет связи» на экране лица — янтарная, как полоса прототипа. */
-@Composable
-private fun OfflinePill(text: String) {
-    val shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
-    androidx.compose.foundation.layout.Row(
-        Modifier
-            .background(HubColors.AmberBg, shape)
-            .padding(horizontal = 32.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.padding(end = 14.dp).background(HubColors.AmberFg, androidx.compose.foundation.shape.CircleShape).padding(7.dp))
-        BasicText(text, style = HubType.Callout.copy(color = HubColors.AmberFg, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), maxLines = 1)
-    }
-}
-
 /** Слой прототипа «Приложение закрыто»: тёмный фон, заголовок, «Открыть снова». */
 @Composable
 private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
@@ -458,16 +420,24 @@ private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
         Box(
             Modifier
                 .fillMaxSize()
-                // Прототип `.closed-layer`: графитовое радиальное свечение (центр на 40 % высоты), заголовок 72sp.
+                // Прототип `.closed-layer`: графитовое свечение — эллипс 900 × 600 с центром на 40 % высоты.
                 .drawWithCache {
+                    val rx = 900.dp.toPx()
+                    val ry = 600.dp.toPx()
+                    val c = Offset(size.width * 0.5f, size.height * 0.4f)
                     val brush = androidx.compose.ui.graphics.Brush.radialGradient(
                         0f to Color(0xFF2A3142),
                         0.7f to Color(0xFF151A24),
                         1f to Color(0xFF0D1017),
-                        center = Offset(size.width * 0.5f, size.height * 0.4f),
-                        radius = 900.dp.toPx(),
+                        center = c,
+                        radius = rx,
                     )
-                    onDrawBehind { drawRect(brush) }
+                    onDrawBehind {
+                        drawRect(Color(0xFF0D1017))
+                        withTransform({ scale(1f, ry / rx, c) }) {
+                            drawRect(brush, topLeft = Offset(0f, c.y - c.y * rx / ry), size = Size(size.width, size.height * rx / ry))
+                        }
+                    }
                 }
                 .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false).consume() } },
             contentAlignment = Alignment.Center,
@@ -483,45 +453,94 @@ private fun ClosedLayer(two: ScreenTwoState, actions: ScreenTwoActions) {
                     ),
                 )
                 Spacer(Modifier.height(40.dp))
+                BasicText(
+                    two.texts.closedSub,
+                    style = HubType.Body.copy(color = Color(0xFF9AA4B6), fontSize = 34.sp, lineHeight = 46.sp),
+                )
+                Spacer(Modifier.height(40.dp))
                 HubPill(two.texts.reopen, actions::onReopen, primary = false, takeTouch = true)
             }
         }
     }
 }
 
-/** Звёзды «космоса» на экране лица (доли ширины / высоты, яркость) — как в прототипе. */
+/** Звёзды «космоса» на экране лица (прототип): доли ширины / высоты, яркость, диаметр (dp). */
 private val STARS = floatArrayOf(
-    0.10f, 0.20f, 0.8f, 0.26f, 0.72f, 0.7f, 0.58f, 0.12f, 0.8f, 0.72f, 0.84f, 0.6f, 0.90f, 0.36f, 0.8f, 0.40f, 0.40f, 0.5f,
-    0.18f, 0.55f, 0.6f, 0.80f, 0.15f, 0.7f, 0.65f, 0.60f, 0.5f, 0.35f, 0.88f, 0.6f,
+    0.10f, 0.20f, 0.8f, 1.5f,
+    0.26f, 0.72f, 0.7f, 1f,
+    0.58f, 0.12f, 0.8f, 1.5f,
+    0.72f, 0.84f, 0.6f, 1f,
+    0.90f, 0.36f, 0.8f, 2f,
+    0.40f, 0.40f, 0.5f, 1f,
 )
+private val STAR_COLORS = listOf(Color.White, Color.White, Color(0xFFC8D7FF), Color.White, Color.White, Color.White)
+
+/** Космос на экране лица: эллипс свечения (прототип: 900 × 600 px). */
+private const val SPACE_RX = 900
+private const val SPACE_RY = 600
+
+/** Переход лицо ↔ приложение без пальца (прототип `morph`: 900 мс, cubic-bezier(.45, 0, .15, 1)). */
+private const val MORPH_MS = 900
+private val MORPH_EASE = androidx.compose.animation.core.CubicBezierEasing(0.45f, 0f, 0.15f, 1f)
 
 /** Скругление экрана головы робота (прототип: 40 % / 48 % от экрана 272 × 186). */
 private val SCREEN_RADIUS = 86.dp
 
 /**
- * Заставка сна (прототип): «Здравствуйте! / Подойдите и спросите» внизу, по очереди на русском, казахском и английском,
- * ~7 с каждая, мягкая смена.
+ * Заставка (прототип `#idleLayer`): «Здравствуйте!» (56 / 700, низ строки в 104 dp от края) и «Подойдите и спросите»
+ * (34, α .55, низ в 54) по очереди на русском, казахском и английском — каждые 7 с: строки уходят вниз на 10 dp и гаснут
+ * за .6 с, через 650 мс — новый язык и обратно; подзаголовок — с задержкой .12 с.
  */
 @Composable
 private fun SleepGreeting(visible: Boolean, modifier: Modifier = Modifier) {
     AnimatedVisibility(visible, modifier = modifier, enter = fadeIn(HubMotion.Gentle.compose()), exit = fadeOut(HubMotion.Snappy.compose())) {
         var i by remember { mutableIntStateOf(0) }
+        var out by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) {
             while (true) {
                 delay(SLEEP_LINE_MS)
+                out = true
+                delay(SLEEP_SWAP_MS)
                 i = (i + 1) % SLEEP_LINES.size
+                out = false
             }
         }
-        AnimatedContent(
-            targetState = i,
-            transitionSpec = { fadeIn(tween(600)).togetherWith(fadeOut(tween(600))) },
-            label = "sleepLine",
-        ) { k ->
-            Column(Modifier.padding(bottom = 54.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                BasicText(SLEEP_LINES[k].first, style = HubType.Display.copy(color = Color.White, fontSize = 56.sp))
-                Spacer(Modifier.height(10.dp))
-                BasicText(SLEEP_LINES[k].second, style = HubType.Callout.copy(color = Color.White.copy(alpha = 0.55f), fontSize = 30.sp, lineHeight = 40.sp))
-            }
+        val hi by animateFloatAsState(if (out) 0f else 1f, tween(SLEEP_FADE_MS, easing = SLEEP_EASE), label = "saverHi")
+        val sub by animateFloatAsState(if (out) 0f else 1f, tween(SLEEP_FADE_MS, delayMillis = 120, easing = SLEEP_EASE), label = "saverSub")
+        Box(Modifier.fillMaxSize()) {
+            BasicText(
+                SLEEP_LINES[i].first,
+                style = HubType.Display.copy(
+                    color = Color.White,
+                    fontSize = 56.sp,
+                    lineHeight = 64.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                ),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 104.dp)
+                    .graphicsLayer {
+                        alpha = hi
+                        translationY = (1f - hi) * 10.dp.toPx()
+                    },
+            )
+            BasicText(
+                SLEEP_LINES[i].second,
+                style = HubType.Body.copy(
+                    color = Color.White.copy(alpha = 0.55f),
+                    fontSize = 34.sp,
+                    lineHeight = 46.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                ),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 54.dp)
+                    .graphicsLayer {
+                        alpha = sub
+                        translationY = (1f - sub) * 10.dp.toPx()
+                    },
+            )
         }
     }
 }
@@ -532,6 +551,9 @@ private val SLEEP_LINES = listOf(
     "Hello!" to "Come closer and ask",
 )
 private const val SLEEP_LINE_MS = 7_000L
+private const val SLEEP_SWAP_MS = 650L
+private const val SLEEP_FADE_MS = 600
+private val SLEEP_EASE = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 
-/** Размытие экрана под диалогом выхода (API 31+). */
-private const val EXIT_BLUR_DP = 24
+/** Размытие страницы под диалогом выхода и панелью пароля (прототип: backdrop-filter blur 10 px; API 31+). */
+private const val EXIT_BLUR_DP = 10

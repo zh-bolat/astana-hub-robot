@@ -75,6 +75,7 @@
     <string name="exit_pin_wrong">Неверный пароль. Осталось попыток: %1$d</string>
     <string name="exit_pin_locked">Слишком много попыток. Попробуйте через %1$d мин.</string>
     <string name="app_closed">Приложение закрыто</string>
+    <string name="app_closed_sub">На роботе здесь будет обычный экран Android.</string>
     <string name="app_reopen">Открыть снова</string>
     <string name="costume_default">Обычный</string>
     <string name="costume_kazakh">Казахский</string>

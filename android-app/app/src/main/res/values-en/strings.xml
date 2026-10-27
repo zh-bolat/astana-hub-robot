@@ -62,6 +62,7 @@
     <string name="exit_pin_wrong">Wrong password. Attempts left: %1$d</string>
     <string name="exit_pin_locked">Too many attempts. Try again in %1$d min.</string>
     <string name="app_closed">App closed</string>
+    <string name="app_closed_sub">On the robot, the regular Android screen appears here.</string>
     <string name="app_reopen">Open again</string>
     <string name="costume_default">Classic</string>
     <string name="costume_kazakh">Kazakh</string>

@@ -63,6 +63,7 @@
     <string name="exit_pin_wrong">Құпиясөз қате. Қалған әрекет саны: %1$d</string>
     <string name="exit_pin_locked">Әрекет тым көп. %1$d мин кейін қайталаңыз.</string>
     <string name="app_closed">Қолданба жабылды</string>
+    <string name="app_closed_sub">Роботта мұнда кәдімгі Android экраны болады.</string>
     <string name="app_reopen">Қайта ашу</string>
     <string name="costume_default">Әдеттегі</string>
     <string name="costume_kazakh">Қазақша</string>

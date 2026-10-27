@@ -205,6 +205,8 @@ class MainActivity : AppCompatActivity() {
     private fun setUpScreens() {
         val reduced = !ValueAnimator.areAnimatorsEnabled()
         face = FaceController(container.audioLevels, reducedMotion = reduced)
+        // «?» на лице — глиф Nunito ExtraBold, как в прототипе.
+        face.renderer.typeface = runCatching { ResourcesCompat.getFont(this, R.font.nunito_extrabold) }.getOrNull()
         two.reducedMotion = reduced
         // Костюм робота-компаньона (только вид) — выбор в диагностике, применяется сразу.
         lifecycleScope.launch { container.costume.costume.collect { two.costume = it } }
@@ -274,7 +276,10 @@ class MainActivity : AppCompatActivity() {
 
         override fun onAskVoice() = listenOnce()
 
-        override fun onStop() = viewModel.stop()
+        override fun onStop() {
+            speechCutAt = SystemClock.uptimeMillis()
+            viewModel.stop()
+        }
 
         override fun onSend(text: String) {
             if (text.isNotBlank()) viewModel.submit(text)
@@ -334,13 +339,15 @@ class MainActivity : AppCompatActivity() {
         timber.log.Timber.d("face tap: %s", tap)
         when (tap) {
             FaceInputMapper.Tap.WAKE -> viewModel.wake()
-            FaceInputMapper.Tap.STOP -> viewModel.stop()
-            FaceInputMapper.Tap.INTERRUPT_SPEECH -> viewModel.interruptSpeech()
-            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
-            FaceInputMapper.Tap.OPEN_MENU -> {
-                viewModel.openMenu()
-                refreshMenuOpen()
+            FaceInputMapper.Tap.STOP -> {
+                speechCutAt = SystemClock.uptimeMillis()
+                viewModel.stop()
             }
+            FaceInputMapper.Tap.INTERRUPT_SPEECH -> {
+                speechCutAt = SystemClock.uptimeMillis()
+                viewModel.interruptSpeech()
+            }
+            FaceInputMapper.Tap.REFLEX -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
         }
     }
 
@@ -501,18 +508,74 @@ class MainActivity : AppCompatActivity() {
         android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)?.asImageBitmap()
     }.onFailure { timber.log.Timber.w(it, "look photo decode") }.getOrNull()
 
-    /** Смена костюма (точки, свайп по роботу): робот «собирается», лицо радуется (как setSkin в прототипе). */
+    /**
+     * Смена костюма (точки, свайп по роботу; прототип `setSkin(k, true)`): робот «собирается» — и при повторном выборе
+     * того же костюма, лицо 1,8 с: обычный — «^ ^», казахский — смущение, айтишник — «смотрит», космонавт — звёзды.
+     */
     private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
-        if (c == container.costume.costume.value) return
         container.costume.set(c)
-        // Прототип: обычный / казахский — радость, айтишник / космонавт — широко раскрытые глаза (звёзды-глаза
-        // космонавта в нашем лице не нарисованы — ближайшее «удивление»).
+        two.assemble++
         face.onCue(
             when (c) {
-                kz.astanahub.robot.ui.screen.Costume.BUSINESS, kz.astanahub.robot.ui.screen.Costume.GALAXY -> kz.astanahub.robot.ui.face.FaceCue.SURPRISE
-                else -> kz.astanahub.robot.ui.face.FaceCue.ARRIVED
+                kz.astanahub.robot.ui.screen.Costume.CLASSIC -> FaceCue.COSTUME_HAPPY
+                kz.astanahub.robot.ui.screen.Costume.KAZAKH -> FaceCue.COSTUME_BLUSH
+                kz.astanahub.robot.ui.screen.Costume.BUSINESS -> FaceCue.COSTUME_WIDE
+                kz.astanahub.robot.ui.screen.Costume.GALAXY -> FaceCue.COSTUME_SPARKLE
             },
         )
+    }
+
+    // --- после речи (прототип `say` → `fin`) ---
+
+    private var wasSpeaking = false
+    private var wasOffline = false
+    private var lastPhraseShown: String? = null
+
+    /** Когда посетитель / оператор оборвал речь (Стоп, тап по лицу): такой конец речи — не «договорил». */
+    private var speechCutAt = Long.MIN_VALUE / 2
+    private val clearLinger = Runnable { two.linger = null }
+
+    /**
+     * Договорил (не оборвали): к последнему куску субтитров — эмодзи настроения, пузырь висит ещё max(8 с, 60 мс ×
+     * длина), лицо 2,2 с показывает настроение (🤔 — «не понял», 👋 — смущение, 🎉 — звёзды, 📶 — «смотрит», прочее —
+     * «^ ^»), экран головы кивает.
+     */
+    private fun afterSpeech(state: MainUiState) {
+        val said = state.answer?.takeIf { it.isNotBlank() } ?: lastPhraseShown ?: return
+        val emoji = kz.astanahub.robot.ui.MoodEmoji.forText(said)
+        face.onCue(kz.astanahub.robot.ui.face.FaceDirector.moodFor(emoji))
+        two.nod++
+        val piece = lastPhraseShown?.let { kz.astanahub.robot.ui.screen.SubtitleWindow.lastPiece(it) }
+        if (!piece.isNullOrBlank()) {
+            two.linger = kz.astanahub.robot.ui.screen.Linger(piece, emoji)
+            handler.removeCallbacks(clearLinger)
+            handler.postDelayed(clearLinger, maxOf(LINGER_MIN_MS, LINGER_MS_PER_CHAR * said.length))
+        }
+    }
+
+    private fun trackSpeech(state: MainUiState) {
+        val speaking = state.phase == Phase.SPEAKING
+        if (speaking) {
+            two.phrase?.let { lastPhraseShown = it }
+            if (two.linger != null) {
+                handler.removeCallbacks(clearLinger)
+                two.linger = null
+            }
+        } else if (wasSpeaking) {
+            val natural = (state.phase == Phase.IDLE || state.phase == Phase.LISTENING) &&
+                SystemClock.uptimeMillis() - speechCutAt > SPEECH_CUT_GRACE_MS
+            if (natural) afterSpeech(state)
+            lastPhraseShown = null
+        }
+        wasSpeaking = speaking
+        // Новый вопрос или сон — пузырь с прошлым ответом убираем.
+        if (two.linger != null && (state.processing || !state.partialQuestion.isNullOrBlank() || state.mode == ScreenMode.SLEEP)) {
+            handler.removeCallbacks(clearLinger)
+            two.linger = null
+        }
+        // Пропала связь — «кружится голова» 2,5 с (прототип: `dizzy`).
+        if (state.offline && !wasOffline) face.onCue(FaceCue.OFFLINE)
+        wasOffline = state.offline
     }
 
     /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
@@ -557,6 +620,7 @@ class MainActivity : AppCompatActivity() {
         // Уснул — диалог выхода закрывается (робот работает дальше).
         if (state.screensaver && two.exitConfirm) stayIn(wake = false)
         renderScreenTwo(state)
+        trackSpeech(state)
     }
 
     private fun renderScreenTwo(state: MainUiState) {
@@ -591,7 +655,6 @@ class MainActivity : AppCompatActivity() {
         }
         two.wayHint = state.wayHint
         two.offline = state.offline
-        two.tapToMenu = state.answerOnFace
         // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
         two.pose = when (state.phase) {
             Phase.LISTENING -> if (state.partialQuestion.isNullOrBlank()) kz.astanahub.robot.ui.screen.CompanionPose.IDLE else kz.astanahub.robot.ui.screen.CompanionPose.LISTEN
@@ -683,12 +746,11 @@ class MainActivity : AppCompatActivity() {
         sourceMany = str(R.string.chat_sources, lang),
         back = str(R.string.action_back, lang),
         closed = str(R.string.app_closed, lang),
+        closedSub = str(R.string.app_closed_sub, lang),
         reopen = str(R.string.app_reopen, lang),
         home = str(R.string.action_home, lang),
         menu = str(R.string.action_menu, lang),
         look = str(R.string.action_look, lang),
-        faceHint = str(R.string.face_hint, lang),
-        tapHint = str(R.string.tap_hint, lang),
         costumes = listOf(
             str(R.string.costume_default, lang),
             str(R.string.costume_kazakh, lang),
@@ -790,6 +852,13 @@ class MainActivity : AppCompatActivity() {
         /** Начертания Inter экранов 1 и 2. */
         const val PIN_TIMEOUT_MS = 60_000L
         const val MAX_PLACE_CHIPS = 5
+
+        /** Пузырь с последней фразой и эмодзи после речи: max(8 с, 60 мс × длина) — прототип `fin`. */
+        const val LINGER_MIN_MS = 8_000L
+        const val LINGER_MS_PER_CHAR = 60L
+
+        /** Речь кончилась вскоре после «Стоп» / тапа — её оборвали, настроения и кивка нет. */
+        const val SPEECH_CUT_GRACE_MS = 400L
         const val LOOK_THUMB_WIDTH = 480
         const val CLOSE_DELAY_MS = 1_500L
         val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)

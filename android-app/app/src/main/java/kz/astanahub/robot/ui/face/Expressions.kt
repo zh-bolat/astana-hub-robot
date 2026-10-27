@@ -10,12 +10,21 @@ enum class FaceMood {
     IDLE, LISTENING, THINKING, SPEAKING, LOOKING, TRAVEL,
     HAPPY, EXCITED, ACK, CONFUSED, ERROR, SURPRISED, PETTED,
     YAWN, SLEEP, WAKE,
+
+    /** Настроения прототипа (`setMood`): смущение, восторг (глаза-звёзды), «смотрит», «кружится голова». */
+    BLUSH, SPARKLE, WIDE, DIZZY,
     ;
 
     companion object {
         fun fromName(name: String?): FaceMood? = entries.firstOrNull { it.name.equals(name?.trim(), ignoreCase = true) }
     }
 }
+
+/**
+ * Выражение глаз прототипа (`EXPR` в `docs/design/robot-mvp.html`): каждое — своя фигура, рисуется
+ * [FaceRenderer] по путям прототипа; смена имени — «раскрытие» `exprIn`.
+ */
+enum class ProtoExpr { NEUTRAL, LISTEN, SPEAK, THINK, GUIDE, WIDE, HAPPY, BLUSH, SPARKLE, BORED, CONFUSED, DIZZY, SAD }
 
 /** Эмоция с сервера (`emotion`) — накладывается поверх состояния ([Expressions.overlay]). */
 enum class FaceEmotion {
@@ -128,21 +137,19 @@ object Expressions {
 
     private val IDLE = expression("idle", NEUTRAL) {}
 
-    /** Слушает: глаза чуть шире, брови приподняты, лёгкий наклон головы, реагирует на голос. */
+    /** Слушает (прототип `listen`: овалы 21 × 26 вместо 18 × 22), без наклона; реагирует на голос. */
     private val LISTENING = expression("listening", NEUTRAL) {
-        eyeSize(70f, 100f)
+        eyeSize(75f, 96.5f)
         brows(12f)
         this[P.BROW_ARCH] = 11f
         mouth(w = 50f, smile = 6f)
-        head(tilt = 4f)
         this[P.LISTEN] = 1f
         this[P.GLOW] = 0.75f
         this[P.BREATH] = 0.8f
     }
 
-    /** Думает: взгляд вверх-в сторону, прищур снизу, одна бровь выше, рот сдвинут. */
+    /** Думает (прототип `think`): две ровные полоски и «?», всё стоит на месте. */
     private val THINKING = expression("thinking", NEUTRAL) {
-        gaze(0.55f, -0.7f)
         eyeSize(60f, 78f)
         eyesOpen(0f)
         this[P.ARC] = 0f
@@ -152,7 +159,6 @@ object Expressions {
         mouth(w = 40f, smile = -2f)
         this[P.MOUTH_SKEW] = 6f
         this[P.MOUTH_X] = 30f
-        head(tilt = -5f)
         this[P.GLOW] = 0.7f
         this[P.MICRO] = 0.6f
     }
@@ -175,14 +181,11 @@ object Expressions {
         this[P.GLOW] = 0.8f
     }
 
-    /** Ведёт к месту: бодро и целеустремлённо, взгляд по ходу. */
+    /** Ведёт к месту (прототип `guide`): глаза сдвинуты вправо — по ходу (сдвиг рисует фигура). */
     private val TRAVEL = expression("travel", NEUTRAL) {
-        gaze(0.6f, 0f)
         eyeSize(60f, 82f)
-        lids(0.14f, -7f)
         brows(-2f, -9f)
         mouth(w = 66f, smile = 18f)
-        head(tilt = 3f)
         this[P.TALK] = 0.8f
         this[P.GLOW] = 0.8f
     }
@@ -217,17 +220,15 @@ object Expressions {
         this[P.GLOW] = 0.8f
     }
 
-    /** Не понял: бровь домиком у одного глаза, рот вбок, наклон головы, «?». */
+    /** Не понял (прототип `confused`): полоски и «?», без наклона. */
     private val CONFUSED = expression("confused", NEUTRAL) {
-        gaze(-0.25f, -0.1f)
-        this[P.EYE_ASYM] = 0.12f
+        eyesOpen(0f)
         browL(28f, 6f)
         browR(-4f, -10f)
         this[P.BROW_ARCH] = 14f
         mouth(w = 44f, smile = -8f)
         this[P.MOUTH_SKEW] = 16f
         this[P.MOUTH_X] = 34f
-        head(tilt = 9f)
         this[P.QUESTION] = 1f
         this[P.TALK] = 0.8f
     }
@@ -264,7 +265,6 @@ object Expressions {
         this[P.ARC] = 0.9f
         brows(6f, 8f)
         mouth(w = 78f, smile = 30f, open = 0.14f)
-        head(tilt = 9f)
         this[P.BLUSH] = 1f
         this[P.GLOW] = 1f
         this[P.MICRO] = 0.5f
@@ -283,21 +283,34 @@ object Expressions {
         this[P.GLOW] = 0.5f
     }
 
-    /** Сон: глаза-дуги «∪», голова опущена, медленное глубокое дыхание, «z». */
+    /** Заставка (прототип «никогда не спит»): глаза открыты, бродят по сторонам — фигуру выбирает [FaceLife]. */
     private val SLEEP = expression("sleep", NEUTRAL) {
-        gaze(0f, 0.2f)
+        this[P.GLOW] = 0.6f
+    }
+
+    /** Смущение (прототип `blush`): тонкие дуги и красный румянец. */
+    private val BLUSH = expression("blush", NEUTRAL) {
         eyesOpen(0f)
-        this[P.ARC] = -0.55f
-        brows(-6f, 4f)
-        this[P.BROW_ALPHA] = 0.7f
-        mouth(w = 28f, smile = 6f)
-        head(y = 18f, tilt = -4f)
-        this[P.HEAD_SCALE] = 0.97f
-        this[P.ZZZ] = 1f
-        this[P.GLOW] = 0.3f
-        this[P.BREATH] = 2.4f
-        this[P.BREATH_RATE] = 0.15f
-        this[P.MICRO] = 0.25f
+        this[P.ARC] = 0.9f
+        this[P.BLUSH] = 1f
+        this[P.GLOW] = 1f
+    }
+
+    /** Восторг (прототип `sparkle`): глаза — четырёхконечные звёзды. */
+    private val SPARKLE = expression("sparkle", NEUTRAL) {
+        this[P.GLOW] = 1f
+    }
+
+    /** «Смотрит» (прототип `wide`): глаза 21 × 26 и искорка. */
+    private val WIDE = expression("wide", NEUTRAL) {
+        eyeSize(75f, 96.5f)
+        this[P.GLOW] = 1f
+    }
+
+    /** Нет связи (прототип `dizzy`): спирали вместо глаз. */
+    private val DIZZY = expression("dizzy", NEUTRAL) {
+        eyesOpen(0f)
+        this[P.GLOW] = 0.8f
     }
 
     /** Пробуждение: бодро — глаза распахнуты, брови вверх, улыбка. */
@@ -327,10 +340,38 @@ object Expressions {
             FaceMood.YAWN -> YAWN
             FaceMood.SLEEP -> SLEEP
             FaceMood.WAKE -> WAKE
+            FaceMood.BLUSH -> BLUSH
+            FaceMood.SPARKLE -> SPARKLE
+            FaceMood.WIDE -> WIDE
+            FaceMood.DIZZY -> DIZZY
         }
     }
 
     fun mood(m: FaceMood): Expression = MOODS[m.ordinal]
+
+    /**
+     * Фигура глаз прототипа для состояния ([FaceMood.SLEEP] — заставка: глаза открыты, «скучают / удивляются /
+     * радуются» по [idle] — его выбирает [FaceLife]). Классы `#ind3` прототипа: listen / think / speak / guide /
+     * unclear → confused / look → wide; настроения `setMood`: happy / blush / sparkle / wide / dizzy.
+     */
+    fun proto(m: FaceMood, idle: ProtoExpr = ProtoExpr.NEUTRAL): ProtoExpr = when (m) {
+        FaceMood.IDLE, FaceMood.WAKE, FaceMood.YAWN -> ProtoExpr.NEUTRAL
+        FaceMood.LISTENING -> ProtoExpr.LISTEN
+        FaceMood.THINKING -> ProtoExpr.THINK
+        FaceMood.SPEAKING -> ProtoExpr.SPEAK
+        FaceMood.LOOKING, FaceMood.SURPRISED, FaceMood.WIDE -> ProtoExpr.WIDE
+        FaceMood.TRAVEL -> ProtoExpr.GUIDE
+        FaceMood.HAPPY, FaceMood.EXCITED, FaceMood.ACK -> ProtoExpr.HAPPY
+        FaceMood.CONFUSED -> ProtoExpr.CONFUSED
+        FaceMood.ERROR -> ProtoExpr.SAD
+        FaceMood.PETTED, FaceMood.BLUSH -> ProtoExpr.BLUSH
+        FaceMood.SPARKLE -> ProtoExpr.SPARKLE
+        FaceMood.DIZZY -> ProtoExpr.DIZZY
+        FaceMood.SLEEP -> idle
+    }
+
+    /** Моргают только овалы с классом `bl` прототипа: обычное, слушает, ведёт (говорит и «смотрит» — нет). */
+    fun blinks(e: ProtoExpr): Boolean = e == ProtoExpr.NEUTRAL || e == ProtoExpr.LISTEN || e == ProtoExpr.GUIDE
 
     // --- Эмоции сервера: частичные наложения. Пока робот говорит, раскрытие рта — от речи (см. FaceEngine). ---
 
@@ -388,17 +429,11 @@ object Expressions {
     }
 
     /**
-     * Сила эмоции поверх состояния: в покое — целиком, пока говорит — почти целиком (рот говорит сам),
-     * слушает — на 0.6, ведёт и смотрит — на 0.3, во «встроенных» выражениях (думает, ошибка, сон…) — нет.
+     * Сила эмоции сервера поверх состояния — 0 везде: в прототипе эмоций поверх нет, пока робот говорит, глаза круглые;
+     * настроение показывается после ответа (эмодзи → [FaceCue.MOOD_HAPPY] и др., MainActivity).
      */
-    fun overlayWeight(m: FaceMood): Float = when (m) {
-        FaceMood.IDLE -> 1f
-        FaceMood.SPEAKING -> 0.85f
-        FaceMood.LISTENING -> 0.6f
-        // В поездке выражение «целеустремлённо» главнее: эмоция лишь слегка.
-        FaceMood.TRAVEL, FaceMood.LOOKING -> 0.3f
-        else -> 0f
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun overlayWeight(m: FaceMood): Float = 0f
 
     /**
      * Темп пружин формы в состоянии: засыпание и сон — медленно (веки тяжелеют), пробуждение — бодро.
@@ -406,7 +441,6 @@ object Expressions {
      */
     fun tempo(m: FaceMood): Float = when (m) {
         FaceMood.YAWN -> 2.4f
-        FaceMood.SLEEP -> 3.2f
         FaceMood.WAKE -> 0.8f
         FaceMood.PETTED -> 1.4f
         else -> 1f
