@@ -1,4 +1,5 @@
 import java.security.MessageDigest
+import java.time.LocalDate
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -44,6 +45,16 @@ fun diagPinHash(pin: String, salt: String): String {
 
 val diagPinHashValue = diagPinHash(secret("DIAG_PIN"), diagPinSalt)
 
+// Штамп сборки в versionName (экран диагностики: «app: … 0.1.0+36be693.2026-10-29»), чтобы на роботе было видно,
+// какая версия стоит.
+val gitSha: String = runCatching {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=7", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("").takeIf { it.matches(Regex("[0-9a-f]{7}")) } ?: "nogit"
+val buildDate: String = LocalDate.now().toString()
+
 android {
     namespace = "kz.astanahub.robot"
     compileSdk = 36
@@ -54,7 +65,7 @@ android {
         // Уточнить по версии Android на роботе (roadmap, шаг 2.1).
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.0+$gitSha.$buildDate"
 
         buildConfigField("String", "AGENT_APP_ID", agentAppId.asBuildConfigString())
         buildConfigField("String", "ROBOT_TOKEN", secret("ROBOT_TOKEN").asBuildConfigString())
