@@ -1,6 +1,6 @@
 # Настройка сервера (VPS) — как сделано и как обслуживать
 
-Сервер беты: **On1x Cloud (Нидерланды), `89.144.34.185`**, hostname `OrionStar.on1x.cloud`.
+Сервер беты: VPS в Европе (адрес и hostname — в `infra/.env` и у команды, в репозиторий не кладём).
 Ubuntu 24.04 LTS · 4 vCPU · 5.7 ГБ RAM · 63 ГБ диск · swap 2 ГБ. Настроен 2026-10-21.
 
 > Это бета-сервер. Перед продом: переезд на надёжного хостера (Hetzner/Netcup), новые токены и пароли.
@@ -114,12 +114,12 @@ apt-get update && apt-get -y install docker-ce docker-ce-cli containerd.io docke
 
 **Первый вход и смена пароля**
 ```bash
-ssh daniyal@89.144.34.185       # введёт временный пароль → сразу попросит новый
+ssh <user>@<ip-сервера>       # введёт временный пароль → сразу попросит новый
 ```
 
 **Добавить SSH-ключ** (у себя: `ssh-keygen -t ed25519`; на сервер — только `.pub`)
 ```bash
-ssh-copy-id -i ~/.ssh/id_ed25519.pub daniyal@89.144.34.185
+ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<ip-сервера>
 # или админом: echo 'ssh-ed25519 AAAA… daniyal@laptop' >> /home/daniyal/.ssh/authorized_keys
 ```
 
@@ -145,5 +145,5 @@ fail2ban-client set sshd unbanip 1.2.3.4    # разбанить (наприме
 ## Что осталось сделать
 1. **Ключи для всех** → `PasswordAuthentication no`, затем `PermitRootLogin no` (после проверки sudo у bolat).
 2. **Деплой проекта**: пользователь `deploy` для CI (+ в `AllowUsers`), клон репозитория в `/opt/astana-hub-robot` (deploy key), `infra/.env`, `docker compose up -d` — см. `infra/README.md` и `infra/scripts/deploy.sh`.
-3. **Домен** с A-записью на `89.144.34.185` → Caddy сам получит HTTPS-сертификат.
+3. **Домен** с A-записью на IP сервера → Caddy сам получит HTTPS-сертификат.
 4. **Бэкапы вне сервера** и мониторинг (`/v1/health`, диск, бэкапы) — волна 2.
