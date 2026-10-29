@@ -46,16 +46,16 @@ def test_look_default_question_and_unknown_place(client):
 
 def test_look_passes_image_and_place_to_vision(make_client):
     llm = ScriptedProvider(
-        LLMAnswer(found=True, lang="ru", answer="Это коворкинг.", sources=["place:coworking_2f"])
+        LLMAnswer(found=True, lang="ru", answer="Это лифт.", sources=["place:lift"])
     )
     c = make_client(vision_llm=llm)
-    r = _post(c, meta=_meta(place_id="coworking_2f"))
+    r = _post(c, meta=_meta(place_id="lift"))
     assert r.status_code == 200
     req = llm.requests[0]
-    assert "place:coworking_2f" in req.user
-    assert "длинными общими столами" in req.user  # visual hints текущего места
+    assert "place:lift" in req.user
+    assert "Двери лифта" in req.user  # visual hints текущего места
     assert req.image is None  # кадр отпущен после обработки
-    assert r.json()["sources"] == ["place:coworking_2f"]
+    assert r.json()["sources"] == ["place:lift"]
 
 
 def test_look_requires_token(client):

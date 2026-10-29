@@ -30,9 +30,10 @@ uv run uvicorn app.main:app --reload --port 8000
 ```bash
 uv run python -m app.cli db upgrade      # миграции Alembic до head (то же: uv run alembic upgrade head)
 uv run python -m app.cli db current      # текущая ревизия (код 1 — схема не на head)
-uv run python -m app.cli kb seed-yaml    # YAML → Postgres (разработка)
+uv run python -m app.cli kb seed-yaml    # YAML и documents/*.md → Postgres (разработка)
 uv run python -m app.cli kb sync         # Google-таблица → Postgres
-uv run python -m app.cli kb status       # активная база и журнал синхронизаций (kb_sync)
+uv run python -m app.cli kb index        # фрагменты для поиска + эмбеддинги (только изменённые; --force — все)
+uv run python -m app.cli kb status       # активная база, фрагменты поиска, журнал синхронизаций (kb_sync)
 uv run python -m app.cli db import-sqlite /data/questions.db   # перенос старого лога вопросов из SQLite
 ```
 
@@ -81,10 +82,14 @@ uv run python -m eval.run_eval [--min-accuracy 0.9] [--no-lang] [--json report.j
 LLM_PROVIDER=fake uv run python -m eval.run_eval --min-accuracy 0.9                     # eval без ключа (CI)
 uv run python -m eval.run_injection [--sleep 4] [--json report.json]  # prompt injection на модели из .env
 uv run python -m eval.run_injection --fake                            # то же без сети
+uv run python -m eval.run_addressed [--json report.json]  # «не мне» (v1.4): агент /v1/chat, нужен OPENROUTER_API_KEY
 ```
 
 Eval использует провайдер из `.env`: без ключа — fake (проверяет пайплайн), с `GEMINI_API_KEY` — реальную модель
 (тратит запросы). Postgres для eval не нужен: база знаний — YAML из `knowledge/`, лог вопросов — в памяти.
+`run_addressed` гоняет `eval/addressed.yaml` (40 реплик ru/kk/en: чужие разговоры и обращения к роботу, в т.ч.
+склейки «Ну давай, спроси его. Где тут туалет?») через агента и считает `false_ignores` (робот промолчал на реплику
+к нему — должно быть 0) и `ignore_recall` (доля чужих реплик без ответа, порог `--min-recall`, 0,8); код 1 — провал.
 
 ## Конфигурация (env / `backend/.env`)
 
@@ -109,6 +114,9 @@ Eval использует провайдер из `.env`: без ключа — 
 | `RATE_LIMIT_PER_MIN` | 30 | /ask и /look, на токен, in-memory (один процесс) |
 | `KB_RATE_LIMIT_PER_MIN` | 60 | отдельный бакет для /places и /quick-questions |
 | `EXPOSE_DOCS` | `false` | отдавать `/docs`, `/redoc`, `/openapi.json` (только локально) |
+| `ADMIN_TOKEN` | — | токен администратора для статистики задержек (`/v1/admin/metrics`, `/v1/admin/metrics/page`); пусто — оба адреса 404 |
+| `ADMIN_RATE_LIMIT_PER_MIN` | 30 | лимит запросов к админ-сводке (общий) |
+| `TTS_STREAM_TOTAL_S` | 20 | `/v1/tts?stream=true`: предел на весь поток (до первых байт — `TTS_TIMEOUT_S`) |
 | `LLM_MAX_OUTPUT_TOKENS` | 320 | потолок длины ответа модели; при включённых размышлениях Gemini поднять |
 | `KNOWLEDGE_DIR` | `./knowledge` | YAML-база: сид для разработки и запасной вариант без БД |
 | `KB_SEED_YAML_IF_EMPTY` | `true` | пустая база знаний и нет таблицы → сид из YAML при старте |
@@ -120,7 +128,7 @@ Eval использует провайдер из `.env`: без ключа — 
 | `DATABASE_URL` | `postgresql+psycopg://hub@127.0.0.1:5432/hub` (в compose — `…@postgres:5432/hub`) | Postgres 16 + pgvector; SQLite не поддерживается |
 | `DB_AUTO_MIGRATE` | `true` | миграции Alembic при старте, до приёма запросов; ошибка миграции — процесс завершается с ненулевым кодом |
 | `DB_TIMEOUT_S` | 2 | подключение/запрос Postgres (`connect_timeout`, `statement_timeout`, `lock_timeout`) |
-| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов, сессий и сообщений (0 — вечно); очистка раз в сутки фоном |
+| `QUESTION_LOG_RETENTION_DAYS` | 180 | срок хранения лога вопросов, сессий, сообщений и таймингов `latency_events` (0 — вечно); очистка раз в сутки фоном |
 | `KNOWLEDGE_SNAPSHOT_PATH`, `TTS_CACHE_DIR` | `backend/data/...` (в образе `/data/...`) | снимок базы знаний (старт без БД) и кеш синтеза |
 | `KNOWLEDGE_SYNC_TIMEOUT_S` | 5 | общий таймаут загрузки всех вкладок таблицы |
 | `TRUSTED_PROXIES` | `172.16.0.0/12,127.0.0.1` | откуда принимать `X-Forwarded-For` (IP клиента в access-логе; в образе — и для uvicorn `--forwarded-allow-ips`) |
@@ -137,10 +145,11 @@ Eval использует провайдер из `.env`: без ключа — 
 | `general` | в базе нет (только `ANSWER_MODE=open`) | false | ответ модели из общих знаний; конкретику о хабе (цены, телефоны, имена, расписания) не выдумывает — предлагает ресепшен |
 | `out_of_scope` | ответить нечего (в `strict` — всё, чего нет в базе) | false | «обратитесь на ресепшен» |
 | `blocked` | ответ модели не прошёл выходной фильтр (см. «Защита») | false | «могу рассказать только об Astana Hub…» |
+| `not_addressed` | v1.4, `/v1/chat` и live: реплика не роботу (чужой разговор рядом), решил агент | false | робот молчит (`ignored`); в «без ответа» и историю чата не попадает |
 
 Самые частые короткие реплики («привет», «сәлем», «hello», «спасибо», «рахмет», «пока»…) отвечаются локально без LLM
 (`app/smalltalk.py`, ~0 мс). Вопросы «без ответа в базе» — это `found=false` (категории `general` и `out_of_scope`):
-`uv run python -m app.cli export-csv --unanswered`.
+`uv run python -m app.cli export-csv --unanswered` (без `not_addressed` — это не вопросы к роботу).
 
 Язык ответа: письменность вопроса важнее всего — кириллица → только ru или kk (kk по казахским буквам/частицам или
 если так сказали робот/модель), никогда en; латиница → en (kk — только явно). `lang` робота и язык от модели
@@ -195,7 +204,8 @@ Eval использует провайдер из `.env`: без ключа — 
   в БД идёт фоном, а следующий вопрос робот присылает сразу после `done`. Локальные ответы робота
   (`POST /v1/sessions/{id}/messages`) тоже попадают в память.
 - Ошибка провайдера или лимит шагов до первой фразы → ответ даёт `/ask` (`agent_failed_fallback` в логе).
-  В логе вопросов `endpoint=chat`, категории `agent` / `small_talk` / `out_of_scope` / `blocked`; строка
+  В логе вопросов `endpoint=chat`, категории `agent` / `small_talk` / `out_of_scope` / `blocked` /
+  `not_addressed` (v1.4, «не мне» — см. live); строка
   `agent_run` в логе — токены, попадание в кеш, тулы, время до первой фразы.
 - Трассировка: `set_tracing_disabled(True)` при импорте `app.agent` и в `create_app`, `RunConfig(tracing_disabled=True)`
   на каждом запуске; `OPENAI_AGENTS_DISABLE_TRACING=false` не действует (тест `test_tracing_disabled`).
@@ -206,10 +216,19 @@ Eval использует провайдер из `.env`: без ключа — 
   - `event: "visitor_arrived"` (`question` может быть пустым) — короткое приветствие на языке `lang`, действия
     игнорируются; пишется в память (`messages`, вместо реплики — «(посетитель подошёл к роботу)»), в журнал вопросов —
     нет. Нет агента, ошибка или дольше `AGENT_GREETING_TIMEOUT_S` → готовое приветствие.
+- **Шум вместо реплики (v1.2, `app/noise.py`):** реплика только из междометий («ну», «м-м-м», «um»), пометок
+  («(смеётся)», «[музыка]», «Смеётся.»), смеха и слов-паразитов → `done` с `ignored: true` без фраз (JSON: `answer: ""`),
+  без модели, журнала вопросов и памяти; в `latency_events` — строка `chat/ignored` (`provider=local:noise`).
+  «Да/нет» (иә/жоқ, yes/no, ага/угу) — ответ, если последняя реплика робота кончалась «?», иначе шум. Цифры,
+  аббревиатуры («WC», «IT») и любое слово вне списков — не шум. Работает и при `CHAT_PROVIDER=off`.
 - Устаревшие `AGENT_ENABLED` (только `false` при `CHAT_PROVIDER=auto` → `off`) и `AGENT_FALLBACK_MODELS` (не читается)
   остались от агента на LiteLLM; `litellm` больше не нужен.
 - Injection: `uv run python -m eval.run_injection --chat` — набор через `/v1/chat` (провал — в т.ч. любое `action`);
   `--chat --fake` — без сети (`CHAT_PROVIDER=off`); в тестах — прогон с моделью-«попугаем».
+- **Поиск по базе (v1.3)** — см. «Поиск по документам (RAG)» ниже: по умолчанию сервер ищет сам и кладёт найденное
+  в сообщение хода («Справка», `RETRIEVAL_MODE=prefetch`), или модель вызывает `search_kb` (`tool`); найденное
+  попадает в `sources`, `citations` (`done`, JSON, live `turn_end`) и в корпус выходного фильтра (ссылка или
+  название из найденного документа — не выдумка модели).
 
 ## Голос через сервер (/v1/stt, /v1/tts)
 
@@ -242,7 +261,22 @@ STT и TTS выбираются раздельно (`app/speech/`):
 - **ElevenLabs**: TTS `POST /v1/text-to-speech/{voice_id}` (`xi-api-key`, mp3): kk → `eleven_v3` (единственная
   модель с казахским), ru/en → `eleven_flash_v2_5`, `language_code` передаётся. STT — Scribe `scribe_v2`, сырой PCM
   (`file_format=pcm_s16le_16`), `language_code` при известном языке, иначе автоопределение; `confidence` =
-  `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs).
+  `language_probability`. Голоса — `ELEVENLABS_VOICE_RU/KK/EN` (voice_id из библиотеки ElevenLabs; по умолчанию
+  выбранные на прослушивании: RU Alina `dVRDrbP5ULGXB94se4KZ`, EN Laura `FGY2WhTYpPnrIDTdsKH5` — `eleven_flash_v2_5`,
+  KZ Kari `Jbte7ht1CqapnZvc4KpK` — `eleven_v3`); те же голоса берёт live. `voice_settings` flash (ru/en, общие):
+  `ELEVENLABS_STABILITY` 0.35, `ELEVENLABS_SIMILARITY` 0.8, `ELEVENLABS_STYLE` 0.45, `ELEVENLABS_SPEAKER_BOOST` true,
+  `ELEVENLABS_SPEED` 1.1 (0.7–1.2); `eleven_v3` (kk) — только `ELEVENLABS_V3_STABILITY` 0.5 (0.0 / 0.5 / 1.0) и
+  звуковой тег `ELEVENLABS_V3_TAG` (`[cheerfully]`) перед каждой фразой — только в теле запроса синтеза, не в
+  субтитрах, истории и журнале. Настройки и тег входят в ключ кеша TTS. Казахский текст (буквы ә, ғ, қ, …) всегда
+  синтезируется голосом kk и v3, даже если робот прислал `lang=ru`; модель kk без казахского (flash) заменяется на
+  `eleven_v3`. `ELEVENLABS_TTS_MODEL_RU/EN` — своя модель /v1/tts для языка.
+- **Текст для синтеза** (`app/tts_text.py`, /v1/tts и live; субтитры и журнал — как написал агент): «…»/«...» →
+  запятая/точка (v3 читает их как запинки), `[..]` вырезаются, `(..)` — через запятую, междометия в начале фразы
+  («Хм», «Ммм», «Э-э», «Ну», «Um») убираются, фраза из одних междометий не звучит; числа и время словами для ru и kk
+  (num2words + падеж от предлога / казахский сингармонизм: «с 9:00 до 18:00» → «с девяти до восемнадцати»,
+  «9:00-ден 18:00-ге дейін» → «тоғыздан он сегізге дейін», «на 2 этаже» → «на втором этаже», «2-қабат» → «екінші
+  қабат»); словарь произношений (Astana Hub → Астана Хаб, TikTok → Тик-Ток, Wi-Fi → вай-фай / уай-фай, IT → ай-ти, …)
+  дополняется файлом `pronunciations.yaml` в папке базы знаний (`ru: {Astana Hub: Астана Хаб}`), без перезапуска.
 - **Запасной TTS** (`TTS_FALLBACK_PROVIDER`): при ошибке основного (кончились кредиты ElevenLabs, 5xx, сеть) фраза
   синтезируется запасным — для мероприятия `TTS_PROVIDER=elevenlabs` + `TTS_FALLBACK_PROVIDER=openrouter` (те же
   voice_id). Таймаут не переключает: время запроса уже вышло. В логе — событие `tts_fallback`.
@@ -257,6 +291,138 @@ STT и TTS выбираются раздельно (`app/speech/`):
   (`Api-Key`); API v1 доступен в регионе Россия Yandex Cloud.
 - Кеш TTS по (провайдер, голос+модель, язык, текст): LRU в памяти + `data/tts_cache` с лимитом размера;
   заголовок `X-Cache: hit|miss`.
+- **Потоковый TTS** (`POST /v1/tts?stream=true`): у ElevenLabs — `POST /v1/text-to-speech/{voice_id}/stream`
+  (те же модели, голоса и `output_format`; `optimize_streaming_latency` у ElevenLabs помечен deprecated и не
+  передаётся). Ответ `audio/mpeg` кусками (chunked) по мере синтеза; первый кусок сервер ждёт до заголовков, поэтому
+  ошибка провайдера до первых байт — обычный `503 speech_unavailable` (таймаут — `504`). Поток копится в памяти и после
+  успешного окончания кладётся в кеш; обрыв посередине — соединение закрывается без завершающего куска (клиент
+  дозапрашивает без `stream`), в кеш ничего не идёт. Кеш hit — фраза целиком сразу (`X-Cache: hit`). Провайдеры без
+  потока (OpenRouter, Yandex, fake) и запасной TTS отдают фразу целиком. Без `stream` — как раньше.
+
+```bash
+curl -N -X POST 'http://127.0.0.1:8000/v1/tts?stream=true' -H "Authorization: Bearer $ROBOT_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"text": "Кафе на первом этаже.", "lang": "ru"}' -o phrase.mp3
+```
+
+## Live-режим (WS /v1/live)
+
+Голосовой режим «как у ChatGPT»: один WebSocket на разговор, звук посетителя идёт непрерывно, сервер сам находит
+конец реплики, отвечает агентом `/v1/chat` и сразу стримит голос; посетитель может перебить робота на полуслове.
+Протокол кадров — `docs/api-contract.md`, раздел «WS /v1/live». WebSocket в OpenAPI не попадает — он описан здесь
+и в контракте. `/v1/chat` + `/v1/stt` + `/v1/tts` остаются запасным режимом робота.
+
+Реализация — [Pipecat](https://docs.pipecat.ai) 1.14 (`app/live/`), один `PipelineWorker` на соединение:
+
+```
+transport.input (LiveSerializer: PCM16 16 кГц + JSON-команды)
+  → EchoGate (hello.aec=false: тихий звук, пока играет ответ, — эхо, глушится)
+  → VADProcessor (Silero, start/stop 0,2 с)
+  → ElevenLabsRealtimeSTTService (scribe_v2_realtime, ручной commit на паузе VAD → финал сразу)
+  → LiveConversation (smart-turn v3 → конец реплики; перебивание; агент ChatService; события)
+  → TTS: ServiceSwitcher по языку КАЖДОЙ фразы — ru/en ElevenLabsTTSService (WebSocket, eleven_flash_v2_5),
+         kk ElevenLabsHttpTTSService (HTTP-поток, eleven_v3: WebSocket ElevenLabs не принимает v3)
+  → transport.output (PCM16 24 кГц `pcm_s16le_24000` + JSON) → PlayoutTracker (часы воспроизведения)
+```
+
+- **Распознавание** (`LIVE_STT_MODE`): `segmented` (по умолчанию) — звук копится, только пока VAD слышит речь, и
+  отрезок целиком уходит в `STT_PROVIDER` (OpenRouter / Gemini): тишина и простой микрофона бесплатны, текст —
+  один `user_final` без `user_partial`, на ~0,3–0,5 с позже. `elevenlabs` — потоковый Scribe Realtime с
+  промежуточным текстом, но платится каждая секунда открытого микрофона (бесплатные 10 000 кредитов ElevenLabs
+  ушли за ~45 минут сессий). Перебивание в `segmented` решается по тексту отрезка (`stop_only` — команда «стоп»,
+  `speech` — не шум; в обоих — не эхо).
+- **Конец реплики**: пауза VAD 0,2 с → smart-turn v3.2 (локальная ONNX-модель из пакета pipecat, CPU) решает,
+  договорил ли посетитель; «договорил» — ход сразу, «нет» — ждём тишину до `LIVE_TURN_MAX_SILENCE_S` (0,8 с).
+  `LIVE_SMART_TURN=false` — конец реплики после `LIVE_TURN_SILENCE_S` (0,5 с) тишины. В `segmented` отрезки-тишина
+  (пик ниже `STT_SILENCE_PEAK`) и обрывки короче 0,25 с в STT не уходят.
+- **Язык реплики**: `LIVE_STT_LANGUAGE_HINT=false` (по умолчанию) — STT определяет язык сам; язык реплики — казахские
+  буквы/частицы → kk, иначе язык от STT, а если STT вернул язык не из ru/kk/en (или ничего) — язык сессии
+  (`hello.lang`). Он уходит в `user_final.lang` и агенту.
+- **Быстрый путь мест** (`LIVE_FAST_PLACES=true`, `app/agent/fastpath.py`): явный запрос «где X?» / «как пройти к X»
+  / «проводите (меня) до X» / «X қайда?» / «X-ке апарыңыз» / «where is X» / «take me to X», где X однозначно
+  находится в базе (id, map_name, названия, синонимы; русские падежи и казахский дательный снимаются), — шаблонный
+  ответ на языке реплики и `where_is` / `guide_to` без модели («Пойдёмте, провожу до кафе!»; where_is — фразой
+  робота о направлении, если есть, иначе словами описания места, если в нём есть направление, иначе «смотрите
+  стрелку на экране. Проводить вас?»). Короткое «да» на
+  «Проводить вас?» (в течение 2 мин) — сразу `guide_to`. Ход пишется в журнал (`category=kb`, `provider=local:places`)
+  и память агента, следующая реплика идёт агенту с контекстом. Сомнительное (два вопроса, «туда», несколько мест) —
+  агенту.
+- **Направление «где X»** (`state.directions`): позицию и карту знает только робот — он присылает готовые фразы
+  `place_id → {ru, kk, en}` («Кафе — справа от вас, примерно в 15 метрах.»). Сервер хранит последний набор сессии
+  (не больше 64 мест, фраза ≤ 300 символов, ключ ≤ 64; мусор молча отбрасывается; пустой объект — позиции нет) и
+  отдаёт его ходу агента: быстрый путь отвечает `[фраза робота, «Проводить вас?»]` (звук этой фразы не кешируется),
+  `where_is` агента получает её полем `direction` и говорит почти дословно. Набору старше 10 мин не верит; в
+  `/v1/chat` направлений нет. Числа в фразе для синтеза — словами с падежом («в пятнадцати метрах», «он бес метр»).
+- **Скорость звука**: при открытии сессии голоса прогреваются в фоне (`LIVE_TTS_WARMUP=all`: язык сессии, затем
+  остальные; не чаще `LIVE_TTS_WARMUP_INTERVAL_S` на голос; холодный голос ElevenLabs отвечает 10–19 с, тёплый —
+  0,5–0,8 с), звука роботу нет. Первая фраза агента короткая (промпт), длинная первая фраза уходит в TTS по запятой,
+  не дожидаясь точки; для синтеза фразы длиннее `LIVE_TTS_CHUNK_CHARS` (kk — `LIVE_TTS_CHUNK_CHARS_KK`, первая —
+  `LIVE_TTS_FIRST_CHUNK_CHARS_KK`) режутся по запятым. Звук шаблонных фраз быстрого пути — из кеша TTS
+  (`LIVE_TTS_PHRASE_CACHE`, PCM 24 кГц, промах — заполняется в фоне).
+- **Ответ**: тот же агент, что `/v1/chat` (промпт, тулы, память, эмоции, фильтры; шум → `ignored` без вызова модели),
+  но фразы уходят в TTS по мере генерации — каждое законченное предложение (`LiveTurn` в `app/agent/service.py`).
+  Если модель в том же ответе начала вызов инструмента, остаток текста этого ответа не озвучивается.
+  События хода встают в очередь за звуком: `turn_start → emotion → phrase → звук → … → turn_end`.
+  `guide_to` уходит после `playback_done` этого хода, `where_is`/`look` — сразу.
+- **Перебивание** (`LIVE_BARGE_IN`, v1.4 «шумный зал»): речь посетителя, пока ход робота не закончен (модель думает
+  или звук ещё играет у робота), — кандидат в перебивание.
+  - `stop_only` (по умолчанию): перебивает только **команда остановки** — реплика, где команда главное:
+    «стоп», «хватит», «достаточно», «замолчи», «подождите, пожалуйста»; «тоқта», «жетеді», «болды», «тыңда»,
+    «күте тұрыңыз»; «stop», «enough», «wait», «hold on» (`app/live/stop.py`: вокруг команды — только вежливые слова,
+    не длиннее 8 слов; «стоп, а где туалет?» и «подожди, мне не нравится тут» — не команда). Решает текст, порога
+    длительности нет: в `segmented` — текст отрезка, в потоковом STT — уже промежуточный текст. Любая другая речь во
+    время ответа отбрасывается целиком: не перебивание, не новый ход и в следующую реплику не попадает (отрезки
+    отброшенной речи считаются и выбрасываются, когда придёт их текст). Речь сразу после «стоп» (тот же или
+    следующий отрезок, «Стоп. А где кафе?») — новая реплика; если и она только «стоп» — хода нет, робот слушает.
+  - `speech` (прежнее): перебивает речь ≥ `LIVE_BARGE_IN_MIN_MS` (300), если промежуточный текст STT — не шум
+    (`app/noise.py`); перебившая речь — новая реплика; «угу» во время ответа отбрасывается.
+  - В обоих режимах текст — не эхо фразы робота (≥ 70 % слов совпадают с тем, что робот сейчас говорит).
+    Перебивание: отмена агента, `InterruptionFrame` (TTS бросает синтез, транспорт — очередь звука), `interrupted`
+    роботу, в память и журнал — только прозвучавшее: «что услышал посетитель» считается по часам воспроизведения
+    (транспорт шлёт звук быстрее реального времени, робот играет подряд), недоигранная фраза обрезается по словам
+    с «…». `{"type": "interrupt"}` от робота — перебивание без условий. В `live_session_ms.extra`: `stops`,
+    `dropped_speech` (отброшенная речь во время ответа), `not_addressed`, `barge_in`.
+- **«Не мне»** (v1.4): агент сам решает, что реплика явно не обращена к роботу (люди говорят между собой, о роботе в
+  третьем лице, склейка чужих фраз), — правило 14 промпта, модель отвечает только тегом `[not_for_me]`. Сервер
+  смотрит на начало ответа до первой фразы (`not_addressed_head` в `app/agent/service.py`; обычный ответ «[happy]
+  Текст…» не задерживается): тег — модель больше не слушаем, live — `{"type": "ignored", "reason": "not_addressed"}`
+  без `turn_start`, звука и фраз, `/v1/chat` — `done` с `ignored: true`. В журнал — `category=not_addressed` (не
+  попадает ни в «вопросы без ответа», ни в историю чата робота), память агента не трогается, предложение
+  «Проводить вас?» ждёт «да» дальше. Тег в середине ответа вырезается и не звучит. При сомнении агент отвечает.
+  Проверка на модели — `uv run python -m eval.run_addressed` (`eval/addressed.yaml`, см. «Запуск»).
+- **Эхо без AEC** (`hello.aec=false`): пока звучит ответ (+ `LIVE_ECHO_TAIL_S` 0,3 с реверберации), кадры микрофона
+  с RMS ниже `LIVE_ECHO_RMS` (1800 по PCM16) заменяются тишиной — VAD и STT не слышат собственный голос робота;
+  громкая речь рядом с роботом проходит, но перебивание требует уже `LIVE_ECHO_MIN_MS` (600 мс) речи. Плюс
+  проверка «текст = эхо фразы робота» работает всегда.
+- **`look`**: ответ `POST /v1/look` с той же `session_id` сервер сам озвучивает новым ходом в live-сессии
+  (если робот не думает над другим ответом и посетитель не говорит), иначе не озвучивает вовсе.
+- **Подключение**: токен робота в `Authorization` (без него — закрытие 1008 до accept); не больше
+  `LIVE_MAX_SESSIONS` (2) сессий на токен — иначе `error rate_limited` + 1013; повторное подключение с тем же
+  `session_id` закрывает старое. `LIVE_ENABLED` (пусто — включён при `ELEVENLABS_API_KEY` и агенте через
+  `OPENROUTER_API_KEY`); выключен — `error speech_unavailable` + 1011. Ошибка STT/TTS, после которой сервис
+  неработоспособен (или 3 ошибки), — `error speech_unavailable` + 1011, робот уходит в запасной режим. Простой
+  (ни речи, ни звука ответа, ни команд) дольше `LIVE_IDLE_TIMEOUT_S` (120 с) — закрытие 1000 `idle timeout`.
+- **Приватность**: звук посетителя живёт только в памяти пайплайна; логи Pipecat (loguru) идут в наш JSON-лог
+  только с уровня WARNING (в debug-логах Pipecat есть тексты); в `latency_events` — только миллисекунды и метки.
+- **Caddy** (`infra/caddy/Caddyfile`): отдельный `handle /v1/live` — `stream_close_delay 5m` (перезагрузка конфига не
+  рвёт идущий разговор); таймауты сервера `read_body`/`idle` на открытый WebSocket не действуют (Go снимает дедлайны
+  соединения при апгрейде).
+
+Проверка руками (нужны ключи ElevenLabs и OpenRouter в `.env`; звук — сырой PCM16 16 кГц):
+
+```bash
+uv run python - <<'EOF'
+import asyncio, json, os, websockets
+async def main():
+    url = "ws://127.0.0.1:8000/v1/live?session_id=demo&lang=ru"
+    async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {os.environ['ROBOT_TOKEN']}"}) as ws:
+        print(await ws.recv())                       # {"type":"ready","audio_format":"pcm_s16le_24000"}
+        await ws.send(json.dumps({"type": "hello", "lang": "ru", "place_id": "reception", "aec": True}))
+        await ws.send(json.dumps({"type": "visitor_arrived"}))
+        async for msg in ws:                         # JSON-события и бинарный PCM 24 кГц приветствия
+            print(msg if isinstance(msg, str) else f"<{len(msg)} байт звука>")
+asyncio.run(main())
+EOF
+```
 
 ## База знаний
 
@@ -282,6 +448,50 @@ STT и TTS выбираются раздельно (`app/speech/`):
 Правка YAML на работающем сервере: `uv run python -m app.cli kb seed-yaml` → изменения видны за ~5 с. Битый
 YAML — ошибка команды (`kb_sync.status=error`), база в БД не меняется. Проверка YAML без БД:
 `uv run python -m app.cli check-kb`.
+
+### Поиск по документам (RAG)
+
+Факты и места по-прежнему целиком лежат в промпте агента. За подробностями (программы, правила, цены, льготы,
+резидентство, визы, пространства, мероприятия) — гибридный поиск по `kb_chunks`: по смыслу (эмбеддинги
+`google/gemini-embedding-2` через OpenRouter) и по словам (полнотекст, BM25), слияние RRF. Модель получает до 3
+фрагментов (≤ ~2500 символов), отвечает по ним и вызывает `no_answer`, если подходящего нет (вопрос попадает в журнал
+«без ответа»). Подробности — `docs/db-schema.md`, раздел 2.
+
+- **`RETRIEVAL_MODE=prefetch`** (по умолчанию) — ищет сервер, а не модель: по реплике посетителя (короткая или
+  «а сколько это стоит?» — вместе с прошлой репликой), сразу, параллельно с загрузкой памяти, ≤ `KB_PREFETCH_TIMEOUT_S`
+  (1,2 с). Найденное — блоком «Справка к вопросу» в сообщении хода (системный промпт не меняется — кеш). Не ищем
+  для шума, small talk, «где X» / быстрого пути мест, «да» на «Проводить вас?», приветствия и реплик из одного слова.
+- **`RETRIEVAL_MODE=tool`** (старое `hybrid`) — модель сама вызывает инструмент `search_kb(query)`.
+
+- **Документы** — `knowledge/documents/<slug>.md` (slug — `[a-z0-9_]+`), markdown с шапкой:
+  ```
+  ---
+  title: Hub Space — коворкинг и офисы
+  lang: ru
+  source_url: https://astanahub.com/ru/l/hubspace
+  active: true
+  updated: 2026-10-26
+  ---
+  # Hub Space — коворкинг и офисы
+
+  ## Кто может участвовать
+  Текст…
+  ```
+  Разделы по заголовкам `#`/`##`/`###` становятся фрагментами (мелкие склеиваются, крупные режутся с перекрытием).
+  Ссылок в тексте не нужно — источник в `source_url`, его робот не озвучивает. В БД документы попадают через
+  `kb seed-yaml` (и автосид пустой базы); синк Google-таблицы их не трогает; файл с ошибкой пропускается (видно в выводе).
+- **Индексация** — сервер сам, в фоне: при старте и после каждого синка/сида, который что-то поменял (≈5 с), эмбеддит
+  только новые и изменённые фрагменты (сменилась модель — все). Вручную: `kb index` (`--force` — пересчитать всё).
+  Ошибка провайдера — в лог (`kb_index_embeddings_failed`), старые фрагменты остаются, повтор через 1–10 мин.
+- **Ответ** — `sources` с `document:<slug>#<n>`, `citations` `[{id, type, title, url}]` (контракт v1.3); вслух источник
+  не называется. В `latency_events` — `chat/kb_search_ms`, в логе — `kb_search` (id найденного, время, был ли вектор)
+  и `kb_prefetch` (справка хода: id, время, добавлена ли прошлая реплика, ошибка/таймаут).
+- **Переключатели** — `EMBEDDING_PROVIDER` (`auto`: openrouter при `OPENROUTER_API_KEY`, иначе off; `fake` — тесты),
+  `RETRIEVAL_MODE=prefetch | tool | off` (`off` — поиска нет, всё как раньше). Эмбеддинг вопроса ждём
+  ≤ `EMBEDDING_QUERY_TIMEOUT_S` (1 с), дальше — только полнотекст.
+- **Eval** — `uv run python -m eval.run_eval --chat --questions eval/rag_questions.yaml --database-url <postgres>`:
+  временная БД на этом сервере (миграции, сид, индексация), вопросы через агента; `expect_source: document:<slug>`
+  засчитывает любой фрагмент документа.
 
 ### Google-таблица (шаг 3.3)
 
@@ -343,6 +553,34 @@ uv run python -m app.cli export-csv --out questions.csv               # всё
 uv run python -m app.cli export-csv --out unanswered.csv --unanswered # только «без ответа»
 ```
 
+## Мониторинг задержек
+
+Каждый этап пишется в таблицу `latency_events` (миграция 0003): `ts, kind, stage, ms, lang, provider, request_id,
+session_id, ok, extra`. Только числа и метки — тексты реплик, аудио и кадры туда не попадают. Запись фоном, той же
+очередью, что лог вопросов (`app/metrics.py`, `LatencyRecorder`); срок хранения — `QUESTION_LOG_RETENTION_DAYS`.
+
+| kind | stage | что меряется |
+|---|---|---|
+| `stt` | `stt_ms` | `POST /v1/stt`: вызов провайдера (тишина без вызова не пишется) |
+| `stt` | `stt_live_final_ms` | live STT: от конца речи (`end` / VAD / лимит) до финала |
+| `chat` | `llm_first_token_ms`, `first_phrase_ms`, `llm_total_ms` | `/v1/chat` от начала запроса; `provider` — модель; `extra`: `action`, `fallback`, `tools`, `category`, `error` |
+| `ask` | `llm_first_token_ms`, `first_phrase_ms` (SSE), `llm_total_ms` | `/v1/ask` |
+| `look` | `llm_total_ms` | `/v1/look` |
+| `tts` | `tts_first_byte_ms`, `tts_total_ms` | `/v1/tts`; `extra`: `cache` (hit/miss), `chars`, `stream` |
+| `robot` | `stt_final_ms`, `first_audio_ms`, … и `turn` (без ms) | `POST /v1/metrics/turn` с робота; `provider` = `mode` |
+| `live` | `live_stt_final_ms`, `live_llm_first_token_ms`, `live_first_audio_ms` | WS /v1/live, ход: от конца речи посетителя до финала STT / от конца реплики до первого токена / от конца речи до первого байта звука роботу; `extra`: `greeting`, `interrupted`, `phrases`, `aec`, `ignored`, `ignored_reason` (`noise` / `not_addressed`), `error` |
+| `live` | `live_interrupt_ms`, `live_session_ms`, `live_error` (без ms) | от начала перебившей речи до `interrupted` (`extra.reason`: `stop` — команда «стоп», `speech`, `client`); длительность сессии (`extra`: `ended_by`, `turns`, `interrupts`, `stops`, `ignored`, `not_addressed`, `dropped_speech`, `barge_in`); ошибка STT/TTS |
+
+Как смотреть статистику:
+
+1. Задать `ADMIN_TOKEN` в `.env` сервера (`openssl rand -hex 32`) и перезапустить api.
+2. Открыть `https://<домен>/v1/admin/metrics/page`, вставить токен, выбрать период — таблицы p50/p95/count по
+   этапам, по моделям/провайдерам и языкам, доля фолбэков агента и робота, разбивка по часам. Токен хранится в
+   `sessionStorage` вкладки и уходит только заголовком `Authorization`; у страницы строгий CSP (без внешних ресурсов).
+3. Или JSON: `curl -H "Authorization: Bearer $ADMIN_TOKEN" 'https://<домен>/v1/admin/metrics?hours=24'`.
+
+Без `ADMIN_TOKEN` оба адреса отвечают 404; токен робота к ним не подходит.
+
 ## Прочее
 
 ```bash
@@ -363,14 +601,20 @@ app/
   prompts.py       промпты и тексты отказов
   lang.py          определение языка ru/kk/en
   text.py          очистка для TTS, разбиение на фразы ≤ 300 символов
-  llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py
+  llm/             LLMProvider: gemini.py, openrouter.py, deepseek.py (заготовка), fake.py, fallback.py, factory.py;
+                   эмбеддинги поиска — embeddings.py (OpenRouter, fake)
   speech/          STT/TTS: gemini_stt.py, openrouter.py, streaming.py (live STT), elevenlabs.py, yandex.py, fake.py, wav.py, cache.py, factory.py
-  speech_api.py    эндпоинты /v1/stt, /v1/tts, WebSocket /v1/stt/stream
-  knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML
+  speech_api.py    эндпоинты /v1/stt, /v1/tts (и ?stream=true), WebSocket /v1/stt/stream
+  live/            WS /v1/live на Pipecat: session.py (подключение, пайплайн), conversation.py (ход, перебивание),
+                   services.py (Silero, smart-turn, ElevenLabs), playout.py (часы воспроизведения, эхо), protocol.py
+  metrics.py       LatencyRecorder: тайминги этапов → latency_events (фоном, без текстов)
+  metrics_api.py   POST /v1/metrics/turn, GET /v1/admin/metrics, страница metrics_page.html
+  knowledge/       модель базы, Postgres (pg.py), синк (sync.py), Google-таблица (sheets.py), YAML; поиск: документы
+                   (documents.py), фрагменты (chunks.py), индексация (index.py), гибридный поиск (search.py)
   db/              engine, модели всех таблиц (models.py), репозитории (repos.py), Alembic (migrate.py)
-  cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|status, export-csv, openapi, check-kb
-migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted)
-knowledge/         база знаний (примеры) + sheet_template/ (CSV-шаблоны вкладок таблицы)
-eval/              questions.yaml + run_eval.py (шаг 3.8)
+  cli.py           db upgrade|current|import-sqlite, kb seed-yaml|sync|index|status, export-csv, openapi, check-kb
+migrations/        Alembic: env.py, versions/ (0001_baseline — все таблицы docs/db-schema.md; 0002 — question_log.interrupted; 0003 — latency_events; 0004 — documents.slug, kb_chunks для поиска)
+knowledge/         база знаний (примеры) + documents/ (длинные документы для поиска) + sheet_template/ (CSV-шаблоны)
+eval/              questions.yaml + run_eval.py (шаг 3.8; --chat — через агента, --database-url — с поиском)
 tests/             pytest
 ```

@@ -65,7 +65,7 @@
 	request_body @stt {
 		max_size 700KB
 	}
-	@small not path /v1/look /v1/stt
+	@small not path /v1/look /v1/stt /v1/live
 	request_body @small {
 		max_size 32KB
 	}
@@ -73,6 +73,31 @@
 	# Health — без авторизации (робот проверяет адрес сервера).
 	handle /v1/health {
 		import proxy_api
+	}
+
+	# Страница статистики задержек — сама страница без токена (данные она запрашивает с ADMIN_TOKEN).
+	handle /v1/admin/metrics/page {
+		import proxy_api
+	}
+
+	# WS /v1/live — долгий WebSocket (минуты, с паузами). Таймауты сервера выше (read_body, idle) на него
+	# не действуют: при апгрейде Go снимает дедлайны соединения (net/http hijackLocked → SetDeadline(0)),
+	# stream_timeout у reverse_proxy по умолчанию нет. При перезагрузке конфига Caddy по умолчанию рвёт
+	# WebSocket — stream_close_delay даёт идущему разговору доиграть (робот потом переподключится сам).
+	# Тело апгрейда пустое, лимит @small к звуку в сокете не относится, но путь из него исключён явно.
+	handle /v1/live {
+		@noauth_live not header_regexp Authorization ^Bearer\s+\S+
+		handle @noauth_live {
+			respond 401 {
+				close
+			}
+		}
+		reverse_proxy api:8000 {
+			lb_try_duration 15s
+			lb_try_interval 500ms
+			stream_close_delay 5m
+			header_down -Server
+		}
 	}
 
 	handle /v1/* {

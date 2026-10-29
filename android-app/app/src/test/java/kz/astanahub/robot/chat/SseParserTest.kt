@@ -1,10 +1,12 @@
 package kz.astanahub.robot.chat
 
+import kz.astanahub.robot.backend.Citation
 import kz.astanahub.robot.backend.ErrorKind
 import kz.astanahub.robot.core.Lang
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class SseParserTest {
@@ -53,6 +55,26 @@ class SseParserTest {
     }
 
     @Test
+    fun `done carries citations for display, malformed items are skipped`() {
+        val d = events(
+            "event: done\ndata: {\"found\": true, \"citations\": [" +
+                "{\"id\": \"document:hub_space#2\", \"type\": \"document\", \"title\": \"Hub Space — как стать участником\", \"url\": \"https://astanahub.com/ru/l/hubspace\"}, " +
+                "{\"id\": \"fact:wifi\", \"type\": \"fact\", \"title\": \"Wi-Fi\", \"url\": null}, " +
+                "{\"id\": \"x\"}, 42]}\n\n",
+        ).single() as ChatEvent.Done
+        assertEquals(
+            listOf(
+                Citation("document:hub_space#2", "document", "Hub Space — как стать участником", "https://astanahub.com/ru/l/hubspace"),
+                Citation("fact:wifi", "fact", "Wi-Fi", null),
+            ),
+            d.citations,
+        )
+        // Старый сервер поля не шлёт, кривое значение — не массив: подписи просто нет.
+        assertTrue((events("event: done\ndata: {}\n\n").single() as ChatEvent.Done).citations.isEmpty())
+        assertTrue((events("event: done\ndata: {\"citations\": \"oops\"}\n\n").single() as ChatEvent.Done).citations.isEmpty())
+    }
+
+    @Test
     fun `old turn event is ignored`() {
         assertTrue(events("event: turn\ndata: {\"turn_id\": \"t\"}\n\n").isEmpty())
     }
@@ -92,5 +114,35 @@ class SseParserTest {
         val a = events("event: action\ndata: {\"type\": \"look\", \"place_id\": null}\n\n").single() as ChatEvent.Action
         assertEquals(ChatAction.LOOK, a.type)
         assertNull(a.placeId)
+    }
+
+    @Test
+    fun `done with ignored true - noise, no phrases`() {
+        val d = events(
+            "event: done\ndata: {\"request_id\": \"r\", \"lang\": \"ru\", \"found\": false, \"sources\": [], \"actions\": [], \"ignored\": true}\n\n",
+        ).single() as ChatEvent.Done
+        assertTrue(d.ignored)
+        assertEquals(false, d.found)
+        assertEquals(false, (events("event: done\ndata: {}\n\n").single() as ChatEvent.Done).ignored)
+    }
+
+    @Test
+    fun `json mode body - ignored, answer and error`() {
+        val ignored = ChatEventDecoder.decodeJsonBody(
+            """{"request_id": "r", "lang": "ru", "found": false, "sources": [], "actions": [], "ignored": true, "answer": ""}""",
+        )
+        assertEquals(1, ignored.size)
+        assertTrue((ignored.single() as ChatEvent.Done).ignored)
+
+        val answer = ChatEventDecoder.decodeJsonBody(
+            """{"request_id": "r", "lang": "kk", "answer": "Кафе бірінші қабатта.", "actions": [{"type": "where_is", "place_id": "cafe"}]}""",
+        )
+        assertEquals(ChatEvent.Phrase("Кафе бірінші қабатта."), answer[0])
+        val done = answer.last() as ChatEvent.Done
+        assertFalse(done.ignored)
+        assertEquals("cafe", done.actions.single().placeId)
+
+        val error = ChatEventDecoder.decodeJsonBody("""{"error": {"code": "llm_unavailable", "message": "x"}}""").single()
+        assertTrue(error is ChatEvent.Error)
     }
 }

@@ -4,8 +4,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
@@ -15,19 +18,27 @@ import androidx.lifecycle.repeatOnLifecycle
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kz.astanahub.robot.audio.MicRecorder
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.RetrofitBackendApi
 import kz.astanahub.robot.backend.BackendUrlPolicy
 import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.core.CrashReport
 import kz.astanahub.robot.core.LogSafe
 import kz.astanahub.robot.core.Lang
+import kz.astanahub.robot.core.NoiseStats
+import kz.astanahub.robot.audio.MicSensitivity
 import kz.astanahub.robot.databinding.ActivityDiagnosticsBinding
+import kz.astanahub.robot.robot.MapPlace
+import kz.astanahub.robot.robot.NavJournal
 import kz.astanahub.robot.ui.UiScale
 import kz.astanahub.robot.voice.ServerSpeakResult
 import kz.astanahub.robot.voice.VoiceSource
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import timber.log.Timber
 
@@ -46,6 +57,8 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private var ttsJob: Job? = null
     private var monitorJob: Job? = null
+    /** Поездка, запущенная кнопкой «Поехать» (отменяется «Стоп» и закрытием экрана — робот останавливается). */
+    private var tripJob: Job? = null
 
     private val gate by lazy { container.diagnostics }
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -74,6 +87,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         val router = container.voice
         val server = container.serverVoice
 
+        section("Адрес сервера") {
         // Адрес сервера
         binding.serverUrl.setText(container.backend.url.value)
         binding.serverStatus.text = "Сейчас: ${container.backend.url.value.ifEmpty { "не задан" }}"
@@ -102,7 +116,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             log("Адрес сервера сброшен: ${container.backend.url.value.ifEmpty { "не задан" }}")
             checkServer()
         }
+        }
 
+        section("Голос") {
         // Голос: ASR и TTS по языкам
         val settings = container.voiceSettings
         bindSource(binding.asrGroup, R.id.asrGroupBuiltin, R.id.asrGroupServer, settings.config.value.asr) {
@@ -118,6 +134,51 @@ class DiagnosticsActivity : AppCompatActivity() {
             settings.setTts(Lang.EN, it); log("TTS en: ${it.code}")
         }
 
+        // Только ElevenLabs: встроенный голос при сбое /v1/tts — лишь если включить явно.
+        binding.builtinFallbackSwitch.isChecked = settings.config.value.builtinFallback
+        binding.builtinFallbackSwitch.setOnCheckedChangeListener { _, on ->
+            settings.setBuiltinFallback(on)
+            log("Сбой /v1/tts → ${if (on) "встроенный голос" else "текст без звука + фраза из кеша"}")
+        }
+        binding.ttsStreamingSwitch.isChecked = settings.config.value.ttsStreaming
+        binding.ttsStreamingSwitch.setOnCheckedChangeListener { _, on ->
+            settings.setTtsStreaming(on)
+            log("Потоковый /v1/tts: ${if (on) "вкл" else "выкл"}")
+        }
+        val vad = settings.config.value.vadEndSilenceMillis
+        binding.vadSlider.value = (vad / 100 * 100).toFloat().coerceIn(binding.vadSlider.valueFrom, binding.vadSlider.valueTo)
+        binding.vadLabel.text = getString(R.string.diag_vad, vad)
+        binding.vadSlider.addOnChangeListener { _, value, fromUser ->
+            binding.vadLabel.text = getString(R.string.diag_vad, value.toInt())
+            if (fromUser) settings.setVadEndSilence(value.toInt())
+        }
+        // Чувствительность микрофона: порог громкости и минимальная длительность речи до старта live STT.
+        val micButtons = mapOf(
+            MicSensitivity.LOW to binding.micLow,
+            MicSensitivity.NORMAL to binding.micNormal,
+            MicSensitivity.HIGH to binding.micHigh,
+        )
+        fun showMic() {
+            val m = settings.config.value.micSensitivity
+            binding.micLabel.text = getString(R.string.diag_mic_sensitivity, m.code, m.minSpeechMillis, m.minSpeechRms.toInt()) +
+                "\n" + NoiseStats.summary()
+            micButtons.forEach { (level, button) -> button.isEnabled = level != m }
+        }
+        micButtons.forEach { (level, button) ->
+            button.setOnClickListener {
+                settings.setMicSensitivity(level)
+                log("Чувствительность микрофона: ${level.code} (речь ≥ ${level.minSpeechMillis} мс)")
+                showMic()
+            }
+        }
+        showMic()
+        binding.voiceCacheRefresh.setOnClickListener {
+            container.phraseCacheWarmer.warmUp(force = true)
+            log("Кеш голоса: синтез заново")
+        }
+        }
+
+        section("Подсказка языка STT") {
         // Подсказка языка для серверного STT
         val hintIds = mapOf<Lang?, Int>(null to R.id.hintAuto, Lang.RU to R.id.hintRu, Lang.KK to R.id.hintKk, Lang.EN to R.id.hintEn)
         binding.hintGroup.check(hintIds.getValue(server.sttLangHint))
@@ -126,7 +187,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             server.sttLangHint = hintIds.entries.first { it.value == id }.key
             log("STT язык: ${server.sttLangHint?.code ?: "авто"}")
         }
+        }
 
+        section("TTS") {
         // TTS
         binding.builtinRu.setOnClickListener { speakBuiltin(Lang.RU, R.string.diag_test_ru) }
         binding.builtinKk.setOnClickListener { speakBuiltin(Lang.KK, R.string.diag_test_kk) }
@@ -139,7 +202,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             router.stopSpeaking()
             log("TTS остановлен")
         }
+        }
 
+        section("Микрофон") {
         // Микрофон
         binding.recordButton.setOnClickListener {
             if (!server.hasMicPermission()) { log("Нет разрешения RECORD_AUDIO — дайте его на главном экране"); return@setOnClickListener }
@@ -152,13 +217,17 @@ class DiagnosticsActivity : AppCompatActivity() {
             container.builtinMic.setBuiltinListening(on)
             log("Встроенный ASR: ${if (on) "включён" else "выключен (mute)"}")
         }
+        }
 
+        section("Android TTS") {
         // Android TTS (запасной голос)
         binding.androidRu.setOnClickListener { speakAndroid(Lang.RU, R.string.diag_test_ru) }
         binding.androidKk.setOnClickListener { speakAndroid(Lang.KK, R.string.diag_test_kk) }
         binding.androidEn.setOnClickListener { speakAndroid(Lang.EN, R.string.diag_test_en) }
         binding.androidInfo.setOnClickListener { logAndroidTtsInfo() }
+        }
 
+        section("Масштаб") {
         // Масштаб интерфейса
         val percent = UiScale.percent(this)
         binding.scaleSlider.value = percent.toFloat()
@@ -172,7 +241,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             }
         }
         binding.screenInfo.text = screenInfo()
+        }
 
+        section("Робот") {
         // Робот: RobotApi и карта
         binding.dumpPlaces.setOnClickListener {
             lifecycleScope.launch {
@@ -188,16 +259,43 @@ class DiagnosticsActivity : AppCompatActivity() {
                     else "getPosition: x=${"%.2f".format(pose.x)} y=${"%.2f".format(pose.y)} theta=${"%.2f".format(pose.theta)} рад")
             }
         }
-        // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
-        val chat = container.chatSettings
-        binding.chatModeGroup.check(if (chat.mode.value == ChatMode.AGENT) R.id.chatModeAgent else R.id.chatModeLegacy)
-        binding.chatModeGroup.addOnButtonCheckedListener { _, id, checked ->
-            if (!checked) return@addOnButtonCheckedListener
-            val mode = if (id == R.id.chatModeAgent) ChatMode.AGENT else ChatMode.LEGACY
-            chat.set(mode)
-            log("Разговор: ${mode.code}")
         }
 
+        section("Костюм") { bindCostumes() }
+
+        section("Голова") { HeadDiagPanel(binding, container, lifecycleScope, lifecycle).bind() }
+
+        section("Точки карты и журнал навигации") {
+        binding.loadMapPoints.setOnClickListener { loadMapPoints() }
+        binding.navStop.setOnClickListener { stopTrip() }
+        binding.navJournalClear.setOnClickListener { NavJournal.clear() }
+        loadMapPoints()
+        }
+
+        section("Режим разговора") {
+        // Режим разговора: agent (/v1/chat) или legacy; главный экран подхватывает при возврате.
+        val chat = container.chatSettings
+        binding.chatModeGroup.check(
+            when (chat.mode.value) {
+                ChatMode.AGENT -> R.id.chatModeAgent
+                ChatMode.LEGACY -> R.id.chatModeLegacy
+                ChatMode.LIVE -> R.id.chatModeLive
+            },
+        )
+        binding.chatModeGroup.addOnButtonCheckedListener { _, id, checked ->
+            if (!checked) return@addOnButtonCheckedListener
+            val mode = when (id) {
+                R.id.chatModeAgent -> ChatMode.AGENT
+                R.id.chatModeLive -> ChatMode.LIVE
+                else -> ChatMode.LEGACY
+            }
+            chat.set(mode)
+            log("Разговор: ${mode.code}" + if (mode == ChatMode.LIVE) " (WS /v1/live; сбой → agent, повтор через 30 с)" else "")
+            if (mode == ChatMode.LIVE) log("Live-микрофон: ${container.liveMicrophone.lastConfig}")
+        }
+        }
+
+        section("Посетитель (эмулятор)") {
         // Эмулятор: подошёл / ушёл человек (на роботе — PersonApi, кнопок нет).
         val simulator = container.presenceSimulator
         binding.presenceLabel.visibility = if (simulator == null) View.GONE else View.VISIBLE
@@ -210,7 +308,9 @@ class DiagnosticsActivity : AppCompatActivity() {
             simulator?.leave()
             log("Посетитель: ушёл (заснёт через ~15 с)")
         }
+        }
 
+        section("Места и кнопки") {
         binding.refreshPlaces.setOnClickListener {
             lifecycleScope.launch {
                 container.places.invalidateMap() // перечитать и точки карты, не ждать TTL
@@ -224,8 +324,9 @@ class DiagnosticsActivity : AppCompatActivity() {
         binding.closeButton.setOnClickListener { finish() }
         // «Назад» — на главный экран.
         onBackPressedDispatcher.addCallback(this) { finish() }
+        }
 
-        lifecycleScope.launch {
+        lifecycleScope.launch(sectionHandler("Статусы")) {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     router.builtinAsr.transcripts.collect { t ->
@@ -251,8 +352,25 @@ class DiagnosticsActivity : AppCompatActivity() {
                         binding.robotStatus.text = "RobotApi (${BuildConfig.PLATFORM}): " + if (c) "подключён" else "не подключён"
                     }
                 }
+                launch {
+                    container.phraseCacheWarmer.status.collect { st ->
+                        binding.voiceCacheStatus.text = "Кеш голоса: ${st.cached}/${st.total}" +
+                            (if (st.running) " — синтез…" else "") + (st.lastError?.let { " (ошибка: $it)" } ?: "")
+                    }
+                }
                 launch { server.micLevel.collect { binding.levelBar.setProgressCompat((it * 300).toInt().coerceAtMost(100), false) } }
+                launch {
+                    NavJournal.entries.collect { entries ->
+                        binding.navJournalText.text =
+                            if (entries.isEmpty()) "— пока пусто: здесь шаги навигации и решения по guide_to —"
+                            else entries.joinToString("\n") { it.format() }
+                        binding.navJournalScroll.post { binding.navJournalScroll.fullScroll(View.FOCUS_DOWN) }
+                    }
+                }
             }
+        }
+        (application as AstanaHubApp).crashGuard.lastCrash()?.let {
+            log("Последнее падение приложения (${CrashReport.DIR}/${CrashReport.LAST}):\n" + CrashReport.head(it, 25))
         }
         log("Голос: ${container.voiceSettings.config.value.describe()}, flavor: ${getString(R.string.flavor_name)}, backend: ${container.backend.url.value.ifEmpty { "не задан" }}")
     }
@@ -295,6 +413,78 @@ class DiagnosticsActivity : AppCompatActivity() {
         container.serverVoice.stopListening()
         container.voice.setDiagnosticsOpen(false) // режим заново применит нужное состояние микрофона
         super.onStop()
+    }
+
+    /** Точки карты робота (getPlaceList) — строкой на каждую, с кнопкой «Поехать». */
+    private fun loadMapPoints() {
+        lifecycleScope.launch(sectionHandler("Точки карты")) {
+            val points = container.robot.getPlaces()
+            NavJournal.log("диагностика: getPlaceList — ${points.size} точек" + if (points.isEmpty()) " (RobotApi не подключён или карта пуста)" else "")
+            val list = binding.mapPointsList
+            list.removeAllViews()
+            if (points.isEmpty()) {
+                list.addView(TextView(this@DiagnosticsActivity).apply {
+                    text = "Точек нет: RobotApi не подключён или на роботе нет карты"
+                    textSize = 18f
+                })
+                return@launch
+            }
+            val pad = (6 * resources.displayMetrics.density).toInt()
+            points.forEach { point -> list.addView(mapPointRow(point, pad)) }
+        }
+    }
+
+    private fun mapPointRow(point: MapPlace, pad: Int): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, pad, 0, pad)
+        addView(
+            TextView(this@DiagnosticsActivity).apply {
+                val status = when (point.status) { 0 -> "доступна"; 1 -> "запретная зона"; 2 -> "вне карты"; else -> "status=${point.status}" }
+                text = "«${point.name}»  x=${"%.2f".format(point.x)} y=${"%.2f".format(point.y)}  $status"
+                textSize = 18f
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        addView(
+            MaterialButton(this@DiagnosticsActivity).apply {
+                text = getString(R.string.diag_nav_go)
+                textSize = 20f
+                minHeight = (64 * resources.displayMetrics.density).toInt()
+                setOnClickListener { goTo(point) }
+            },
+        )
+    }
+
+    /** «Поехать»: startNavigation к точке напрямую через RobotGateway (все шаги — в журнале навигации). */
+    private fun goTo(point: MapPlace) {
+        val previous = tripJob
+        tripJob = lifecycleScope.launch(sectionHandler("Поехать")) {
+            if (previous?.isActive == true) {
+                previous.cancelAndJoin()
+                container.robot.stopNavigationAndWait()
+            }
+            NavJournal.log("диагностика: «Поехать» → «${point.name}»")
+            binding.navTripStatus.text = "Еду к «${point.name}»…"
+            log("Навигация → «${point.name}»")
+            // Слежение головой занимает шасси — на время поездки выключаем, как в обычной поездке.
+            container.head?.setNavigating(true)
+            val result = try {
+                container.robot.navigateTo(point.name) { event -> NavJournal.log("диагностика: событие $event") }
+            } finally {
+                container.head?.setNavigating(false)
+            }
+            binding.navTripStatus.text = "«${point.name}»: $result"
+            log("Навигация «${point.name}»: $result")
+        }
+    }
+
+    private fun stopTrip() {
+        NavJournal.log("диагностика: «Стоп»")
+        tripJob?.cancel()
+        container.robot.stopNavigation()
+        binding.navTripStatus.text = "Стоп отправлен"
+        log("Навигация: стоп")
     }
 
     /** GET /v1/health (без токена) по адресу из поля — только если адрес разрешён политикой. */
@@ -423,6 +613,46 @@ class DiagnosticsActivity : AppCompatActivity() {
     }
 
     /** [pii] — текст посетителя в строке: на экран целиком, в logcat — только длина и хеш. */
+    /**
+     * Блок настройки экрана: ошибка одного виджета не роняет приложение (на роботе падение = выброс из киоска),
+     * а попадает в лог диагностики, чтобы её было видно.
+     */
+    /** Костюм робота-компаньона (только вид): кнопки, выбранный — с точкой. */
+    private fun bindCostumes() {
+        val row = binding.costumeRow
+        row.removeAllViews()
+        val current = container.costume.costume.value
+        kz.astanahub.robot.ui.screen.Costume.entries.forEach { c ->
+            val b = MaterialButton(this).apply {
+                text = (if (c == current) "● " else "") + c.label
+                textSize = 20f
+                isAllCaps = false
+                setOnClickListener {
+                    container.costume.set(c)
+                    log("Костюм: ${c.label}")
+                    bindCostumes()
+                }
+            }
+            row.addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = (12 * resources.displayMetrics.density).toInt()
+            })
+        }
+    }
+
+    private inline fun section(name: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            Timber.e(e, "diagnostics: section %s failed", name)
+            log("ОШИБКА в блоке «$name»: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun sectionHandler(name: String) = CoroutineExceptionHandler { _, e ->
+        Timber.e(e, "diagnostics: coroutine %s failed", name)
+        log("ОШИБКА в блоке «$name»: ${e.javaClass.simpleName}: ${e.message}")
+    }
+
     private fun log(line: String, pii: String? = null) {
         val text = "${timeFormat.format(Date())}  $line\n"
         if (pii == null) Timber.i("DIAG %s", line) else Timber.i("DIAG (скрыто) %s", LogSafe.redact(pii))

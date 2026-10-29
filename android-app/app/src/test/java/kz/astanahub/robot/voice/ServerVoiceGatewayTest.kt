@@ -28,7 +28,7 @@ import org.junit.Test
 class ServerVoiceGatewayTest {
 
     // live STT (WS /v1/stt/stream) не поддерживается: тесты проверяют путь запись → /v1/stt
-    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null }
+    private val backend = mockk<BackendApi> { every { openLiveStt(any(), any()) } returns null; every { supportsLiveStt } returns false }
     private val recorder = mockk<MicRecorder> { every { hasPermission() } returns true }
     private val player = mockk<Mp3Player>(relaxed = true)
     private var recordings = 0

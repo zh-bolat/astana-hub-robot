@@ -92,7 +92,8 @@ class DiagPinGuard(
         val remaining = lockRemainingMillis()
         if (remaining > 0) return Result.Locked(remaining)
         if (pinHash.isEmpty()) return Result.Wrong(0)
-        val candidate = DiagPin.hash(pin, salt)
+        // Регистр не важен (буквенный PIN): в build.gradle.kts PIN тоже хешируется в нижнем регистре.
+        val candidate = DiagPin.hash(pin.trim().lowercase(), salt)
         if (MessageDigest.isEqual(candidate.toByteArray(), pinHash.toByteArray())) {
             store.failedAttempts = 0
             store.lockedUntilMillis = 0

@@ -1,0 +1,31 @@
+# Eval поиска по документам (задача 11): ответы есть ТОЛЬКО в knowledge/documents/*.md, в facts.yaml их нет.
+# Формат как у eval/questions.yaml:
+#   id            — уникальный id
+#   lang          — язык вопроса (ru/kk/en)
+#   question      — текст вопроса
+#   expect_found  — должен ли быть ответ из базы (false = ожидаем отказ «обратитесь на ресепшен»)
+#   expect_source — (опц.) документ, который должен попасть в sources; "document:<slug>" засчитывает
+#                   любой его фрагмент "document:<slug>#<n>"
+#   expect_contains — (опц.) подстроки, которые должны быть в ответе (без учёта регистра)
+# Документы ищет агент /v1/chat (справка prefetch или search_kb), поэтому вопросы гоняются через него.
+questions:
+  # --- ru: ответ только в документах ---
+  - {id: rag-ru-c46-biggest-room, lang: ru, question: "Какая самая большая переговорная в павильоне C4.6?", expect_found: true, expect_source: "document:meeting_rooms_halls", expect_contains: ["Tesla"]}
+  - {id: rag-ru-hall-half-day, lang: ru, question: "Можно ли арендовать зал для мероприятия на полдня?", expect_found: true, expect_source: "document:meeting_rooms_halls", expect_contains: ["13"]}
+  - {id: rag-ru-hub-space-companies, lang: ru, question: "Сколько компаний работает в Hub Space?", expect_found: true, expect_source: "document:hub_space", expect_contains: ["85"]}
+  - {id: rag-ru-lrt-hours, lang: ru, question: "До скольки ходят поезда LRT?", expect_found: true, expect_source: "document:getting_here", expect_contains: ["23"]}
+  - {id: rag-ru-rules-violations, lang: ru, question: "Что будет резиденту, если он часто нарушает правила хаба?", expect_found: true, expect_source: "document:building_rules", expect_contains: ["растор"]}
+  - {id: rag-ru-tech-incubator-length, lang: ru, question: "Сколько недель длится Tech Incubator?", expect_found: true, expect_source: "document:startup_programs", expect_contains: ["14"]}
+  - {id: rag-ru-tech-orda-online, lang: ru, question: "Сколько Tech Orda оплачивает за онлайн-обучение?", expect_found: true, expect_source: "document:education", expect_contains: ["400"]}
+  - {id: rag-ru-forum-tickets, lang: ru, question: "Сколько стоили билеты на AI & Digital Bridge?", expect_found: true, expect_source: "document:community_contacts", expect_contains: ["990"]}
+  - {id: rag-ru-minister-vs-ceo, lang: ru, question: "Жаслан Мадиев — это директор Astana Hub?", expect_found: true, expect_source: "document:about_hub", expect_contains: ["Магжан"]}
+  # --- kk: ответ только в документах ---
+  - {id: rag-kk-silkway-graduates, lang: kk, question: "Silkway Accelerator-дың қанша түлегі бар?", expect_found: true, expect_source: "document:startup_programs", expect_contains: ["73"]}
+  - {id: rag-kk-fee-deadline, lang: kk, question: "Мүшелік жарнаны қай күнге дейін төлеу керек?", expect_found: true, expect_source: "document:residency", expect_contains: ["25"]}
+  - {id: rag-kk-tomorrow-school-platform, lang: kk, question: "Tomorrow School қай платформада оқытады?", expect_found: true, expect_source: "document:education", expect_contains: ["Edu"]}
+  # --- en: ответ только в документах ---
+  - {id: rag-en-c35-biggest-room, lang: en, question: "Which meeting room in pavilion C3.5 is the biggest?", expect_found: true, expect_source: "document:meeting_rooms_halls", expect_contains: ["Asimov"]}
+  - {id: rag-en-digital-nomad-count, lang: en, question: "How many specialists have received Digital Nomad Residency?", expect_found: true, expect_source: "document:foreigners", expect_contains: ["120"]}
+  # --- про хаб, но ответа нет нигде: робот не должен выдумывать ---
+  - {id: rag-ru-oob-luggage, lang: ru, question: "Есть ли в хабе камера хранения?", expect_found: false}
+  - {id: rag-en-oob-gym, lang: en, question: "Is there a gym or a shower in the hub?", expect_found: false}

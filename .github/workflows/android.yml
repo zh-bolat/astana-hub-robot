@@ -34,7 +34,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Без явного списка пакетов экшен ставит устаревший пакет «tools», которого больше нет в SDK, и падает.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -56,15 +59,15 @@ jobs:
             echo "BACKEND_URL=${BACKEND_URL}"
           } > secrets.properties
 
-      - name: Build emulatorDebug + robotDebug
+      - name: Build emulatorDebug + robotosDebug + robotDebug
         run: |
           if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
-          $GRADLE --no-daemon assembleEmulatorDebug assembleRobotDebug
+          $GRADLE --no-daemon assembleEmulatorDebug assembleRobotosDebug assembleRobotDebug
 
       - name: Unit tests
         run: |
           if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
-          $GRADLE --no-daemon testEmulatorDebugUnitTest
+          $GRADLE --no-daemon testEmulatorDebugUnitTest testRobotosDebugUnitTest
 
       - name: Remove secrets.properties
         if: always()
@@ -74,6 +77,13 @@ jobs:
         with:
           name: apk-emulator-debug-${{ github.sha }}
           path: android-app/app/build/outputs/apk/emulator/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-robotos-debug-${{ github.sha }}
+          path: android-app/app/build/outputs/apk/robotos/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 

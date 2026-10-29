@@ -2,7 +2,13 @@ package kz.astanahub.robot.di
 
 import android.app.Application
 import kz.astanahub.robot.BuildConfig
+import kz.astanahub.robot.audio.AudioLevels
 import kz.astanahub.robot.audio.MicRecorder
+import kz.astanahub.robot.audio.PlaybackVisualizer
+import kz.astanahub.robot.live.AndroidAudioSink
+import kz.astanahub.robot.live.AndroidLiveMicrophone
+import kz.astanahub.robot.live.LiveSession
+import kz.astanahub.robot.live.LiveSessionFactory
 import kz.astanahub.robot.audio.Mp3Player
 import kz.astanahub.robot.backend.ApiResult
 import kz.astanahub.robot.backend.BackendSettings
@@ -24,7 +30,17 @@ import kz.astanahub.robot.places.PlaceRepository
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.robot.RobotGateway
 import kz.astanahub.robot.voice.AndroidTtsVoiceGateway
-import kz.astanahub.robot.voice.BuiltinMicControl
+import kz.astanahub.robot.voice.AssistantGuard
+import kz.astanahub.robot.voice.BuiltinAssistant
+import kz.astanahub.robot.voice.FileAudioStore
+import kz.astanahub.robot.voice.PhraseAudioCache
+import kz.astanahub.robot.voice.PhraseCacheWarmer
+import kz.astanahub.robot.audio.VadConfig
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import kz.astanahub.robot.voice.RoutingVoiceGateway
 import kz.astanahub.robot.voice.ServerVoiceGateway
 import kz.astanahub.robot.voice.VoiceGateway
@@ -46,13 +62,16 @@ import kz.astanahub.robot.presence.PresenceEvent
 import kz.astanahub.robot.presence.PresenceSimulator
 import kz.astanahub.robot.presence.PresenceTracker
 import kz.astanahub.robot.robot.HeadController
+import kz.astanahub.robot.robot.HeadDiagnostics
 import kz.astanahub.robot.robot.HeadGateway
+import kz.astanahub.robot.presence.SeenPerson
 
 /** Железо робота: реализация выбирается flavor-ом (FlavorGateways в src/emulator и src/robot). */
 class Gateways(
     /** Встроенный голос: AgentOS на роботе, текстовая заглушка на эмуляторе. */
     val builtinVoice: VoiceGateway,
-    val builtinMic: BuiltinMicControl,
+    /** Встроенный ассистент (SkillApi / AgentOS): глушится, пока приложение на переднем плане. */
+    val assistant: BuiltinAssistant,
     val robot: RobotGateway,
     val camera: CameraGateway,
     /** Есть настоящее встроенное распознавание (robot/robotos) — на него откат без связи. */
@@ -60,6 +79,8 @@ class Gateways(
     /** Люди перед роботом (PersonApi / заглушка); null — пробуждения по человеку нет. */
     val persons: PersonGateway? = null,
     val head: HeadGateway? = null,
+    /** Проверка головы и зрения с экрана диагностики (RobotApi с отчётом о каждом ответе); null — раздела нет. */
+    val headDiagnostics: HeadDiagnostics? = null,
     /** Эмулятор: «подошёл / ушёл» с экрана диагностики. */
     val presenceSimulator: PresenceSimulator? = null,
 )
@@ -72,20 +93,38 @@ class AppContainer(app: Application) {
     private val gateways: Gateways = FlavorGateways.create(app)
     val robot: RobotGateway get() = gateways.robot
     val camera: CameraGateway get() = gateways.camera
-    val builtinMic: BuiltinMicControl get() = gateways.builtinMic
+
+    /** Встроенный ассистент молчит, пока приложение видно; микрофон ему — только при ASR=builtin. */
+    val assistantGuard = AssistantGuard(gateways.assistant)
+
+    /**
+     * Виден ли хоть один экран приложения (ForegroundTracker в [kz.astanahub.robot.AstanaHubApp]). Не видно —
+     * постоянное прослушивание и живая сессия выключены: робот не слушает и не отвечает «из фона».
+     */
+    val appForeground = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val builtinMic: AssistantGuard get() = assistantGuard
     val presenceSimulator: PresenceSimulator? get() = gateways.presenceSimulator
 
     /** Голова: один контроллер на приложение (слежение, сброс, кивки). */
     val head: HeadController? = gateways.head?.let { HeadController(it) }
 
+    val headDiagnostics: HeadDiagnostics? get() = gateways.headDiagnostics
+
+    private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Люди перед роботом: один опрос PersonApi на приложение (трекер присутствия и живой лог диагностики). */
+    val persons: Flow<List<SeenPerson>>? = gateways.persons?.persons?.shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
+
     /** События «подошёл / ушёл»; трекер один на приложение — анти-спам переживает пересоздание экрана. */
-    val presence: Flow<PresenceEvent>? = gateways.persons?.let { persons ->
-        PresenceTracker(PresenceConfig()).track(persons.persons)
-            .shareIn(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), SharingStarted.WhileSubscribed(), 0)
+    val presence: Flow<PresenceEvent>? = persons?.let { persons ->
+        PresenceTracker(PresenceConfig()).track(persons).shareIn(presenceScope, SharingStarted.WhileSubscribed(), 0)
     }
 
-    /** Режим разговора: agent (`/v1/chat`) или legacy; меняется на экране диагностики. */
+    /** Режим разговора: agent (`/v1/chat`), legacy или live (`WS /v1/live`); меняется на экране диагностики. */
     val chatSettings = ChatSettings(app, ChatMode.fromCode(BuildConfig.CHAT_MODE) ?: ChatMode.AGENT)
+
+    /** Костюм робота-компаньона на странице приложения (только вид). */
+    val costume = kz.astanahub.robot.ui.screen.CostumeSettings(app)
 
     /** Куда можно переключить сервер с экрана диагностики: release — https + allowlist, debug — ещё LAN. */
     val backendUrlPolicy = BackendUrlPolicy.fromBuildConfig(
@@ -106,10 +145,13 @@ class AppContainer(app: Application) {
     /** Один OkHttpClient на приложение: пул соединений и потоки общие; клиенты — через newBuilder() от него. */
     val httpClient: OkHttpClient = RetrofitBackendApi.defaultClient()
 
+    /** Голос серверного TTS (`X-TTS-Voice`): сменился — кеш готовых фраз синтезируется заново. */
+    val ttsVoice = kz.astanahub.robot.backend.TtsVoiceMonitor()
+
     /** Адрес сервера меняется на экране диагностики без пересборки; токен — из BuildConfig. */
     val backend: SwitchableBackendApi = SwitchableBackendApi(
         initialUrl = backendSettings.current(),
-        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient) },
+        factory = { url -> RetrofitBackendApi(url, BuildConfig.ROBOT_TOKEN, client = httpClient, voiceMonitor = ttsVoice) },
         // Без адреса: эмулятор — заглушка, робот — честное «нет связи».
         fallback = { if (BuildConfig.IS_ROBOT) UnconfiguredBackendApi() else FakeBackendApi() },
     )
@@ -125,15 +167,59 @@ class AppContainer(app: Application) {
         VoiceConfig(
             asr = VoiceSource.fromCode(BuildConfig.VOICE_ASR) ?: VoiceSource.SERVER,
             tts = mapOf(
-                Lang.RU to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_RU) ?: VoiceSource.BUILTIN),
+                Lang.RU to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_RU) ?: VoiceSource.SERVER),
                 Lang.KK to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_KK) ?: VoiceSource.SERVER),
-                Lang.EN to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_EN) ?: VoiceSource.BUILTIN),
+                Lang.EN to (VoiceSource.fromCode(BuildConfig.VOICE_TTS_EN) ?: VoiceSource.SERVER),
             ),
+            builtinFallback = BuildConfig.VOICE_BUILTIN_FALLBACK,
+            vadEndSilenceMillis = BuildConfig.VAD_END_SILENCE_MS,
+            ttsStreaming = BuildConfig.TTS_STREAMING,
         ),
     )
 
+    /** Фразы робота голосом ElevenLabs в файлах приложения (играются и без сети). */
+    val phraseCache = PhraseAudioCache(FileAudioStore(java.io.File(app.filesDir, "voice_cache")))
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Громкость микрофона и речи робота для лица (docs/ui-redesign/INTEGRATION.md, «Звук → лицо»). */
+    val audioLevels = AudioLevels()
+
     val micRecorder = MicRecorder(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
-    val serverVoice = ServerVoiceGateway(backend, micRecorder, Mp3Player())
+    val serverVoice = ServerVoiceGateway(
+        backend = backend,
+        recorder = micRecorder,
+        player = Mp3Player(PlaybackVisualizer(app, audioLevels)),
+        vadConfig = {
+            val c = voiceSettings.config.value
+            VadConfig(endSilenceMillis = c.vadEndSilenceMillis).withSensitivity(c.micSensitivity)
+        },
+        cache = phraseCache,
+        streaming = { voiceSettings.config.value.ttsStreaming },
+        levels = audioLevels,
+    )
+
+    /** Микрофон живого режима (VOICE_COMMUNICATION + AEC/NS, если есть). */
+    val liveMicrophone = AndroidLiveMicrophone(app, preferStereoLeft = BuildConfig.PLATFORM == "robotos")
+
+    /** Живой голосовой режим WS /v1/live (ChatMode.LIVE): одна сессия на посетителя. */
+    val liveFactory = LiveSessionFactory { scope, sessionId, lang ->
+        LiveSession(
+            parent = scope,
+            connect = { backend.openLive(lang, sessionId) },
+            microphone = liveMicrophone,
+            sink = AndroidAudioSink(),
+            clock = android.os.SystemClock::elapsedRealtime,
+            levels = audioLevels,
+        )
+    }
+
+    /** Синтез кеша фраз: при старте — недостающие, при смене сервера — все заново, при восстановлении связи — недостающие. */
+    val phraseCacheWarmer = PhraseCacheWarmer(
+        backend, phraseCache, text, CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        voiceMonitor = ttsVoice,
+        voiceStamp = kz.astanahub.robot.backend.FileVoiceStamp(java.io.File(app.filesDir, "voice_cache.voice")),
+    )
 
     /**
      * Android TextToSpeech: «встроенный» синтез во flavor emulator + тест на экране диагностики.
@@ -149,9 +235,25 @@ class AppContainer(app: Application) {
         builtinTts = if (BuildConfig.IS_ROBOT) gateways.builtinVoice else androidTts,
         server = serverVoice,
         settings = voiceSettings,
-        micControl = gateways.builtinMic,
+        micControl = assistantGuard,
         continuousServerAsr = BuildConfig.IS_ROBOT,
         builtinAsrAvailable = gateways.builtinAsrAvailable,
         healthCheck = { backend.health() is ApiResult.Success },
+        cache = phraseCache,
+        phrases = text,
     )
+
+    init {
+        phraseCacheWarmer.warmUp(force = false)
+        appScope.launch {
+            backend.url.drop(1).distinctUntilChanged().collect { phraseCacheWarmer.warmUp(force = true) }
+        }
+        appScope.launch {
+            voice.connection.filter { it }.collect { phraseCacheWarmer.warmUp(force = false) }
+        }
+        // Голос сервера сменился (`X-TTS-Voice` в любом ответе /v1/tts) — кеш фраз заново.
+        appScope.launch {
+            ttsVoice.voice.filterNotNull().distinctUntilChanged().collect { phraseCacheWarmer.onVoice(it) }
+        }
+    }
 }

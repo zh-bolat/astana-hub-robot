@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.compose)
 }
 
 // ---------------------------------------------------------------------------
@@ -30,11 +31,13 @@ val diagPinSalt = secret("DIAG_PIN_SALT").ifEmpty { "kz.astanahub.robot/diag-pin
 
 fun diagPinHash(pin: String, salt: String): String {
     if (pin.isEmpty()) return ""
-    if (!pin.matches(Regex("\\d{4,12}"))) {
-        throw GradleException("DIAG_PIN в secrets.properties: только цифры, 4–12 знаков")
+    // Латинские буквы и цифры, 4–12 знаков (прежний цифровой PIN тоже подходит); регистр не важен — хешируется в
+    // нижнем регистре, как в DiagPinGuard.check.
+    if (!pin.matches(Regex("[A-Za-z0-9]{4,12}"))) {
+        throw GradleException("DIAG_PIN в secrets.properties: латинские буквы и цифры, 4–12 знаков")
     }
     val md = MessageDigest.getInstance("SHA-256")
-    var digest = md.digest("$salt:$pin".toByteArray(Charsets.UTF_8))
+    var digest = md.digest("$salt:${pin.lowercase()}".toByteArray(Charsets.UTF_8))
     repeat(9_999) { digest = md.digest(digest) }
     return digest.joinToString("") { "%02x".format(it) }
 }
@@ -62,15 +65,22 @@ android {
         buildConfigField("String", "DIAG_PIN_HASH", diagPinHashValue.asBuildConfigString())
         buildConfigField("String", "DIAG_PIN_SALT", diagPinSalt.asBuildConfigString())
         // Голос (меняется и без пересборки — экран диагностики): builtin | server.
-        // Распознавание: по умолчанию сервер (все языки). Синтез: ru/en — встроенный, kk — сервер.
+        // Распознавание: по умолчанию сервер (все языки). Синтез: все языки — сервер (ElevenLabs).
         buildConfigField("String", "VOICE_ASR", secret("VOICE_ASR").ifEmpty { "server" }.asBuildConfigString())
-        buildConfigField("String", "VOICE_TTS_RU", secret("VOICE_TTS_RU").ifEmpty { "builtin" }.asBuildConfigString())
+        buildConfigField("String", "VOICE_TTS_RU", secret("VOICE_TTS_RU").ifEmpty { "server" }.asBuildConfigString())
         buildConfigField("String", "VOICE_TTS_KK", secret("VOICE_TTS_KK").ifEmpty { "server" }.asBuildConfigString())
-        buildConfigField("String", "VOICE_TTS_EN", secret("VOICE_TTS_EN").ifEmpty { "builtin" }.asBuildConfigString())
-        // Заставка и сброс сессии после N секунд бездействия (шаг 7.4); 0 — выключено.
-        // Разговор: agent — POST /v1/chat (агент на сервере), legacy — локальные правила + /v1/ask. Меняется в диагностике.
+        buildConfigField("String", "VOICE_TTS_EN", secret("VOICE_TTS_EN").ifEmpty { "server" }.asBuildConfigString())
+        // Сбой /v1/tts -> встроенный голос робота (true) или текст без звука + фраза из кеша ElevenLabs (false, по умолчанию).
+        buildConfigField("boolean", "VOICE_BUILTIN_FALLBACK", (secret("VOICE_BUILTIN_FALLBACK").lowercase() == "true").toString())
+        // Конец фразы посетителя после стольких мс тишины (VAD приложения), по умолчанию 500.
+        buildConfigField("int", "VAD_END_SILENCE_MS", secret("VAD_END_SILENCE_MS").toIntOrNull()?.toString() ?: "500")
+        // Потоковый /v1/tts (звук с первых байт), по умолчанию true.
+        buildConfigField("boolean", "TTS_STREAMING", (secret("TTS_STREAMING").lowercase() != "false").toString())
+        // Сон (MF4): робот засыпает после N секунд без разговора, по умолчанию 5 мин; 0 — сам не засыпает.
+        // Разговор: agent — POST /v1/chat (агент на сервере), legacy — локальные правила + /v1/ask,
+        // live — живой голосовой режим WS /v1/live (сбой → agent). Меняется в диагностике.
         buildConfigField("String", "CHAT_MODE", secret("CHAT_MODE").ifEmpty { "agent" }.asBuildConfigString())
-        buildConfigField("int", "SCREENSAVER_SECONDS", secret("SCREENSAVER_SECONDS").toIntOrNull()?.toString() ?: "60")
+        buildConfigField("int", "SCREENSAVER_SECONDS", secret("SCREENSAVER_SECONDS").toIntOrNull()?.toString() ?: "300")
     }
 
     flavorDimensions += "target"
@@ -113,6 +123,8 @@ android {
     testOptions {
         // android.util.Log и прочие заглушки android.jar в JVM-тестах возвращают значения по умолчанию.
         unitTests.isReturnDefaultValues = true
+        // Тесты Compose на Robolectric (касания кнопок, ui/screen/*TouchTest): ресурсы и манифест — в тестах.
+        unitTests.isIncludeAndroidResources = true
     }
 
     sourceSets {
@@ -124,6 +136,8 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+        // UI-слой нового интерфейса (docs/ui-redesign/DESIGN.md, «Стек»): Compose поверх прежних XML-экранов.
+        compose = true
     }
 }
 
@@ -198,11 +212,29 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.timber)
 
+    // Compose: экран лица (M1), дальше экран 2 (M3). Версии — из BOM.
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.runtime)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.text)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.animation)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    // ComponentActivity для createComposeRule в тестах Robolectric (только debug).
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
 }
 
 // Копия APK для раздачи роботу через http-сервер: ./gradlew publishTestApks

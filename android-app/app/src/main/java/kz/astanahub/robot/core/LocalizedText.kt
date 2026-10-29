@@ -21,9 +21,12 @@ class LocalizedText(context: Context) : Phrases {
         when (key) {
             PhraseKey.NO_CONNECTION -> R.string.phrase_no_connection
             PhraseKey.NOT_HEARD -> R.string.phrase_not_heard
-            PhraseKey.ONE_MOMENT -> R.string.phrase_one_moment
             PhraseKey.CAMERA_UNAVAILABLE -> R.string.phrase_camera_unavailable
             PhraseKey.GREETING -> R.string.phrase_greeting
+            PhraseKey.CANT_SPEAK -> R.string.phrase_cant_speak
+            PhraseKey.LOOKING -> R.string.phrase_looking
+            PhraseKey.FAQ_INTRO -> R.string.faq_intro
+            PhraseKey.WHERE_ASK -> R.string.where_ask
         },
         lang,
     )

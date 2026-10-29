@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kz.astanahub.robot.backend.Answer
@@ -155,7 +157,7 @@ class MainViewModelTest {
     }
 
     @Test
-    fun `rate limit says one moment and retries once`() = runTest(dispatcher) {
+    fun `rate limit - waits silently with a thinking face and retries once`() = runTest(dispatcher) {
         coEvery { backend.ask(any(), any()) } returnsMany listOf(
             failure(ErrorKind.RATE_LIMITED, retryAfter = 2),
             answer("Готово."),
@@ -163,9 +165,11 @@ class MainViewModelTest {
         val vm = createVm()
 
         vm.submit("Вопрос")
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(Phase.THINKING, vm.state.value.phase)
         advanceUntilIdle()
 
-        assertEquals(listOf(listOf("ONE_MOMENT:ru"), listOf("Готово.")), voice.spoken)
+        assertEquals(listOf(listOf("Готово.")), voice.spoken)
         assertEquals("Готово.", vm.state.value.answer)
         coVerify(exactly = 2) { backend.ask(any(), any()) }
     }
@@ -317,6 +321,15 @@ class MainViewModelTest {
         assertTrue(vm.state.value.answer!!, vm.state.value.answer!!.startsWith("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
         coVerify(exactly = 0) { backend.ask(any(), any()) }
+        // Остров where_is на экране лица: место, расстояние, стрелка от посетителя, можно проводить.
+        val where = vm.state.value.whereIs!!
+        assertEquals("Кафе", where.place)
+        assertTrue(where.distanceM > 0)
+        assertTrue(where.canGuide)
+        val seq = where.seq
+        vm.submit("Асхана қайда?")
+        advanceUntilIdle()
+        assertTrue("same question again shows the island again", vm.state.value.whereIs!!.seq > seq)
     }
 
     @Test
@@ -345,9 +358,9 @@ class MainViewModelTest {
         assertEquals("Кафе", vm.state.value.guidingTo)
         advanceUntilIdle()
 
-        assertEquals("Мы пришли: Кафе.", vm.state.value.answer)
+        assertEquals("Мы пришли. Это Кафе.", vm.state.value.answer)
         assertNull(vm.state.value.guidingTo)
-        assertTrue(voice.spoken.flatten().contains("Идите за мной, провожу: Кафе."))
+        assertTrue(voice.spoken.flatten().contains("Идите за мной. Провожу: Кафе."))
     }
 
     @Test
@@ -368,22 +381,24 @@ class MainViewModelTest {
     }
 
     @Test
-    fun `screensaver after inactivity resets session and wakes on touch`() = runTest(dispatcher) {
+    fun `sleep after inactivity resets session, the menu stays, a page action wakes`() = runTest(dispatcher) {
         coEvery { backend.ask(any(), any()) } returns answer("Ответ.", lang = Lang.EN)
         val vm = createVmWithMap(mapRobot(), screensaverMillis = 60_000)
         vm.submit("Hello")
         testScheduler.advanceTimeBy(5_000)
         assertEquals(Lang.EN, vm.state.value.lang)
-        assertFalse(vm.state.value.screensaver)
+        assertFalse(vm.state.value.asleep)
 
         testScheduler.advanceTimeBy(61_000)
         testScheduler.runCurrent()
-        assertTrue(vm.state.value.screensaver)
+        assertTrue(vm.state.value.asleep)
+        assertEquals("MF5: the menu stays open in sleep", ScreenMode.MENU, vm.state.value.mode)
         assertNull(vm.state.value.answer)
         assertEquals(Lang.RU, vm.state.value.lang)
 
         vm.wake()
-        assertFalse(vm.state.value.screensaver)
+        assertFalse(vm.state.value.asleep)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
     }
 
     @Test

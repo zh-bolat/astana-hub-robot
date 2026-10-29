@@ -9,7 +9,16 @@ data class Answer(
     val phrases: List<String>,
     val lang: Lang?,
     val found: Boolean,
+    /** Источники для показа (контракт v1.3, необязательно; старый сервер не шлёт). */
+    val citations: List<Citation> = emptyList(),
 )
+
+/**
+ * Источник ответа для человека (`citations` в `/v1/ask`, `/v1/chat` `done`, live `turn_end`; контракт v1.3).
+ * Вслух не произносится — маленькая подпись под ответом робота на экране 2. [type]: document | fact | place;
+ * [url] — только у документа.
+ */
+data class Citation(val id: String, val type: String, val title: String, val url: String? = null)
 
 data class Place(
     val id: String,

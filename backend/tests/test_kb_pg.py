@@ -15,6 +15,7 @@ from app.knowledge.source import KnowledgeStore, YamlKnowledgeSource, build_kb
 from app.knowledge.sync import seed_yaml, seed_yaml_if_empty
 
 YAML = YamlKnowledgeSource(BACKEND_DIR / "knowledge")
+N_FACTS = len(YAML.load().facts)
 
 
 def _source(db, tmp_path) -> DbKnowledgeSource:
@@ -25,7 +26,7 @@ def test_seed_roundtrip_equals_yaml(db):
     repo = KnowledgeRepo(db)
     result = seed_yaml(repo, YAML)
     assert result.status == "ok"
-    assert result.counts["facts"]["inserted"] == 13
+    assert result.counts["facts"]["inserted"] == N_FACTS
     loaded = repo.load_active()
     expected = canonical_kb(YAML.load())
     assert loaded.model_dump() == expected.model_dump()
@@ -64,7 +65,7 @@ def test_update_changes_only_changed_rows(db):
     assert result.counts["places"] == {"inserted": 0, "updated": 1, "deactivated": 0}
     # первый синк таблицы поверх сида: все строки переходят во владение таблицы
     result = repo.apply(kb, "sheet")
-    assert result.counts["facts"]["updated"] == 13
+    assert result.counts["facts"]["updated"] == N_FACTS
     with db.connect() as conn:
         assert set(conn.execute(text("SELECT DISTINCT source FROM facts")).scalars()) == {"sheet"}
 
@@ -79,7 +80,7 @@ def test_admin_rows_survive_sync(db):
     kb = YAML.load()
     kb.facts = kb.facts[:2]
     result = repo.apply(kb, "sheet")
-    assert result.counts["facts"]["deactivated"] == 11
+    assert result.counts["facts"]["deactivated"] == N_FACTS - 2
     active = {f.id for f in repo.load_active().facts}
     assert active == {kb.facts[0].id, kb.facts[1].id, "admin_fact"}
 
@@ -94,7 +95,7 @@ def test_renamed_place_frees_map_name(db):
     repo.apply(kb, "sheet")
     with db.connect() as conn:
         rows = dict(
-            conn.execute(text("SELECT id, is_active FROM places WHERE map_name = 'Кафе'")).all()
+            conn.execute(text("SELECT id, is_active FROM places WHERE map_name = 'cafe'")).all()
         )
     assert rows == {"cafe": False, "cafe_new": True}
 
@@ -135,7 +136,7 @@ def test_db_source_cache_invalidated_by_kb_sync_version(db, tmp_path, monkeypatc
     store = KnowledgeStore(source, reload_interval_s=0)
     # пустая БД → запасной YAML
     assert source.refresh() is False
-    assert source.from_db is False and len(store.get().facts) == 13
+    assert source.from_db is False and len(store.get().facts) == N_FACTS
 
     seed_yaml(repo, YAML)
     assert source.refresh() is True

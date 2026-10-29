@@ -18,7 +18,7 @@ def test_places_and_etag(client):
     etag = r.headers["etag"]
     places = r.json()["places"]
     cafe = next(p for p in places if p["id"] == "cafe")
-    assert cafe["map_name"] == "Кафе"
+    assert cafe["map_name"] == "cafe"  # ровно как точка на карте робота
     assert set(cafe["names"]) == {"ru", "kk", "en"}
     assert "кафешка" in cafe["synonyms"]
     assert set(places[0]) == {"id", "map_name", "names", "synonyms", "description"}
@@ -34,9 +34,9 @@ def test_places_and_etag(client):
 
 def test_quick_questions(client):
     ru = client.get("/v1/quick-questions", headers=AUTH).json()["items"]
-    assert {"id": "wifi", "text": "Какой пароль от Wi-Fi?"} in ru
+    assert {"id": "transport", "text": "Как сюда добраться?"} in ru
     kk = client.get("/v1/quick-questions?lang=kk", headers=AUTH).json()["items"]
-    assert {"id": "wifi", "text": "Wi-Fi құпиясөзі қандай?"} in kk
+    assert {"id": "transport", "text": "Мұнда қалай жетуге болады?"} in kk
     r = client.get("/v1/quick-questions?lang=de", headers=AUTH)
     assert r.status_code == 400
 
@@ -93,9 +93,9 @@ def test_broken_yaml_seed_keeps_previous_version(client, knowledge_dir, db):
     assert body["found"] is True
 
 
-def test_startup_seeds_empty_db_from_yaml_once(client, db):
+def test_startup_seeds_empty_db_from_yaml_once(client, knowledge_dir, db):
     repo = KnowledgeRepo(db)
-    assert len(repo.load_active().facts) == 13
+    assert len(repo.load_active().facts) == len(YamlKnowledgeSource(knowledge_dir).load().facts)
     assert client.app.state.knowledge.source.from_db is True
     assert [r.source for r in repo.sync_log()] == ["yaml"]
 
@@ -138,5 +138,8 @@ def test_openapi_matches_contract_paths(client):
         "/v1/stt",
         "/v1/tts",
         "/v1/sessions/{session_id}/messages",
+        "/v1/metrics/turn",
+        "/v1/admin/metrics",
+        "/v1/admin/metrics/page",
     }
     assert "multipart/form-data" in spec["paths"]["/v1/look"]["post"]["requestBody"]["content"]

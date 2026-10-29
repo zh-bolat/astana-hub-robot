@@ -24,6 +24,7 @@ def _local(**extra) -> dict:
 def test_history_has_question_and_answer(client):
     r = client.post("/v1/ask", json=ask_body("Какой пароль от Wi-Fi?"), headers=AUTH)
     request_id = r.json()["request_id"]
+    assert client.app.state.log_writer.wait_idle(5)  # журнал пишет фоновый поток
 
     h = client.get(URL, headers=AUTH)
     assert h.status_code == 200
@@ -117,6 +118,7 @@ def _read_one_phrase_and_hang_up(client) -> dict:
 def test_cut_stream_is_logged_as_interrupted(make_client):
     client = make_client(text_llm=StreamProvider(_CHUNKS))
     first = _read_one_phrase_and_hang_up(client)
+    assert client.app.state.log_writer.wait_idle(5)  # журнал пишет фоновый поток
 
     user, bot = client.get(URL, headers=AUTH).json()["messages"]
     assert user["text"] == "Где кафе?"

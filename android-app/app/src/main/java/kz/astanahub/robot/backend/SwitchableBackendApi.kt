@@ -45,7 +45,11 @@ class SwitchableBackendApi(
     override suspend fun quickQuestions(lang: Lang) = delegate.quickQuestions(lang)
     override suspend fun stt(wav: ByteArray, lang: Lang?, sessionId: String) = delegate.stt(wav, lang, sessionId)
     override suspend fun tts(text: String, lang: Lang) = delegate.tts(text, lang)
+    override suspend fun ttsStream(text: String, lang: Lang) = delegate.ttsStream(text, lang)
+    override suspend fun postTurnMetrics(metrics: TurnMetrics) = delegate.postTurnMetrics(metrics)
     override fun openLiveStt(lang: Lang?, sessionId: String) = delegate.openLiveStt(lang, sessionId)
+    override val supportsLiveStt: Boolean get() = delegate.supportsLiveStt
+    override fun openLive(lang: Lang, sessionId: String) = delegate.openLive(lang, sessionId)
     override fun chat(request: ChatRequest) = delegate.chat(request)
     override suspend fun postLocalMessage(sessionId: String, message: LocalMessage) =
         delegate.postLocalMessage(sessionId, message)

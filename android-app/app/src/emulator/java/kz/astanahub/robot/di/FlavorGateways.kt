@@ -2,6 +2,7 @@ package kz.astanahub.robot.di
 
 import android.app.Application
 import kz.astanahub.robot.fake.FakeCameraGateway
+import kz.astanahub.robot.fake.FakeHeadDiagnostics
 import kz.astanahub.robot.fake.FakeHeadGateway
 import kz.astanahub.robot.fake.FakePersonGateway
 import kz.astanahub.robot.fake.FakeRobotGateway
@@ -13,11 +14,12 @@ object FlavorGateways {
         val persons = FakePersonGateway()
         return Gateways(
             builtinVoice = FakeVoiceGateway(),
-            builtinMic = { enabled -> timber.log.Timber.d("FAKE builtin mic listening=%s", enabled) },
+            assistant = kz.astanahub.robot.fake.FakeAssistant(),
             robot = FakeRobotGateway(),
             camera = FakeCameraGateway(),
             persons = persons,
             head = FakeHeadGateway(),
+            headDiagnostics = FakeHeadDiagnostics(persons),
             presenceSimulator = persons,
         )
     }

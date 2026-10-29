@@ -1,7 +1,9 @@
 # ==========================================================================
-# ВНИМАНИЕ: ПРИМЕРЫ-ЗАГЛУШКИ, НЕ ПРОВЕРЕННЫЕ ДАННЫЕ ASTANA HUB.
-# Нужны только для разработки и тестов. Перед пилотом заменить на реальную
-# базу (Google-таблица, шаг 3.2–3.3).
+# База знаний Astana Hub — факты для ответов робота.
+# Собрано 2026-10-26 из открытых источников: astanahub.com (ru/kk/en), законы РК
+# и Налоговый кодекс 2026, 2GIS, Telegram @astana_hub, СМИ 2025–2026.
+# Источники и уверенность по каждому факту: docs/research/astana-hub/
+# Что не нашлось и что нужно уточнить у сотрудников хаба: docs/research/astana-hub/README.md
 #
 # Формат факта:
 #   id        — уникальный идентификатор (в ответе API: "fact:<id>")
@@ -10,160 +12,746 @@
 #   question  — типичная формулировка вопроса ru/kk/en (необязательно)
 #   answer    — ответ ru/kk/en: 1–3 коротких предложения, без markdown, ссылок, эмодзи
 # Файл можно править на лету: сервер перечитает его без перезапуска (≈5 с).
+# После правки пересобрать sheet_template/*.csv (тест test_template_equals_yaml_examples).
 # ==========================================================================
 facts:
-  - id: wifi
-    tags: [infrastructure]
-    keywords: [wifi, wi-fi, вайфай, интернет, пароль, сеть, internet, password, құпиясөз]
-    question:
-      ru: Какой пароль от Wi-Fi?
-      kk: Wi-Fi құпиясөзі қандай?
-      en: What is the Wi-Fi password?
-    answer:
-      ru: Гостевая сеть называется AstanaHub-Guest. Пароль указан на табличке у ресепшена.
-      kk: Қонақтарға арналған желі AstanaHub-Guest деп аталады. Құпиясөз ресепшен жанындағы тақтайшада жазылған.
-      en: The guest network is called AstanaHub-Guest. The password is on the sign at the reception desk.
-
-  - id: hours
-    tags: [general]
-    keywords: [часы, график, работает, открыт, время, режим, hours, open, schedule, жұмыс, уақыт, ашық]
-    question:
-      ru: Во сколько открывается хаб?
-      kk: Хаб қашан ашылады?
-      en: What are the opening hours?
-    answer:
-      ru: Хаб открыт по будням с 9 до 21 часа, в субботу с 10 до 18 часов. В воскресенье выходной.
-      kk: Хаб жұмыс күндері сағат 9-дан 21-ге дейін, сенбіде 10-нан 18-ге дейін ашық. Жексенбі демалыс күні.
-      en: The hub is open on weekdays from 9 am to 9 pm and on Saturday from 10 am to 6 pm. It is closed on Sunday.
-
-  - id: address
-    tags: [general]
-    keywords: [адрес, находится, address, located, мекенжай, расположен]
-    question:
-      ru: Какой адрес у Astana Hub?
-      kk: Astana Hub мекенжайы қандай?
-      en: What is the address of Astana Hub?
-    answer:
-      ru: Astana Hub находится в Астане, проспект Мангилик Ел, 55/8, павильон C4.6.
-      kk: Astana Hub Астана қаласында, Мәңгілік Ел даңғылы, 55/8, C4.6 павильонында орналасқан.
-      en: Astana Hub is located in Astana at 55/8 Mangilik El Avenue, pavilion C4.6.
-
+  # ---------------------------------------------------------------- о хабе
   - id: about
     tags: [general]
-    keywords: [astana hub, что такое, технопарк, technopark, деген не]
+    keywords: [astana hub, астана хаб, что такое, технопарк, кластер, technopark, cluster, деген не, не туралы]
     question:
       ru: Что такое Astana Hub?
       kk: Astana Hub деген не?
       en: What is Astana Hub?
     answer:
-      ru: Astana Hub это международный технопарк IT-стартапов. Здесь работают стартапы, проходят акселерации и мероприятия.
-      kk: Astana Hub IT-стартаптардың халықаралық технопаркі. Мұнда стартаптар жұмыс істейді, акселерациялар мен іс-шаралар өтеді.
-      en: Astana Hub is an international technology park for IT startups. Startups work here and accelerator programs and events take place.
+      ru: Astana Hub — международный инновационный кластер и технопарк IT-стартапов в Астане. В нём больше 2500 казахстанских и зарубежных компаний-участников, здесь проходят акселераторы, обучение и мероприятия.
+      kk: Astana Hub — Астанадағы халықаралық инновациялық кластер және IT-стартаптар технопаркі. Мұнда 2500-ден астам қазақстандық және шетелдік қатысушы компания бар, акселераторлар, оқу бағдарламалары мен іс-шаралар өтеді.
+      en: Astana Hub is an international innovation cluster and technology park for IT startups in Astana. It has more than 2,500 member companies from Kazakhstan and abroad and runs accelerators, training programs and events.
 
-  - id: coworking
-    tags: [spaces]
-    keywords: [коворкинг, рабочее место, поработать, coworking, workspace, desk, жұмыс орны]
+  - id: history
+    tags: [general]
+    keywords: [история, когда открыли, основан, год основания, history, founded, opened, тарих, ашылды, құрылды]
     question:
-      ru: Где можно поработать с ноутбуком?
-      kk: Ноутбукпен қай жерде жұмыс істеуге болады?
-      en: Where can I work with my laptop?
+      ru: Когда открылся Astana Hub?
+      kk: Astana Hub қашан ашылды?
+      en: When did Astana Hub open?
     answer:
-      ru: Открытый коворкинг находится на втором этаже. Для гостей он бесплатный, нужно зарегистрироваться на ресепшене.
-      kk: Ашық коворкинг екінші қабатта орналасқан. Қонақтар үшін тегін, ресепшенде тіркелу керек.
-      en: The open coworking area is on the second floor. It is free for guests, just register at the reception.
+      ru: Astana Hub официально открылся 6 ноября 2018 года в павильоне на территории EXPO. В 2025 году его объединили с Парком инновационных технологий, теперь это автономный кластерный фонд «Астана Хаб».
+      kk: Astana Hub 2018 жылғы 6 қарашада EXPO аумағындағы павильонда ресми түрде ашылды. 2025 жылы ол Инновациялық технологиялар паркімен біріктірілді, қазір бұл «Астана Хаб» дербес кластерлік қоры.
+      en: Astana Hub officially opened on November 6, 2018, in a pavilion on the EXPO grounds. In 2025 it merged with the Park of Innovative Technologies and is now the Autonomous Cluster Fund Astana Hub.
 
-  - id: cafe
-    tags: [food]
-    keywords: [кафе, кофе, поесть, еда, столовая, обед, cafe, coffee, food, lunch, асхана, тамақ]
+  - id: leadership
+    tags: [general]
+    keywords: [директор, руководитель, глава, ceo, генеральный директор, мадиев, министерство, director, head, ministry, басшы, директоры, министрлік]
     question:
-      ru: Где здесь можно поесть?
-      kk: Мұнда қай жерде тамақтануға болады?
-      en: Where can I get something to eat?
+      ru: Кто руководит Astana Hub?
+      kk: Astana Hub-ты кім басқарады?
+      en: Who runs Astana Hub?
     answer:
-      ru: Кафе находится на первом этаже справа от главного входа. Оно работает с 9 до 19 часов.
-      kk: Кафе бірінші қабатта, басты кіреберістің оң жағында. Сағат 9-дан 19-ға дейін жұмыс істейді.
-      en: The cafe is on the first floor to the right of the main entrance. It is open from 9 am to 7 pm.
+      ru: Генеральный директор Astana Hub — Магжан Мадиев. Хаб курирует Министерство искусственного интеллекта и цифрового развития Казахстана.
+      kk: Astana Hub бас директоры — Мағжан Мадиев. Хабқа Қазақстанның Жасанды интеллект және цифрлық даму министрлігі жетекшілік етеді.
+      en: The CEO of Astana Hub is Magzhan Madiyev. The hub is overseen by Kazakhstan's Ministry of Artificial Intelligence and Digital Development.
 
-  - id: toilet
-    tags: [infrastructure]
-    keywords: [туалет, уборная, санузел, toilet, restroom, bathroom, wc, дәретхана]
+  - id: numbers
+    tags: [general]
+    keywords: [сколько компаний, сколько резидентов, участников, цифры, статистика, выручка, экспорт, how many, statistics, revenue, export, қанша компания, сандар, табыс]
     question:
-      ru: Где туалет?
-      kk: Дәретхана қайда?
-      en: Where is the restroom?
+      ru: Сколько компаний в Astana Hub?
+      kk: Astana Hub-та қанша компания бар?
+      en: How many companies are in Astana Hub?
     answer:
-      ru: Туалеты есть на каждом этаже рядом с лифтами.
-      kk: Дәретханалар әр қабатта лифтілердің жанында орналасқан.
-      en: Restrooms are on every floor next to the elevators.
+      ru: В Astana Hub больше 2500 компаний-участников. По итогам 2025 года они заработали больше 1,7 миллиарда долларов, а экспорт их IT-услуг превысил 600 миллионов долларов, услуги продавали в 111 стран.
+      kk: Astana Hub-та 2500-ден астам қатысушы компания бар. 2025 жылдың қорытындысы бойынша олардың табысы 1,7 миллиард доллардан асты, ал IT-қызметтер экспорты 600 миллион доллардан асты, қызметтер 111 елге сатылды.
+      en: Astana Hub has more than 2,500 member companies. In 2025 they earned over 1.7 billion dollars, and their IT exports exceeded 600 million dollars, with services sold to 111 countries.
 
-  - id: meeting_rooms
-    tags: [spaces]
-    keywords: [переговорн, забронировать, бронь, meeting room, book, booking, келіссөз, брондау]
+  - id: contacts
+    tags: [general, contacts]
+    keywords: [контакты, телефон, позвонить, номер, почта, email, связаться, contact, phone, call, байланыс, қоңырау, нөмір, пошта, хабарласу]
     question:
-      ru: Как забронировать переговорную?
-      kk: Келіссөз бөлмесін қалай брондауға болады?
-      en: How can I book a meeting room?
+      ru: Как связаться с Astana Hub?
+      kk: Astana Hub-пен қалай байланысуға болады?
+      en: How can I contact Astana Hub?
     answer:
-      ru: Переговорные бронируются на ресепшене или через администратора этажа. Резиденты хаба бронируют их бесплатно.
-      kk: Келіссөз бөлмелерін ресепшенде немесе қабат әкімшісі арқылы брондауға болады. Хаб резиденттері үшін тегін.
-      en: Meeting rooms can be booked at the reception or through the floor administrator. Booking is free for hub residents.
+      ru: Короткий номер Astana Hub — 1818, городской — +7 7172 73 50 89. Почта для общих вопросов — info@astanahub.com.
+      kk: Astana Hub қысқа нөмірі — 1818, қалалық нөмірі — +7 7172 73 50 89. Жалпы сұрақтарға арналған пошта — info@astanahub.com.
+      en: Astana Hub's short number is 1818, and the city number is +7 7172 73 50 89. The email for general questions is info@astanahub.com.
 
-  - id: residency
-    tags: [programs]
-    keywords: [резидент, резидентство, статус, льготы, resident, residency, резиденттік]
+  - id: social_media
+    tags: [general, contacts]
+    keywords: [соцсети, телеграм, инстаграм, сайт, новости, social media, telegram, instagram, website, news, әлеуметтік желі, сайт, жаңалықтар]
     question:
-      ru: Как стать резидентом Astana Hub?
-      kk: Astana Hub резиденті қалай болуға болады?
-      en: How do I become an Astana Hub resident?
+      ru: Где следить за новостями Astana Hub?
+      kk: Astana Hub жаңалықтарын қайдан білуге болады?
+      en: Where can I follow Astana Hub news?
     answer:
-      ru: Чтобы стать резидентом, нужно подать онлайн-заявку на сайте Astana Hub. Резиденты получают налоговые льготы и доступ к программам хаба.
-      kk: Резидент болу үшін Astana Hub сайтында онлайн-өтінім беру керек. Резиденттер салықтық жеңілдіктер мен хаб бағдарламаларына қол жеткізеді.
-      en: To become a resident, submit an online application on the Astana Hub website. Residents get tax benefits and access to hub programs.
+      ru: Сайт хаба — astanahub.com, на русском, казахском и английском. Официальный Telegram-канал — astana_hub, Instagram — astana.hub, есть также YouTube, LinkedIn, Facebook и TikTok.
+      kk: Хаб сайты — astanahub.com, қазақ, орыс және ағылшын тілдерінде. Ресми Telegram-арнасы — astana_hub, Instagram — astana.hub, сондай-ақ YouTube, LinkedIn, Facebook және TikTok парақшалары бар.
+      en: The hub's website is astanahub.com, in Kazakh, Russian and English. The official Telegram channel is astana_hub, Instagram is astana.hub, and the hub is also on YouTube, LinkedIn, Facebook and TikTok.
 
-  - id: accelerator
-    tags: [programs]
-    keywords: [акселерат, инкубат, программа, accelerator, incubator, program, акселерация, бағдарлама]
+  # ---------------------------------------------------------------- адрес и как добраться
+  - id: address
+    tags: [general, directions]
+    keywords: [адрес, где находится, как найти, address, located, where is, мекенжай, қайда орналасқан, павильон, блок, c4.6]
     question:
-      ru: Есть ли у вас акселерационные программы?
-      kk: Сіздерде акселерациялық бағдарламалар бар ма?
-      en: Do you have accelerator programs?
+      ru: Какой адрес у Astana Hub?
+      kk: Astana Hub мекенжайы қандай?
+      en: What is the address of Astana Hub?
     answer:
-      ru: Да, хаб регулярно проводит акселерационные программы для стартапов на разных стадиях. Расписание наборов можно узнать на ресепшене.
-      kk: Иә, хаб әр кезеңдегі стартаптарға арналған акселерациялық бағдарламаларды жүйелі түрде өткізеді. Қабылдау кестесін ресепшеннен білуге болады.
-      en: Yes, the hub regularly runs accelerator programs for startups at different stages. You can ask at the reception about upcoming intakes.
+      ru: Astana Hub находится в Астане, проспект Мангилик Ел, 55/8, павильон C4.6, на территории EXPO у шара Нур Алем. Всего у хаба три павильона — C4.6, C4.5 и C3.5.
+      kk: Astana Hub Астана қаласында, Мәңгілік Ел даңғылы, 55/8, C4.6 павильонында, EXPO аумағында Нұр Әлем шарының жанында орналасқан. Хабтың барлығы үш павильоны бар — C4.6, C4.5 және C3.5.
+      en: Astana Hub is at 55/8 Mangilik El Avenue, pavilion C4.6, on the EXPO grounds next to the Nur Alem sphere in Astana. The hub has three pavilions in total, C4.6, C4.5 and C3.5.
 
-  - id: events_registration
-    tags: [events]
-    keywords: [регистрац, хакатон, мероприят, ивент, event, hackathon, registration, тіркеу, іс-шара]
+  - id: transport_lrt
+    tags: [directions]
+    keywords: [как добраться, доехать, проехать, lrt, лрт, тарлан, tarlan, электричка, аэропорт, станция, how to get, train, airport, station, қалай жетуге, бекет, әуежай, пойыз]
     question:
-      ru: Где проходит регистрация на мероприятие?
-      kk: Іс-шараға тіркеу қай жерде өтеді?
-      en: Where is the event registration?
+      ru: Как доехать до Astana Hub?
+      kk: Astana Hub-қа қалай жетуге болады?
+      en: How do I get to Astana Hub?
     answer:
-      ru: Регистрация на мероприятия проходит у стойки ресепшена на первом этаже. Возьмите с собой удостоверение личности.
-      kk: Іс-шараларға тіркеу бірінші қабаттағы ресепшен үстелінде өтеді. Жеке куәлігіңізді алыңыз.
-      en: Event registration is at the reception desk on the first floor. Please bring your ID.
+      ru: Удобнее всего на LRT Tarlan Astana — выходите на станции «Университет», оттуда около километра, минут 12 пешком. Из аэропорта до этой станции можно доехать без пересадок, проезд стоит 200 тенге.
+      kk: Ең ыңғайлысы — Tarlan Astana LRT пойызы, «Университет» бекетінде түсіңіз, одан хабқа дейін шамамен бір шақырым, жаяу 12 минуттай. Әуежайдан бұл бекетке ауыспай жетуге болады, жол ақысы 200 теңге.
+      en: The easiest way is the Tarlan Astana LRT; get off at Universitet station, about one kilometer or a 12-minute walk from the hub. You can ride there from the airport without changing trains, and a trip costs 200 tenge.
+
+  - id: transport_bus
+    tags: [directions]
+    keywords: [автобус, остановка, маршрут, какой автобус, bus, bus stop, route, аялдама, бағыт, қай автобус]
+    question:
+      ru: Какие автобусы идут до Astana Hub?
+      kk: Astana Hub-қа қай автобустар барады?
+      en: Which buses go to Astana Hub?
+    answer:
+      ru: Ближайшая остановка — «Quantum Tech School», туда идёт автобус 18. Чуть дальше, у улицы Рыскулова, остановка «Перинатальный центр №1» — автобусы 7, 40, 42, 43, 47, 51, 53 и 84. Маршруты меняются, перед поездкой проверьте их в 2ГИС.
+      kk: Ең жақын аялдама — «Quantum Tech School», оған 18-автобус барады. Сәл әріректе, Рысқұлов көшесінде «№1 перинаталдық орталық» аялдамасы бар — 7, 40, 42, 43, 47, 51, 53 және 84-автобустар. Бағыттар өзгеріп тұрады, жолға шығар алдында 2ГИС-тен тексеріңіз.
+      en: The nearest stop is Quantum Tech School, served by bus 18. A bit farther, on Ryskulov Street, the Perinatal Center No. 1 stop is served by buses 7, 40, 42, 43, 47, 51, 53 and 84. Routes change, so check them in 2GIS before you go.
+
+  - id: taxi
+    tags: [directions]
+    keywords: [такси, яндекс такси, что сказать таксисту, вызвать такси, taxi, cab, yandex, uber, такси шақыру, жүргізуші]
+    question:
+      ru: Какой адрес назвать таксисту?
+      kk: Такси жүргізушісіне қандай мекенжай айту керек?
+      en: What address should I give the taxi driver?
+    answer:
+      ru: Назовите водителю — проспект Мангилик Ел, 55/8, Astana Hub, павильон C4.6, EXPO. Павильон стоит у подножия шара Нур Алем, со стороны улицы Рыскулова.
+      kk: Жүргізушіге былай айтыңыз — Мәңгілік Ел даңғылы, 55/8, Astana Hub, C4.6 павильоны, EXPO. Павильон Нұр Әлем шарының етегінде, Рысқұлов көшесі жағында орналасқан.
+      en: Tell the driver 55/8 Mangilik El Avenue, Astana Hub, pavilion C4.6, EXPO. The pavilion is at the foot of the Nur Alem sphere, on the Ryskulov Street side.
 
   - id: parking
-    tags: [infrastructure]
-    keywords: [парковк, машин, автомобиль, parking, car, park, көлік, тұрақ]
+    tags: [directions]
+    keywords: [парковка, паркинг, припарковаться, машина, автомобиль, оставить машину, parking, car, park, көлік, тұрақ, паркинг]
     question:
       ru: Где можно припарковаться?
       kk: Көлікті қай жерге қоюға болады?
       en: Where can I park?
     answer:
-      ru: Бесплатная парковка для гостей находится перед главным входом в павильон.
-      kk: Қонақтарға арналған тегін көлік тұрағы павильонның басты кіреберісінің алдында.
-      en: Free guest parking is in front of the main entrance of the pavilion.
+      ru: Рядом есть подземный паркинг EXPO примерно на 3000 мест, въезд с улицы Рыскулова. Он платный, тариф уточните на въезде. От парковки идите на север через центральный проход между павильонами.
+      kk: Жанында EXPO-ның шамамен 3000 орындық жерасты паркингі бар, кіреберісі Рысқұлов көшесінен. Ол ақылы, тарифін кіреберісте нақтылаңыз. Паркингтен павильондар арасындағы орталық өткел арқылы солтүстікке қарай жүріңіз.
+      en: There is an underground EXPO parking garage with about 3,000 spaces, entered from Ryskulov Street. It is paid, so check the rate at the entrance. From the garage, walk north through the central passage between the pavilions.
+
+  - id: neighbors
+    tags: [directions]
+    keywords: [что рядом, рядом, по соседству, мфца, aifc, astana it university, мега, hilton, конгресс-центр, nearby, around, neighbors, жанында, маңында, көрші]
+    question:
+      ru: Что находится рядом с Astana Hub?
+      kk: Astana Hub-тың жанында не бар?
+      en: What is near Astana Hub?
+    answer:
+      ru: Рядом на территории EXPO — шар Нур Алем с центром alem.ai, МФЦА, Astana IT University, Конгресс-центр и отель Hilton. К западу — торговый центр Mega Silk Way.
+      kk: EXPO аумағында жақын жерде — alem.ai орталығы бар Нұр Әлем шары, АХҚО, Astana IT University, Конгресс-орталық және Hilton қонақүйі. Батыс жағында — Mega Silk Way сауда орталығы.
+      en: Nearby on the EXPO grounds are the Nur Alem sphere with the alem.ai center, the AIFC, Astana IT University, the Congress Center and the Hilton hotel. To the west is the Mega Silk Way mall.
+
+  # ---------------------------------------------------------------- часы работы, вход, правила
+  - id: hours
+    tags: [general, hours]
+    keywords: [часы, график, работает, открыт, время работы, режим, до скольки, выходные, hours, open, schedule, weekend, жұмыс уақыты, кесте, ашық, демалыс]
+    question:
+      ru: Во сколько работает хаб?
+      kk: Хаб қашан жұмыс істейді?
+      en: What are the opening hours?
+    answer:
+      ru: Администрация Astana Hub работает по будням с 9:00 до 18:30. Участники программ и арендаторы могут заходить в здание круглосуточно, включая выходные и праздники.
+      kk: Astana Hub әкімшілігі жұмыс күндері 9:00-ден 18:30-ға дейін жұмыс істейді. Бағдарлама қатысушылары мен жалға алушылар ғимаратқа демалыс және мереке күндерін қоса алғанда тәулік бойы кіре алады.
+      en: The Astana Hub administration works on weekdays from 9:00 to 18:30. Program participants and tenants can enter the building around the clock, including weekends and holidays.
+
+  - id: guest_access
+    tags: [access]
+    keywords: [пропуск, гость, войти, пройти, вход, регистрация гостя, пустят ли, guest, pass, entry, access, visit, кіру, қонақ, рұқсат, тіркелу]
+    question:
+      ru: Как пройти в Astana Hub гостю?
+      kk: Қонақ Astana Hub-қа қалай кіреді?
+      en: How can a guest get into Astana Hub?
+    answer:
+      ru: Гость заполняет регистрационную форму на ресепшене, после этого резидент встречает его у стойки и сам проводит в павильон. Участники программ проходят по Face ID.
+      kk: Қонақ ресепшенде тіркеу нысанын толтырады, содан кейін резидент оны үстел жанынан қарсы алып, павильонға өзі алып кіреді. Бағдарлама қатысушылары Face ID арқылы кіреді.
+      en: A guest fills in a registration form at the reception, and then the resident meets them at the desk and accompanies them into the pavilion. Program participants enter with Face ID.
+
+  - id: face_id
+    tags: [access, residents]
+    keywords: [face id, фейс айди, биометрия, доступ в здание, пропуск сотрудника, access card, biometrics, рұқсат, биометрия, кіру рұқсаты]
+    question:
+      ru: Как получить Face ID для входа?
+      kk: Кіру үшін Face ID-ді қалай алуға болады?
+      en: How do I get Face ID access?
+    answer:
+      ru: Face ID оформляют участникам программ Astana Hub по заявке на сайте astanahub.com, в разделе «Инфраструктура». Администрация подтверждает доступ по будням с 9:00 до 18:30, в выходные и праздники не оформляет.
+      kk: Face ID Astana Hub бағдарламаларының қатысушыларына astanahub.com сайтындағы «Инфрақұрылым» бөліміндегі өтінім бойынша рәсімделеді. Әкімшілік рұқсатты жұмыс күндері 9:00-ден 18:30-ға дейін береді, демалыс және мереке күндері рәсімдемейді.
+      en: Face ID is set up for Astana Hub program participants through a request on astanahub.com, in the Infrastructure section. The administration approves access on weekdays from 9:00 to 18:30, not on weekends or holidays.
+
+  - id: rules
+    tags: [access]
+    keywords: [правила, можно ли, запрещено, животные, собака, самокат, велосипед, курить, курилка, алкоголь, rules, allowed, pets, dog, scooter, bike, smoking, ереже, болады ма, тыйым, жануар, темекі]
+    question:
+      ru: Какие правила поведения в Astana Hub?
+      kk: Astana Hub-та қандай тәртіп ережелері бар?
+      en: What are the rules at Astana Hub?
+    answer:
+      ru: С животными нельзя, кроме собак-поводырей. Велосипеды и самокаты внутрь не проносят, алкоголь запрещён, курить можно только в отведённых местах. Есть можно в специально отведённых зонах, а музыку слушать — в наушниках.
+      kk: Жануарлармен кіруге болмайды, бағыттаушы иттерден басқа. Велосипед пен самокатты ішке кіргізбейді, алкогольге тыйым салынған, темекіні тек арнайы бөлінген жерлерде шегуге болады. Тамақты арнайы бөлінген аймақтарда ішуге болады, ал музыканы құлаққаппен тыңдаңыз.
+      en: Pets are not allowed, except guide dogs. Bikes and scooters stay outside, alcohol is prohibited, and smoking is allowed only in designated areas. You can eat in designated areas, and please use headphones for music.
+
+  - id: photo_video
+    tags: [access]
+    keywords: [фото, фотографировать, снимать, съёмка, видео, photo, video, filming, camera, суретке түсіру, бейне, түсірілім]
+    question:
+      ru: Можно ли здесь фотографировать?
+      kk: Мұнда суретке түсіруге бола ма?
+      en: Can I take photos here?
+    answer:
+      ru: Снимать на телефон можно. Профессиональную фото- и видеосъёмку нужно заранее согласовать с администрацией хаба.
+      kk: Телефонға түсіруге болады. Кәсіби фото және бейне түсірілімді хаб әкімшілігімен алдын ала келісу керек.
+      en: Taking photos on your phone is fine. Professional photo or video shoots must be agreed with the hub administration in advance.
+
+  - id: excursion
+    tags: [access, visit]
+    keywords: [экскурсия, тур, посмотреть хаб, группа, школьники, делегация, 3d тур, excursion, tour, visit, group, саяхат, топ, оқушылар]
+    question:
+      ru: Можно ли прийти на экскурсию?
+      kk: Экскурсияға келуге бола ма?
+      en: Can I come for a tour?
+    answer:
+      ru: Об экскурсии по Astana Hub спросите на ресепшене или по номеру 1818. Заранее посмотреть павильон C4.6 можно в 3D-туре на сайте astanahub.com, в разделе «Инфраструктура».
+      kk: Astana Hub-қа экскурсия туралы ресепшеннен немесе 1818 нөмірі арқылы сұраңыз. C4.6 павильонын astanahub.com сайтындағы «Инфрақұрылым» бөлімінде 3D-тур арқылы алдын ала көруге болады.
+      en: For a tour of Astana Hub, please ask at the reception or call 1818. You can preview pavilion C4.6 in the 3D tour on astanahub.com, in the Infrastructure section.
+
+  - id: wifi
+    tags: [infrastructure]
+    keywords: [wifi, wi-fi, вайфай, интернет, пароль, сеть, internet, password, құпиясөз, желі]
+    question:
+      ru: Какой пароль от Wi-Fi?
+      kk: Wi-Fi құпиясөзі қандай?
+      en: What is the Wi-Fi password?
+    answer:
+      ru: Как подключиться к Wi-Fi, подскажут на ресепшене. Участникам Hub Space интернет входит в пакет рабочего места.
+      kk: Wi-Fi желісіне қалай қосылуға болатынын ресепшенде айтып береді. Hub Space қатысушыларына интернет жұмыс орны пакетіне кіреді.
+      en: The reception staff will tell you how to connect to the Wi-Fi. For Hub Space members, internet access is included in the workspace package.
+
+  - id: toilet
+    tags: [infrastructure]
+    keywords: [туалет, уборная, санузел, toilet, restroom, bathroom, wc, дәретхана, әжетхана]
+    question:
+      ru: Где туалет?
+      kk: Дәретхана қайда?
+      en: Where is the restroom?
+    answer:
+      ru: Туалеты есть на каждом этаже павильона. Я могу проводить вас до ближайшего.
+      kk: Дәретханалар павильонның әр қабатында бар. Мен сізді ең жақынына дейін апарып сала аламын.
+      en: There are restrooms on every floor of the pavilion. I can take you to the nearest one.
+
+  - id: accessibility
+    tags: [infrastructure]
+    keywords: [инвалид, инвалидность, коляска, пандус, лифт, доступная среда, маломобильный, wheelchair, accessible, disability, elevator, мүгедек, мүмкіндігі шектеулі, арбаша, пандус, лифт]
+    question:
+      ru: Доступен ли хаб для людей на коляске?
+      kk: Хаб арбашадағы адамдарға қолжетімді ме?
+      en: Is the hub wheelchair accessible?
+    answer:
+      ru: Вход в павильон отмечен как доступный для людей с инвалидностью, между этажами можно подняться на лифте. Если нужна помощь, обратитесь на ресепшен.
+      kk: Павильонға кіреберіс мүмкіндігі шектеулі жандарға қолжетімді деп белгіленген, қабаттар арасында лифтпен көтерілуге болады. Көмек керек болса, ресепшенге хабарласыңыз.
+      en: The pavilion entrance is listed as accessible for people with disabilities, and there is an elevator between floors. If you need help, please ask at the reception.
 
   - id: lost_found
     tags: [infrastructure]
-    keywords: [потерял, забыл, находк, lost, found, forgot, жоғалт, ұмыт]
+    keywords: [потерял, забыл, находка, нашёл вещь, бюро находок, lost, found, forgot, lost and found, жоғалттым, ұмытып кеттім, тауып алдым]
     question:
       ru: Я потерял вещь, куда обратиться?
       kk: Мен затымды жоғалттым, қайда хабарласуға болады?
       en: I lost something, where should I go?
     answer:
-      ru: Потерянные вещи хранятся на ресепшене на первом этаже. Обратитесь к администратору.
-      kk: Жоғалған заттар бірінші қабаттағы ресепшенде сақталады. Әкімшіге хабарласыңыз.
-      en: Lost items are kept at the reception on the first floor. Please ask the administrator.
+      ru: Если вы что-то потеряли или нашли, обратитесь на ресепшен или позвоните по номеру 1818.
+      kk: Бір нәрсе жоғалтсаңыз немесе тауып алсаңыз, ресепшенге хабарласыңыз немесе 1818 нөміріне қоңырау шалыңыз.
+      en: If you lost or found something, please go to the reception or call 1818.
+
+  - id: helpdesk
+    tags: [residents]
+    keywords: [уборка, клининг, кондиционер, жарко, холодно, климат, поломка, сломалось, заявка в техподдержку, helpdesk, cleaning, air conditioning, repair, broken, тазалау, кондиционер, ыстық, суық, бұзылды]
+    question:
+      ru: Куда обращаться, если в офисе нужна уборка или жарко?
+      kk: Кеңседе тазалау керек болса немесе ыстық болса, қайда хабарласу керек?
+      en: Who do I contact if the office needs cleaning or is too hot?
+    answer:
+      ru: Для резидентов есть Telegram-бот Hub Service — AstanaHub_HelpDesk_bot. Через него заказывают уборку, настройку климата, вызывают мобильную группу и оставляют отзывы.
+      kk: Резиденттерге арналған Hub Service Telegram-боты бар — AstanaHub_HelpDesk_bot. Ол арқылы тазалауға, климатты реттеуге өтінім беріп, мобильді топты шақырып, пікір қалдыруға болады.
+      en: Residents can use the Hub Service Telegram bot, AstanaHub_HelpDesk_bot, to request cleaning or climate control, call the mobile team and leave feedback.
+
+  - id: material_pass
+    tags: [residents]
+    keywords: [вынести технику, внести, оборудование, мебель, материальный пропуск, equipment, furniture, move in, material pass, жабдық, жиһаз, техника, материалдық рұқсатнама]
+    question:
+      ru: Как внести или вынести технику из здания?
+      kk: Ғимаратқа техниканы қалай кіргізіп не шығаруға болады?
+      en: How do I bring equipment in or out of the building?
+    answer:
+      ru: Чтобы внести или вынести технику или мебель, нужен материальный пропуск. Заявку подают на astanahub.com с ЭЦП, администрация подписывает её по будням с 9:00 до 18:30.
+      kk: Техниканы немесе жиһазды кіргізу не шығару үшін материалдық рұқсатнама қажет. Өтінім astanahub.com сайтында ЭЦҚ арқылы беріледі, әкімшілік оған жұмыс күндері 9:00-ден 18:30-ға дейін қол қояды.
+      en: To bring equipment or furniture in or out, you need a material pass. Request it on astanahub.com with a digital signature; the administration signs it on weekdays from 9:00 to 18:30.
+
+  # ---------------------------------------------------------------- здание и пространства
+  - id: building
+    tags: [spaces]
+    keywords: [павильоны, здание, сколько этажей, площадь, инфраструктура, building, pavilions, floors, infrastructure, ғимарат, павильондар, қабат, инфрақұрылым]
+    question:
+      ru: Сколько павильонов и этажей в Astana Hub?
+      kk: Astana Hub-та қанша павильон мен қабат бар?
+      en: How many pavilions and floors does Astana Hub have?
+    answer:
+      ru: Инфраструктура Astana Hub — это три павильона на территории EXPO, C3.5, C4.5 и C4.6, до четырёх этажей и больше 22 тысяч квадратных метров. Там коворкинги, офисы, переговорные, лекционные залы и площадки для мероприятий.
+      kk: Astana Hub инфрақұрылымы — EXPO аумағындағы үш павильон, C3.5, C4.5 және C4.6, төрт қабатқа дейін және 22 мың шаршы метрден астам. Онда коворкингтер, кеңселер, келіссөз бөлмелері, дәріс залдары және іс-шара алаңдары бар.
+      en: Astana Hub occupies three pavilions on the EXPO grounds, C3.5, C4.5 and C4.6, with up to four floors and more than 22,000 square meters. They house coworking areas, offices, meeting rooms, lecture halls and event spaces.
+
+  - id: c46_floors
+    tags: [spaces, directions]
+    keywords: [что на этаже, этаж, второй этаж, третий этаж, план здания, схема, floor, floor plan, map, layout, қабат, жоспар, сызба, екінші қабат, үшінші қабат]
+    question:
+      ru: Что находится на этажах павильона C4.6?
+      kk: C4.6 павильонының қабаттарында не бар?
+      en: What is on each floor of pavilion C4.6?
+    answer:
+      ru: В павильоне C4.6 на первом этаже находятся Event Hall, Lecture Hall и место TikTok Space, на втором этаже девять переговорных, на третьем этаже GameDev Center.
+      kk: C4.6 павильонының бірінші қабатында Event Hall, Lecture Hall және TikTok Space орны, екінші қабатында тоғыз келіссөз бөлмесі, үшінші қабатында GameDev Center орналасқан.
+      en: In pavilion C4.6, the first floor has the Event Hall, the Lecture Hall and the TikTok Space area, the second floor has nine meeting rooms, and the third floor has the GameDev Center.
+
+  - id: coworking
+    tags: [spaces]
+    keywords: [коворкинг, рабочее место, поработать, open space, ноутбук, coworking, workspace, desk, hub space, laptop, жұмыс орны, коворкинг, ноутбук]
+    question:
+      ru: Где можно поработать с ноутбуком?
+      kk: Ноутбукпен қай жерде жұмыс істеуге болады?
+      en: Where can I work with my laptop?
+    answer:
+      ru: Рабочие места в коворкинге и офисы Astana Hub дают по программе Hub Space. Она для IT-компаний, от трёх рабочих мест, заявку подают на astanahub.com. Можно ли поработать разово частному лицу, уточните на ресепшене или по номеру 1818.
+      kk: Astana Hub коворкингіндегі жұмыс орындары мен кеңселер Hub Space бағдарламасы арқылы беріледі. Ол IT-компанияларға арналған, кемінде үш жұмыс орнынан басталады, өтінім astanahub.com сайтында беріледі. Жеке адамның бір реттік жұмыс істеу мүмкіндігін ресепшеннен немесе 1818 нөмірі арқылы нақтылаңыз.
+      en: Coworking desks and offices at Astana Hub are provided through the Hub Space program. It is for IT companies, starting from three desks, and you apply on astanahub.com. For a one-time visit as an individual, check with the reception or call 1818.
+
+  - id: coworking_price
+    tags: [spaces]
+    keywords: [цена коворкинга, стоимость места, тариф hub space, аренда офиса, сколько стоит место, coworking price, desk price, office rent, коворкинг бағасы, орын бағасы, кеңсе жалдау]
+    question:
+      ru: Сколько стоит место в коворкинге?
+      kk: Коворкингтегі орын қанша тұрады?
+      en: How much does a coworking desk cost?
+    answer:
+      ru: По программе Hub Space одно рабочее место стоит 90 тысяч тенге в месяц для участников Astana Hub и 110 тысяч для остальных компаний. Участникам, которые берут больше 50 мест, — 80 тысяч. Договор заключают максимум на 6 месяцев.
+      kk: Hub Space бағдарламасы бойынша бір жұмыс орны Astana Hub қатысушылары үшін айына 90 мың теңге, басқа компаниялар үшін 110 мың теңге тұрады. 50-ден көп орын алатын қатысушыларға — 80 мың теңге. Шарт ең көбі 6 айға жасалады.
+      en: In the Hub Space program, one desk costs 90,000 tenge a month for Astana Hub participants and 110,000 tenge for other companies. Participants taking more than 50 desks pay 80,000 tenge. Contracts are signed for up to 6 months.
+
+  - id: coworking_included
+    tags: [spaces]
+    keywords: [что входит, включено, условия коворкинга, круглосуточно, 24/7, included, what is included, amenities, не кіреді, жағдайлар, тәулік бойы]
+    question:
+      ru: Что входит в рабочее место Hub Space?
+      kk: Hub Space жұмыс орнына не кіреді?
+      en: What does a Hub Space desk include?
+    answer:
+      ru: В пакет входят круглосуточный доступ в здание, мебель, интернет, ежедневная уборка и климат-контроль. А также до трёх часов переговорных в сутки, мероприятия в павильонах и комьюнити.
+      kk: Пакетке ғимаратқа тәулік бойы кіру, жиһаз, интернет, күнделікті тазалау және климат-бақылау кіреді. Сондай-ақ тәулігіне үш сағатқа дейін келіссөз бөлмелері, павильондардағы іс-шаралар және қауымдастық.
+      en: The package includes 24/7 building access, furniture, internet, daily cleaning and climate control. It also includes up to three hours of meeting rooms a day, events in the pavilions and the community.
+
+  - id: coworking_apply
+    tags: [spaces]
+    keywords: [как получить место, заявка hub space, как арендовать, оформить коворкинг, apply, application, how to rent, өтінім, қалай алуға болады]
+    question:
+      ru: Как попасть в Hub Space?
+      kk: Hub Space-ке қалай қатысуға болады?
+      en: How do I join Hub Space?
+    answer:
+      ru: Подайте заявку на astanahub.com, её рассматривают до двух рабочих дней. Затем интервью с менеджером, защита проекта в Zoom и решение комиссии за 10 дней, после этого подбирают место и подписывают договор.
+      kk: astanahub.com сайтында өтінім беріңіз, ол екі жұмыс күніне дейін қаралады. Содан кейін менеджермен сұхбат, Zoom арқылы жобаны қорғау және 10 күн ішінде комиссия шешімі болады, сосын орын таңдап, шарт жасалады.
+      en: Apply on astanahub.com; the review takes up to two working days. Then there is an interview with a manager, a project pitch on Zoom and a committee decision within 10 days, after which they pick your space and sign the contract.
+
+  - id: coworking_free
+    tags: [spaces]
+    keywords: [бесплатный коворкинг, бесплатно поработать, social coins, hub market, free coworking, free desk, тегін коворкинг, тегін жұмыс орны]
+    question:
+      ru: Есть ли бесплатный коворкинг?
+      kk: Тегін коворкинг бар ма?
+      en: Is there free coworking?
+    answer:
+      ru: Бесплатные места в коворкинге обычно дают участникам программ Astana Hub на время программы, например акселератора Silkway. Ещё участники могут обменять внутренние баллы Social Coins на день или месяц в коворкинге через Hub Market.
+      kk: Тегін коворкинг орындары әдетте Astana Hub бағдарламаларының қатысушыларына бағдарлама кезінде беріледі, мысалы Silkway акселераторында. Сондай-ақ қатысушылар Hub Market арқылы ішкі Social Coins ұпайларын коворкингтегі бір күнге немесе айға айырбастай алады.
+      en: Free coworking desks are usually given to participants of Astana Hub programs for the duration of the program, for example the Silkway accelerator. Participants can also exchange internal Social Coins points for a day or a month of coworking on Hub Market.
+
+  - id: meeting_rooms
+    tags: [spaces]
+    keywords: [переговорная, переговорные, забронировать, бронь, комната для встреч, meeting room, book, booking, келіссөз бөлмесі, брондау]
+    question:
+      ru: Как забронировать переговорную?
+      kk: Келіссөз бөлмесін қалай брондауға болады?
+      en: How can I book a meeting room?
+    answer:
+      ru: Переговорные Astana Hub есть в павильонах C4.6 и C3.5 и в центре alem.ai, в павильоне C4.6 их девять, все на втором этаже. Их бронируют онлайн на astanahub.com участники программ и арендаторы, не больше трёх часов в день.
+      kk: Astana Hub келіссөз бөлмелері C4.6 және C3.5 павильондарында және alem.ai орталығында бар, C4.6 павильонында тоғыз бөлме, бәрі екінші қабатта. Оларды бағдарлама қатысушылары мен жалға алушылар astanahub.com сайтында онлайн брондайды, күніне үш сағаттан аспайды.
+      en: Astana Hub has meeting rooms in pavilions C4.6 and C3.5 and at alem.ai; pavilion C4.6 has nine of them, all on the second floor. Program participants and tenants book them online on astanahub.com, for up to three hours a day.
+
+  - id: event_halls
+    tags: [spaces, events]
+    keywords: [зал, залы, ивент холл, event hall, лекторий, lecture hall, media hall, медиа холл, вместимость, сколько человек, hall, capacity, сыйымдылық, қанша адам]
+    question:
+      ru: Какие залы есть для мероприятий?
+      kk: Іс-шараларға қандай залдар бар?
+      en: What halls are there for events?
+    answer:
+      ru: В павильоне C4.6 на первом этаже Event Hall примерно на 120 человек и Lecture Hall на 30, ещё в этом павильоне есть Media Hall. В павильоне C3.5 есть несколько залов и аудиторий.
+      kk: C4.6 павильонының бірінші қабатында шамамен 120 адамға арналған Event Hall және 30 адамдық Lecture Hall бар, бұл павильонда Media Hall да бар. C3.5 павильонында бірнеше зал мен аудитория бар.
+      en: Pavilion C4.6 has the Event Hall for about 120 people and the Lecture Hall for 30 on the first floor, and it also has the Media Hall. Pavilion C3.5 has several halls and classrooms.
+
+  - id: event_rent
+    tags: [spaces, events]
+    keywords: [арендовать зал, провести мероприятие, аренда зала, площадка, event office, rent a hall, host an event, venue, зал жалға алу, іс-шара өткізу]
+    question:
+      ru: Как провести своё мероприятие в Astana Hub?
+      kk: Astana Hub-та өз іс-шарамды қалай өткізуге болады?
+      en: How can I host my event at Astana Hub?
+    answer:
+      ru: Заявку на проведение IT-мероприятия подают на сайте astanahub.com через Event Office. Условия и стоимость аренды залов можно узнать в Event Office или по номеру 1818.
+      kk: IT-іс-шара өткізуге өтінім astanahub.com сайтында Event Office арқылы беріледі. Залдарды жалға алу шарттары мен бағасын Event Office-тен немесе 1818 нөмірі арқылы білуге болады.
+      en: To host an IT event, apply on astanahub.com through the Event Office. You can find out the hall rental terms and prices from the Event Office or by calling 1818.
+
+  - id: gamedev_center
+    tags: [spaces, education]
+    keywords: [геймдев, игры, разработка игр, unreal, 3d, gamedev, game development, game center, ойын, ойын әзірлеу]
+    question:
+      ru: Что такое GameDev Center?
+      kk: GameDev Center деген не?
+      en: What is the GameDev Center?
+    answer:
+      ru: GameDev Center находится на третьем этаже павильона C4.6. Там проходят бесплатные воркшопы по 3D-моделированию, Unreal Engine и разработке игр, регистрация по анонсам Astana Hub.
+      kk: GameDev Center C4.6 павильонының үшінші қабатында орналасқан. Онда 3D-модельдеу, Unreal Engine және ойын әзірлеу бойынша тегін воркшоптар өтеді, тіркелу Astana Hub хабарландырулары арқылы.
+      en: The GameDev Center is on the third floor of pavilion C4.6. It hosts free workshops on 3D modeling, Unreal Engine and game development; register through Astana Hub announcements.
+
+  - id: tiktok_space
+    tags: [spaces]
+    keywords: [тикток, тик ток, tiktok, tiktok space, студия, съёмка видео, контент, studio, тикток кеңістігі]
+    question:
+      ru: Что такое TikTok-пространство?
+      kk: TikTok кеңістігі деген не?
+      en: What is the TikTok space?
+    answer:
+      ru: TikTok Space — первое в Казахстане официальное пространство TikTok, оно появилось в Astana Hub в 2022 году. Здесь снимали видео стартапы и проходили мастер-классы по продвижению в TikTok. Как им воспользоваться сейчас, уточните на ресепшене.
+      kk: TikTok Space — Қазақстандағы алғашқы ресми TikTok кеңістігі, ол Astana Hub-та 2022 жылы пайда болды. Мұнда стартаптар бейне түсіріп, TikTok-та жылжыту бойынша шеберлік сабақтары өтті. Қазір оны қалай пайдалануға болатынын ресепшеннен нақтылаңыз.
+      en: TikTok Space is the first official TikTok space in Kazakhstan; it opened at Astana Hub in 2022. Startups shot videos here and held master classes on TikTok promotion. Please check with the reception how to use it now.
+
+  - id: cafe
+    tags: [food]
+    keywords: [кафе, кофе, кофейня, поесть, еда, столовая, обед, global coffee, cafe, coffee, food, lunch, асхана, тамақ, кофе ішу]
+    question:
+      ru: Где здесь можно поесть?
+      kk: Мұнда қай жерде тамақтануға болады?
+      en: Where can I get something to eat?
+    answer:
+      ru: В павильоне C4.6 есть кофейня Global coffee, она открывается в 8:30. Рядом, к западу от EXPO, торговый центр Mega Silk Way с фудкортом. Могу показать дорогу до кафе.
+      kk: C4.6 павильонында Global coffee кофеханасы бар, ол 8:30-да ашылады. Жақын жерде, EXPO-ның батыс жағында, фудкорты бар Mega Silk Way сауда орталығы орналасқан. Кафеге дейін жол көрсете аламын.
+      en: Pavilion C4.6 has the Global coffee café, which opens at 8:30. Nearby, west of EXPO, the Mega Silk Way mall has a food court. I can show you the way to the café.
+
+  # ---------------------------------------------------------------- alem.ai и обучение
+  - id: alem_ai
+    tags: [neighbors, education]
+    keywords: [шар, сфера, нур алем, alem ai, алем, центр ии, искусственный интеллект, sphere, nur alem, ai center, нұр әлем, жасанды интеллект]
+    question:
+      ru: Что находится в шаре Нур Алем?
+      kk: Нұр Әлем шарында не бар?
+      en: What is inside the Nur Alem sphere?
+    answer:
+      ru: В шаре Нур Алем теперь работает alem.ai — международный центр искусственного интеллекта. Там TUMO Astana для подростков, школа Tomorrow School, Qazaq AI Research University, ИИ-кампус для стартапов и лаборатории.
+      kk: Нұр Әлем шарында қазір alem.ai — халықаралық жасанды интеллект орталығы жұмыс істейді. Онда жасөспірімдерге арналған TUMO Astana, Tomorrow School мектебі, Qazaq AI Research University, стартаптарға арналған ЖИ-кампус және зертханалар бар.
+      en: The Nur Alem sphere now houses alem.ai, an international artificial intelligence center. It hosts TUMO Astana for teenagers, Tomorrow School, Qazaq AI Research University, an AI campus for startups and labs.
+
+  - id: tumo
+    tags: [education]
+    keywords: [tumo, тумо, для детей, подростки, школьники, кружок, программирование для детей, teens, kids, children, school students, жасөспірім, балалар, оқушылар, үйірме]
+    question:
+      ru: Есть ли программы для школьников?
+      kk: Оқушыларға арналған бағдарламалар бар ма?
+      en: Are there programs for school students?
+    answer:
+      ru: Для подростков от 12 до 18 лет есть бесплатный центр креативных технологий TUMO Astana в здании alem.ai. Там учат программированию, геймдеву, робототехнике, дизайну, музыке и кино, записаться можно на astana.tumo.kz.
+      kk: 12 мен 18 жас аралығындағы жасөспірімдерге alem.ai ғимаратында тегін TUMO Astana шығармашылық технологиялар орталығы бар. Онда бағдарламалау, геймдев, робототехника, дизайн, музыка және кино үйретеді, astana.tumo.kz сайтында жазылуға болады.
+      en: Teenagers aged 12 to 18 can join TUMO Astana, a free creative technology center in the alem.ai building. It teaches programming, game development, robotics, design, music and film; sign up at astana.tumo.kz.
+
+  - id: tomorrow_school
+    tags: [education]
+    keywords: [tomorrow school, тумороу скул, школа ии, бесплатное обучение ии, peer to peer, учиться ии, ai school, learn ai, жи мектебі, жасанды интеллект оқу]
+    question:
+      ru: Где бесплатно научиться искусственному интеллекту?
+      kk: Жасанды интеллектіні қай жерде тегін үйренуге болады?
+      en: Where can I study artificial intelligence for free?
+    answer:
+      ru: Tomorrow School — первая в Казахстане бесплатная peer-to-peer школа искусственного интеллекта, она находится в alem.ai и принимает с 18 лет. Отбор идёт через интенсив «бассейн», подробности на tomorrow-school.ai.
+      kk: Tomorrow School — Қазақстандағы алғашқы тегін peer-to-peer жасанды интеллект мектебі, ол alem.ai-да орналасқан және 18 жастан қабылдайды. Іріктеу «бассейн» деп аталатын интенсив арқылы өтеді, толығырақ tomorrow-school.ai сайтында.
+      en: Tomorrow School is Kazakhstan's first free peer-to-peer artificial intelligence school, located at alem.ai and open to people 18 and older. Selection goes through an intensive called the pool; details are at tomorrow-school.ai.
+
+  - id: tech_orda
+    tags: [education, programs]
+    keywords: [tech orda, тех орда, обучение it, грант на обучение, it курсы, научиться программировать, бесплатное обучение, it education, coding course, it оқу, курс, бағдарламалауды үйрену]
+    question:
+      ru: Что такое Tech Orda?
+      kk: Tech Orda деген не?
+      en: What is Tech Orda?
+    answer:
+      ru: Tech Orda — программа, по которой государство оплачивает обучение IT-профессии в частных IT-школах, до 500 тысяч тенге за очный курс. Участвовать могут граждане Казахстана от 18 до 45 лет, опыт в IT не нужен. Набор 2026 года закрылся 7 сентября.
+      kk: Tech Orda — мемлекет жеке IT-мектептердегі IT-мамандыққа оқуды төлейтін бағдарлама, күндізгі курс үшін 500 мың теңгеге дейін. Оған 18 бен 45 жас аралығындағы Қазақстан азаматтары қатыса алады, IT тәжірибесі қажет емес. 2026 жылғы қабылдау 7 қыркүйекте жабылды.
+      en: Tech Orda is a program in which the state pays for IT training at private IT schools, up to 500,000 tenge for an in-person course. Citizens of Kazakhstan aged 18 to 45 can apply, no IT experience needed. The 2026 intake closed on September 7.
+
+  - id: free_courses
+    tags: [education]
+    keywords: [бесплатные курсы, онлайн курсы, учиться онлайн, курсы ии, python, chatgpt, no code, low code, free courses, online courses, тегін курстар, онлайн оқу]
+    question:
+      ru: Есть ли бесплатные онлайн-курсы?
+      kk: Тегін онлайн-курстар бар ма?
+      en: Are there free online courses?
+    answer:
+      ru: Да, на astanahub.com открыты бесплатные онлайн-курсы — QazCoders, «Основы ИИ — ChatGPT» от Skillbox, «Основы анализа данных и Python» с Яндекс Практикумом, а также No Code, Low Code и Freelance School.
+      kk: Иә, astanahub.com сайтында тегін онлайн-курстар ашық — QazCoders, Skillbox-тың «ЖИ негіздері — ChatGPT» курсы, Яндекс Практикуммен бірге «Деректерді талдау және Python негіздері», сондай-ақ No Code, Low Code және Freelance School.
+      en: Yes, astanahub.com offers free online courses, including QazCoders, AI Basics with ChatGPT by Skillbox, Data Analysis and Python Basics with Yandex Practicum, plus No Code, Low Code and Freelance School.
+
+  # ---------------------------------------------------------------- участие (резидентство)
+  - id: residency
+    tags: [programs, residents]
+    keywords: [резидент, резидентство, участник, стать участником, вступить, заявка, resident, residency, become a member, join, apply, резидент болу, қатысушы, өтінім]
+    question:
+      ru: Как стать резидентом Astana Hub?
+      kk: Astana Hub резиденті қалай болуға болады?
+      en: How do I become an Astana Hub resident?
+    answer:
+      ru: Нужно открыть личный кабинет на astanahub.com и подать онлайн-заявку с бизнес-планом и справкой об отсутствии налоговой задолженности. Подать могут IT-компании, юрлица, у которых не меньше девяноста процентов дохода от приоритетных видов IT-деятельности. Подача бесплатная.
+      kk: astanahub.com сайтында жеке кабинет ашып, бизнес-жоспар мен салық берешегінің жоқтығы туралы анықтама қоса онлайн-өтінім беру керек. Өтінімді табысының кемінде тоқсан пайызы басым IT-қызмет түрлерінен түсетін IT-компаниялар, яғни заңды тұлғалар бере алады. Өтінім беру тегін.
+      en: Create an account on astanahub.com and submit an online application with a business plan and a certificate of no tax debt. IT companies registered as legal entities, with at least 90 percent of income from priority IT activities, can apply. Applying is free.
+
+  - id: residency_timeline
+    tags: [programs, residents]
+    keywords: [сколько рассматривают, срок рассмотрения, комиссия, когда ответят, свидетельство, review time, how long, decision, certificate, мерзім, қанша уақыт, комиссия, куәлік]
+    question:
+      ru: Сколько рассматривают заявку на участие?
+      kk: Қатысуға өтінім қанша уақыт қаралады?
+      en: How long does the application review take?
+    answer:
+      ru: Сначала фонд проверяет заявку до 15 рабочих дней, затем решение принимает комиссия по отбору участников. После подписания договора электронное свидетельство участника выдают за три рабочих дня.
+      kk: Алдымен қор өтінімді 15 жұмыс күніне дейін тексереді, содан кейін шешімді қатысушыларды іріктеу комиссиясы қабылдайды. Шартқа қол қойылғаннан кейін қатысушының электрондық куәлігі үш жұмыс күні ішінде беріледі.
+      en: First the fund checks the application for up to 15 working days, then the participant selection committee decides. After the contract is signed, the electronic participant certificate is issued within three working days.
+
+  - id: residency_benefits
+    tags: [programs, residents]
+    keywords: [льготы, налоги, налоговые льготы, кпн, ндс, ипн, соцналог, преимущества, зачем вступать, benefits, tax, taxes, vat, incentives, жеңілдік, салық, артықшылық]
+    question:
+      ru: Какие льготы у участников Astana Hub?
+      kk: Astana Hub қатысушыларына қандай жеңілдіктер бар?
+      en: What benefits do Astana Hub participants get?
+    answer:
+      ru: Участники освобождаются от корпоративного подоходного налога и НДС, а с зарплат сотрудников не удерживается ИПН. Соцналог за иностранных сотрудников не платится. Льготы действуют до 1 января 2029 года.
+      kk: Қатысушылар корпоративтік табыс салығы мен ҚҚС-тан босатылады, ал қызметкерлердің жалақысынан ЖТС ұсталмайды. Шетелдік қызметкерлер үшін әлеуметтік салық төленбейді. Жеңілдіктер 2029 жылғы 1 қаңтарға дейін қолданылады.
+      en: Participants are exempt from corporate income tax and VAT, and no personal income tax is withheld from employee salaries. Social tax is not paid for foreign employees. These benefits apply until January 1, 2029.
+
+  - id: residency_duties
+    tags: [programs, residents]
+    keywords: [членский взнос, обязанности, отчёт, сколько платить, взнос, обязательства, membership fee, obligations, report, мүшелік жарна, міндет, есеп]
+    question:
+      ru: Что должен делать участник Astana Hub?
+      kk: Astana Hub қатысушысы не істеуі керек?
+      en: What are the obligations of an Astana Hub participant?
+    answer:
+      ru: Участник платит ежеквартальный членский взнос, один процент от дохода за прошлый квартал, и сдаёт квартальный отчёт до 20 числа следующего месяца. Ещё нужно выполнять встречные обязательства перед IT-экосистемой.
+      kk: Қатысушы тоқсан сайын мүшелік жарна төлейді, бұл өткен тоқсандағы табыстың бір пайызы, және келесі айдың 20-сына дейін тоқсандық есеп тапсырады. Сондай-ақ IT-экожүйе алдындағы қарсы міндеттемелерді орындау керек.
+      en: A participant pays a quarterly membership fee of one percent of the previous quarter's income and submits a quarterly report by the 20th of the following month. They also fulfil reciprocal commitments to the IT ecosystem.
+
+  - id: residency_consult
+    tags: [programs, residents]
+    keywords: [консультация, помощь с заявкой, вопросы по вступлению, consultation, help with application, кеңес, тіркелу бойынша кеңес]
+    question:
+      ru: Где получить консультацию по вступлению в хаб?
+      kk: Хабқа тіркелу бойынша қайдан кеңес алуға болады?
+      en: Where can I get advice on joining the hub?
+    answer:
+      ru: В разделе «Программы» на astanahub.com есть бесплатная «Консультация по вступлению в Astana Hub». Также можно позвонить по номеру 1818.
+      kk: astanahub.com сайтындағы «Бағдарламалар» бөлімінде тегін «Astana Hub-қа тіркелу бойынша консультация» бар. Сондай-ақ 1818 нөміріне қоңырау шалуға болады.
+      en: The Programs section on astanahub.com offers a free consultation on joining Astana Hub. You can also call 1818.
+
+  - id: foreign_specialists
+    tags: [programs, international]
+    keywords: [иностранцы, иностранный специалист, виза, рабочая виза, релокация, переезд компании, expat, visa, work visa, foreigners, relocation, шетелдік маман, виза, көшу]
+    question:
+      ru: Какие условия для иностранных специалистов?
+      kk: Шетелдік мамандарға қандай жағдайлар бар?
+      en: What are the conditions for foreign specialists?
+    answer:
+      ru: Участники Astana Hub могут нанимать иностранных специалистов без квот и без госпошлины за разрешение на работу. Сотрудники и их семьи получают визу до пяти лет. Для переезда компаний есть сервисы Expat Centre и One Stop Shop.
+      kk: Astana Hub қатысушылары шетелдік мамандарды квотасыз және жұмысқа рұқсат үшін мемлекеттік бажсыз жалдай алады. Қызметкерлер мен олардың отбасылары бес жылға дейінгі виза алады. Компаниялардың көшуіне арналған Expat Centre және One Stop Shop қызметтері бар.
+      en: Astana Hub participants can hire foreign specialists without quotas and without the state fee for a work permit. Employees and their families get visas for up to five years. Expat Centre and One Stop Shop help companies relocate.
+
+  - id: digital_nomad
+    tags: [programs, international]
+    keywords: [digital nomad, цифровой кочевник, номад, удалёнщик, виза для удалёнки, nomad visa, remote worker, цифрлық көшпенді]
+    question:
+      ru: Есть ли виза для цифровых кочевников?
+      kk: Цифрлық көшпенділерге арналған виза бар ма?
+      en: Is there a digital nomad visa?
+    answer:
+      ru: Да, через Astana Hub оформляют Digital Nomad Visa и Digital Nomad Residency для удалённых IT-специалистов. Условия смотрите в разделе «Программы» на astanahub.com.
+      kk: Иә, Astana Hub арқылы қашықтан жұмыс істейтін IT-мамандарға Digital Nomad Visa және Digital Nomad Residency рәсімделеді. Шарттарын astanahub.com сайтындағы «Бағдарламалар» бөлімінен қараңыз.
+      en: Yes, Astana Hub handles the Digital Nomad Visa and Digital Nomad Residency for remote IT specialists. See the conditions in the Programs section on astanahub.com.
+
+  # ---------------------------------------------------------------- программы и финансирование
+  - id: accelerator
+    tags: [programs]
+    keywords: [акселератор, инкубатор, программа для стартапов, акселерация, accelerator, incubator, startup program, акселерация, бағдарлама, инкубатор]
+    question:
+      ru: Есть ли у вас акселерационные программы?
+      kk: Сіздерде акселерациялық бағдарламалар бар ма?
+      en: Do you have accelerator programs?
+    answer:
+      ru: Да. Флагманский — Silkway Accelerator вместе с Google for Startups, ещё есть Tech Incubator по hardware и кибербезопасности, Startup Orda в регионах, AI'preneurs и GamePreneurs. Все наборы и сроки — в разделе «Программы» на astanahub.com.
+      kk: Иә. Басты акселератор — Google for Startups-пен бірге өтетін Silkway Accelerator, сондай-ақ hardware және киберқауіпсіздік бойынша Tech Incubator, өңірлердегі Startup Orda, AI'preneurs және GamePreneurs бар. Барлық қабылдау мен мерзімдер astanahub.com сайтындағы «Бағдарламалар» бөлімінде.
+      en: Yes. The flagship is Silkway Accelerator with Google for Startups; there are also Tech Incubator for hardware and cybersecurity, Startup Orda in the regions, AI'preneurs and GamePreneurs. All intakes and deadlines are in the Programs section on astanahub.com.
+
+  - id: silkway
+    tags: [programs]
+    keywords: [silkway, силквей, силк вей, google for startups, гугл, silkway accelerator]
+    question:
+      ru: Что такое Silkway Accelerator?
+      kk: Silkway Accelerator деген не?
+      en: What is Silkway Accelerator?
+    answer:
+      ru: Silkway Accelerator — флагманский акселератор Astana Hub и Google for Startups для стартапов с выручкой из Центральной Азии, Кавказа и Монголии. Программа длится 12 недель, участникам дают офис, коливинг и до 100 тысяч долларов кредитов Google Cloud. Набор 2026 года закрыт.
+      kk: Silkway Accelerator — Astana Hub пен Google for Startups-тың басты акселераторы, Орталық Азия, Кавказ және Моңғолиядағы табысы бар стартаптарға арналған. Бағдарлама 12 апта, қатысушыларға кеңсе, коливинг және 100 мың долларға дейін Google Cloud кредиттері беріледі. 2026 жылғы қабылдау жабылды.
+      en: Silkway Accelerator is the flagship accelerator of Astana Hub and Google for Startups for revenue-stage startups from Central Asia, the Caucasus and Mongolia. It lasts 12 weeks and gives an office, coliving and up to 100,000 dollars in Google Cloud credits. The 2026 intake is closed.
+
+  - id: investment
+    tags: [programs, investment]
+    keywords: [инвестиции, инвестор, венчур, финансирование, грант, деньги на стартап, astana hub ventures, investment, investor, venture, funding, grant, инвестиция, грант, қаржыландыру]
+    question:
+      ru: Как получить инвестиции для стартапа?
+      kk: Стартапқа инвестицияны қалай алуға болады?
+      en: How can my startup get investment?
+    answer:
+      ru: У хаба есть венчурный фонд Astana Hub Ventures, он вкладывает от 50 до 500 тысяч долларов на ранних стадиях, в первую очередь в выпускников программ хаба. Гранты и другие программы финансирования публикуются в разделе «Программы» на astanahub.com.
+      kk: Хабтың Astana Hub Ventures венчурлық қоры бар, ол ерте кезеңдегі стартаптарға 50-ден 500 мың долларға дейін салады, ең алдымен хаб бағдарламаларының түлектеріне. Гранттар мен басқа қаржыландыру бағдарламалары astanahub.com сайтындағы «Бағдарламалар» бөлімінде жарияланады.
+      en: The hub has a venture fund, Astana Hub Ventures, which invests 50,000 to 500,000 dollars at early stages, mainly in graduates of hub programs. Grants and other funding programs are listed in the Programs section on astanahub.com.
+
+  - id: hub_perks
+    tags: [programs]
+    keywords: [hub perks, скидки, бесплатные сервисы, github, jetbrains, облако, бонусы, perks, discounts, credits, жеңілдіктер, бонустар]
+    question:
+      ru: Какие бонусы получают стартапы-участники?
+      kk: Қатысушы стартаптар қандай бонустар алады?
+      en: What perks do member startups get?
+    answer:
+      ru: Через Hub Perks участники получают бесплатные и льготные сервисы партнёров, например GitHub Enterprise на год бесплатно, лицензии JetBrains на полгода, а также облака Yandex Cloud и Alibaba Cloud.
+      kk: Hub Perks арқылы қатысушылар серіктестердің тегін және жеңілдікті қызметтерін алады, мысалы бір жылға тегін GitHub Enterprise, жарты жылға JetBrains лицензиялары, сондай-ақ Yandex Cloud және Alibaba Cloud бұлттары.
+      en: Through Hub Perks, participants get free and discounted partner services, for example a free year of GitHub Enterprise, six months of JetBrains licenses, and Yandex Cloud and Alibaba Cloud.
+
+  - id: tech_tasks
+    tags: [programs]
+    keywords: [технологические задачи, заказы, корпорации, hub market, задача от компании, недропользователи, корпоративные инновации, tech tasks, corporate innovation, технологиялық тапсырмалар, тапсырыс]
+    question:
+      ru: Где найти заказы от корпораций?
+      kk: Корпорациялардан тапсырысты қайдан табуға болады?
+      en: Where can I find projects from corporations?
+    answer:
+      ru: В разделе «Технологические задачи» на Hub Market компании и госорганы публикуют свои задачи, а IT-компании и стартапы предлагают решения. Исполнителя выбирает заказчик.
+      kk: Hub Market-тегі «Технологиялық тапсырмалар» бөлімінде компаниялар мен мемлекеттік органдар өз тапсырмаларын жариялайды, ал IT-компаниялар мен стартаптар шешім ұсынады. Орындаушыны тапсырыс беруші таңдайды.
+      en: In the Tech Tasks section of Hub Market, companies and government bodies post their challenges, and IT companies and startups propose solutions. The customer chooses the contractor.
+
+  - id: partnership
+    tags: [programs, contacts]
+    keywords: [стать инвестором, стать ментором, эксперт, спикер, трекер, партнёр, сотрудничество, mentor, become an investor, partner, cooperation, speaker, ментор, серіктес, ынтымақтастық, сарапшы]
+    question:
+      ru: Как стать ментором или партнёром хаба?
+      kk: Хабтың менторы немесе серіктесі қалай болуға болады?
+      en: How can I become a mentor or partner of the hub?
+    answer:
+      ru: Менторы, трекеры, спикеры и эксперты заполняют форму сотрудничества на astanahub.com, а инвесторы проходят «Регистрацию инвестора» в разделе «Программы». По партнёрству пишите на info@astanahub.com.
+      kk: Менторлар, трекерлер, спикерлер және сарапшылар astanahub.com сайтында ынтымақтастық нысанын толтырады, ал инвесторлар «Бағдарламалар» бөлімінде «Инвестордың тіркелуі» арқылы тіркеледі. Серіктестік бойынша info@astanahub.com поштасына жазыңыз.
+      en: Mentors, trackers, speakers and experts fill in the cooperation form on astanahub.com, and investors use Investor Registration in the Programs section. For partnerships, write to info@astanahub.com.
+
+  - id: regional_hubs
+    tags: [programs, international]
+    keywords: [регионы, региональные хабы, другие города, алматы, шымкент, караганда, зарубежные хабы, regional hubs, other cities, almaty, abroad, өңірлер, өңірлік хабтар, басқа қалалар]
+    question:
+      ru: Есть ли хабы в других городах?
+      kk: Басқа қалаларда хабтар бар ма?
+      en: Are there hubs in other cities?
+    answer:
+      ru: Да, у Astana Hub около двадцати региональных IT-хабов по Казахстану, например Almaty Hub, Shymkent Hub, Terricon Valley в Караганде, Batys Hub в Уральске и Mangystau Hub в Актау. За рубежом есть партнёрские хабы в Пало-Альто, Лондоне, Дубае и Шанхае.
+      kk: Иә, Astana Hub-тың Қазақстан бойынша жиырмаға жуық өңірлік IT-хабы бар, мысалы Almaty Hub, Shymkent Hub, Қарағандыдағы Terricon Valley, Оралдағы Batys Hub және Ақтаудағы Mangystau Hub. Шетелде Пало-Альто, Лондон, Дубай және Шанхайда серіктес хабтар бар.
+      en: Yes, Astana Hub has about twenty regional IT hubs across Kazakhstan, such as Almaty Hub, Shymkent Hub, Terricon Valley in Karaganda, Batys Hub in Uralsk and Mangystau Hub in Aktau. Abroad, there are partner hubs in Palo Alto, London, Dubai and Shanghai.
+
+  # ---------------------------------------------------------------- мероприятия
+  - id: events_registration
+    tags: [events]
+    keywords: [мероприятия, расписание, афиша, регистрация, ивент, митап, как попасть на мероприятие, event, events, schedule, meetup, registration, іс-шара, кесте, тіркеу]
+    question:
+      ru: Как попасть на мероприятие?
+      kk: Іс-шараға қалай қатысуға болады?
+      en: How do I attend an event?
+    answer:
+      ru: Расписание — на astanahub.com в разделе «Мероприятия» и в Telegram-канале astana_hub. В карточке события нажмите «Заявка на участие», получите QR-код и покажите его на входе. Многие события бесплатные, условия указаны в карточке.
+      kk: Кесте astanahub.com сайтындағы «Іс-шаралар» бөлімінде және astana_hub Telegram-арнасында. Іс-шара парақшасында қатысуға өтінім батырмасын басып, QR-код алыңыз да, кіреберісте көрсетіңіз. Көп іс-шара тегін, шарттары парақшада көрсетілген.
+      en: The schedule is on astanahub.com under Events and in the astana_hub Telegram channel. On the event page, apply to participate, get a QR code and show it at the entrance. Many events are free; the conditions are on the event page.
+
+  - id: digital_bridge
+    tags: [events]
+    keywords: [digital bridge, диджитал бридж, ai digital bridge, форум, конференция, forum, conference, форум]
+    question:
+      ru: Что такое Digital Bridge?
+      kk: Digital Bridge деген не?
+      en: What is Digital Bridge?
+    answer:
+      ru: AI & Digital Bridge — ежегодный международный технологический форум Astana Hub в МВЦ EXPO. В 2026 году он прошёл с 1 по 3 октября и собрал больше 18 тысяч посетителей. Даты следующего форума пока не объявлены.
+      kk: AI & Digital Bridge — Astana Hub-тың EXPO халықаралық көрме орталығында өтетін жыл сайынғы халықаралық технологиялық форумы. 2026 жылы ол 1–3 қазанда өтіп, 18 мыңнан астам келушіні жинады. Келесі форумның күндері әлі жарияланған жоқ.
+      en: AI & Digital Bridge is Astana Hub's annual international technology forum at the EXPO exhibition center. In 2026 it took place on October 1 to 3 and drew more than 18,000 visitors. Dates for the next forum have not been announced yet.
+
+  - id: hackathons
+    tags: [events]
+    keywords: [хакатон, хакатоны, hackathon, hackalem, рекорд, гиннесс, guinness, хакатон, рекорд]
+    question:
+      ru: Проходят ли здесь хакатоны?
+      kk: Мұнда хакатондар өте ме?
+      en: Are there hackathons here?
+    answer:
+      ru: Да, хакатоны проходят регулярно, анонсы — в разделе «Мероприятия» на astanahub.com. В сентябре 2026 года HackAlem AI в alem.ai попал в Книгу рекордов Гиннесса как самый массовый AI-хакатон, у него было 2415 участников.
+      kk: Иә, хакатондар үнемі өтеді, хабарландырулар astanahub.com сайтындағы «Іс-шаралар» бөлімінде. 2026 жылдың қыркүйегінде alem.ai-дағы HackAlem AI ең көп адам қатысқан AI-хакатон ретінде Гиннесс рекордтар кітабына енді, оған 2415 адам қатысты.
+      en: Yes, hackathons take place regularly; see the Events section on astanahub.com. In September 2026, HackAlem AI at alem.ai set a Guinness World Record as the largest AI hackathon, with 2,415 participants.
+
+  # ---------------------------------------------------------------- работа, пресса
+  - id: vacancies
+    tags: [careers]
+    keywords: [работа, вакансии, трудоустройство, найти работу, стажировка, резюме, job, jobs, vacancy, career, internship, cv, жұмыс, бос орын, тағылымдама, түйіндеме]
+    question:
+      ru: Как найти работу в IT-компаниях хаба?
+      kk: Хабтағы IT-компанияларда жұмысты қалай табуға болады?
+      en: How can I find a job at the hub's IT companies?
+    answer:
+      ru: Вакансии компаний-участников публикуются в разделе «Вакансии» на astanahub.com, сейчас их больше пяти тысяч. Резюме в команду самого Astana Hub отправляют на cv@astanahub.com, летом хаб набирает стажёров.
+      kk: Қатысушы компаниялардың бос орындары astanahub.com сайтындағы «Вакансиялар» бөлімінде жарияланады, қазір олар бес мыңнан асады. Astana Hub командасына түйіндемені cv@astanahub.com поштасына жібереді, жазда хаб тағылымдамашыларды қабылдайды.
+      en: Job openings at member companies are posted in the Vacancies section on astanahub.com, currently more than five thousand. To join the Astana Hub team itself, send your CV to cv@astanahub.com; the hub recruits interns in summer.
+
+  - id: press
+    tags: [contacts]
+    keywords: [пресса, сми, журналист, интервью, комментарий, press, media, journalist, interview, бақ, журналист, сұхбат]
+    question:
+      ru: Куда обращаться журналистам?
+      kk: Журналистер қайда хабарласуы керек?
+      en: Who should journalists contact?
+    answer:
+      ru: Журналистам — на почту media@astanahub.com или через форму «Запросы от СМИ» на сайте astanahub.com.
+      kk: Журналистер media@astanahub.com поштасына немесе astanahub.com сайтындағы «БАҚ сұраулары» нысаны арқылы хабарласады.
+      en: Journalists can write to media@astanahub.com or use the media request form on astanahub.com.

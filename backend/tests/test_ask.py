@@ -68,7 +68,7 @@ def test_explicit_lang_wins(client):
     r = client.post("/v1/ask", json=ask_body("wifi", lang="kk"), headers=AUTH)
     body = r.json()
     assert body["lang"] == "kk"
-    assert "құпиясөз" in body["answer"].lower()
+    assert "желісіне" in body["answer"].lower()
 
 
 OUT_OF_BASE = [
@@ -214,7 +214,7 @@ def test_ask_sse(client):
     events = _parse_sse(r.text)
     kinds = [e[0] for e in events]
     assert kinds == ["phrase", "phrase", "done"]
-    assert events[0][1]["text"].startswith("Гостевая сеть")
+    assert events[0][1]["text"].startswith("Как подключиться к Wi-Fi")
     done = events[-1][1]
     assert done == {
         "request_id": r.headers["x-request-id"],

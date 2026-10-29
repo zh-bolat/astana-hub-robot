@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import AsyncIterator, Callable
+
 from app.config import Settings
 from app.lang import Lang
 from app.logging_setup import logger
@@ -32,7 +35,7 @@ def _yandex(settings: Settings):
 
 
 def _elevenlabs(settings: Settings):
-    from app.speech.elevenlabs import ElevenLabsProvider
+    from app.speech.elevenlabs import ElevenLabsProvider, VoiceSettings
 
     if not settings.elevenlabs_api_key:
         raise RuntimeError("ELEVENLABS_API_KEY is required for the elevenlabs provider")
@@ -48,7 +51,9 @@ def _elevenlabs(settings: Settings):
         tts_model_default=settings.elevenlabs_tts_model_default,
         output_format=settings.elevenlabs_output_format,
         stt_model=settings.elevenlabs_stt_model,
+        voice_settings=VoiceSettings.from_settings(settings),
         timeout_s=max(settings.stt_timeout_s, settings.tts_timeout_s) + 1,
+        tts_models={"ru": settings.elevenlabs_tts_model_ru, "en": settings.elevenlabs_tts_model_en},
     )
 
 
@@ -103,23 +108,77 @@ class FallbackTtsProvider:
     Голоса у обоих — одни и те же voice_id ElevenLabs, поэтому кеш общий, по ключу основного.
     """
 
-    def __init__(self, primary: TtsProvider, fallback: TtsProvider) -> None:
+    # Ошибки, после которых основной не поднимется за минуты: кончилась квота / кредиты, ключ отозван.
+    PAUSE_MARKERS = ("quota_exceeded", "http 401", "http 402", "http 403")
+    PAUSE_S = 600.0
+
+    def __init__(
+        self,
+        primary: TtsProvider,
+        fallback: TtsProvider,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.primary = primary
         self.fallback = fallback
         self.name = primary.name
+        self._clock = clock
+        self._paused_until = 0.0
 
     def voice_id(self, lang: Lang) -> str:
         return self.primary.voice_id(lang)
 
+    def primary_paused(self) -> bool:
+        return self._clock() < self._paused_until
+
+    def _on_primary_error(self, exc: SpeechError, stream: bool = False) -> None:
+        """Квота / ключ: основной не дёргаем PAUSE_S — иначе каждая фраза ждёт его отказ (~1–3 с) перед запасным."""
+        text = str(exc)
+        pause = any(m in text for m in self.PAUSE_MARKERS)
+        if pause:
+            self._paused_until = self._clock() + self.PAUSE_S
+        logger.warning(
+            "tts_fallback",
+            extra={
+                "error": text,
+                "primary": self.primary.name,
+                "used": self.fallback.name,
+                "stream": stream,
+                "primary_paused_s": self.PAUSE_S if pause else 0,
+            },
+        )
+
     async def tts(self, text: str, lang: Lang) -> bytes:
+        if self.primary_paused():
+            return await self.fallback.tts(text, lang)
         try:
             return await self.primary.tts(text, lang)
         except SpeechError as exc:
-            logger.warning(
-                "tts_fallback",
-                extra={"error": str(exc), "primary": self.primary.name, "used": self.fallback.name},
-            )
+            self._on_primary_error(exc)
             return await self.fallback.tts(text, lang)
+
+    async def tts_stream(self, text: str, lang: Lang) -> AsyncIterator[bytes]:
+        """Поток основного; его ошибка до первых байт — запасной целиком (без потока, одним куском)."""
+        primary_stream = getattr(self.primary, "tts_stream", None)
+        if primary_stream is None or self.primary_paused():
+            yield await self.tts(text, lang)
+            return
+        chunks = primary_stream(text, lang).__aiter__()
+        try:
+            try:
+                first = await chunks.__anext__()
+            except StopAsyncIteration:
+                return
+            except SpeechError as exc:
+                self._on_primary_error(exc, stream=True)
+                yield await self.fallback.tts(text, lang)
+                return
+            yield first
+            async for chunk in chunks:
+                yield chunk
+        finally:
+            aclose = getattr(chunks, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _tts_by_name(settings: Settings, name: str) -> TtsProvider:

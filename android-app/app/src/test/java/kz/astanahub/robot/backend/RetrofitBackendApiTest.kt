@@ -74,6 +74,18 @@ class RetrofitBackendApiTest {
     }
 
     @Test
+    fun `ask parses optional citations, old server without them is fine`() = runBlocking {
+        server.enqueue(
+            json(200, """{"answer":"Да.","citations":[{"id":"document:hub_space#2","type":"document","title":"Hub Space","url":"https://astanahub.com/ru/l/hubspace"},{"type":"fact"}]}"""),
+        )
+        val answer = (api.ask("?", ctx) as ApiResult.Success).value
+        assertEquals(listOf(Citation("document:hub_space#2", "document", "Hub Space", "https://astanahub.com/ru/l/hubspace")), answer.citations)
+
+        server.enqueue(json(200, """{"answer":"Да."}"""))
+        assertTrue((api.ask("?", ctx) as ApiResult.Success).value.citations.isEmpty())
+    }
+
+    @Test
     fun `null lang is not sent`() = runBlocking {
         server.enqueue(json(200, """{"answer":"ok"}"""))
         api.ask("hi", ctx.copy(lang = null, placeId = null))

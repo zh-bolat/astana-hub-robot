@@ -3,12 +3,16 @@ package kz.astanahub.robot.places
 import kz.astanahub.robot.backend.Place
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.robot.RobotGateway
+import kz.astanahub.robot.robot.RobotPose
 
 /** Место для офлайн-кнопки «Где X?» / «Проводите: X». */
 data class QuickPlace(val place: Place, val canGuide: Boolean)
 
-/** Ответ «где …» — полностью локальный. [guideTarget] — можно предложить «Проводить». */
-data class WayAnswer(val text: String, val place: Place?, val guideTarget: Place?)
+/**
+ * Ответ «где …» — полностью локальный. [guideTarget] — можно предложить «Проводить». [bearing] — направление и
+ * расстояние от робота (null — позы нет или места нет на карте): остров where_is на экране лица.
+ */
+data class WayAnswer(val text: String, val place: Place?, val guideTarget: Place?, val bearing: Bearing? = null)
 
 /** «Где X?», «Где я?» и выбор цели для «Проводи» — без сервера, по карте робота и кешу мест. */
 class WayFinder(
@@ -18,6 +22,17 @@ class WayFinder(
     suspend fun refreshPlaces(): Boolean = repository.refresh()
 
     suspend fun find(query: String): Place? = PlaceMatcher.match(query, repository.places())?.place
+
+    /**
+     * Названия мест (все языки, синонимы, имя точки карты) и их слова от 3 букв — нормализованные [TextNormalizer]:
+     * для фильтра шума (название места одним словом — осмысленная реплика).
+     */
+    suspend fun placeWords(): Set<String> = repository.places()
+        .flatMap { p -> p.names.values + p.synonyms + p.mapName }
+        .map(TextNormalizer::normalize)
+        .flatMap { n -> listOf(n) + n.split(' ') }
+        .filter { it.length >= 3 }
+        .toSet()
 
     /** null — место не узнали (тогда спрашиваем сервер, если он есть). */
     suspend fun whereIs(query: String, lang: Lang): WayAnswer? {
@@ -48,7 +63,27 @@ class WayFinder(
         val pose = robot.getPosition()
             ?: return WayAnswer(WayPhrases.whereIsNoPose(name, lang, canGuide), place, place.takeIf { canGuide })
         val bearing = Directions.bearing(pose, point.x, point.y)
-        return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide })
+        return WayAnswer(WayPhrases.whereIs(name, bearing, lang, canGuide), place, place.takeIf { canGuide }, bearing)
+    }
+
+    /**
+     * Фразы «где X» для live (`state.directions`, docs/api-contract.md): `place_id` → язык → фраза от позы [pose].
+     * Ключ — id места базы (тот же, что сервер шлёт в `action`); места базы без точки на карте не включаем,
+     * точки карты без места в базе — тоже (сервер их не знает). Фраза — как у [describe], но без «Могу проводить»:
+     * предложение проводить добавляет сервер.
+     */
+    suspend fun directionsFrom(pose: RobotPose): Map<String, Map<Lang, String>> {
+        val map = repository.mapPlaces()
+        if (map.isEmpty()) return emptyMap()
+        val result = LinkedHashMap<String, Map<Lang, String>>()
+        for (place in repository.basePlaces()) {
+            val point = repository.findOnMap(place, map) ?: continue
+            val bearing = Directions.bearing(pose, point.x, point.y)
+            result[place.id] = Lang.entries.associateWith { lang ->
+                WayPhrases.whereIs(displayName(place, lang), bearing, lang, canGuide = false)
+            }
+        }
+        return result
     }
 
     /**

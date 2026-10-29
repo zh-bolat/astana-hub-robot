@@ -1,0 +1,139 @@
+package kz.astanahub.robot.audio
+
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.random.Random
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** VAD 0,5 с по умолчанию (настраивается) и конец фразы для live STT по кускам PCM16 LE. */
+class LiveEndpointerTest {
+    private val random = Random(7)
+
+    private fun pcm(ms: Int, sample: (Int) -> Int): ShortArray = ShortArray(16 * ms) { sample(it) .toShort() }
+    private fun silence(ms: Int) = pcm(ms) { random.nextInt(-60, 61) }
+    private fun tone(ms: Int) = pcm(ms) { (6_000 * sin(2 * PI * 220 * it / 16_000)).toInt() }
+
+    private fun frames(samples: ShortArray, frame: Int = 320): List<ShortArray> =
+        samples.toList().chunked(frame).map { it.toShortArray() }
+
+    /** В какую миллисекунду тишины VAD закончил фразу. */
+    private fun endAfterSilence(config: VadConfig): Int? {
+        val vad = EnergyVad(config)
+        frames(silence(300) + tone(800)).forEach { vad.accept(it) }
+        frames(silence(2_000)).forEachIndexed { i, f ->
+            if (vad.accept(f) == VadEvent.SPEECH_ENDED) return (i + 1) * 20
+        }
+        return null
+    }
+
+    @Test
+    fun `default end of phrase is 0_5 s of silence instead of 0_8`() {
+        assertEquals(500, VadConfig().endSilenceMillis)
+        assertEquals(500, endAfterSilence(VadConfig()))
+    }
+
+    @Test
+    fun `end of phrase silence is configurable`() {
+        assertEquals(800, endAfterSilence(VadConfig(endSilenceMillis = 800)))
+        assertEquals(300, endAfterSilence(VadConfig(endSilenceMillis = 300)))
+    }
+
+    private fun le(samples: ShortArray): ByteArray = MicRecorder.toLittleEndian(samples)
+
+    @Test
+    fun `live endpointer fires once after 0_5 s of silence on 100 ms chunks`() {
+        val ep = LiveEndpointer(VadConfig())
+        val audio = le(silence(300) + tone(1_000) + silence(1_000))
+        val chunks = audio.toList().chunked(3_200).map { it.toByteArray() } // 100 мс
+        val firedAt = chunks.indexOfFirst { ep.accept(it) }
+        assertTrue(ep.ended)
+        // речь кончилась на 1300 мс, конец — через 500 мс тишины → в куске, покрывающем 1800 мс
+        assertTrue("fired at chunk $firedAt", firedAt == 17)
+        assertFalse(chunks.drop(firedAt + 1).any { ep.accept(it) })
+    }
+
+    @Test
+    fun `live endpointer handles odd chunk sizes`() {
+        val ep = LiveEndpointer(VadConfig())
+        val audio = le(silence(300) + tone(600) + silence(800))
+        var fired: Int? = null
+        audio.toList().chunked(777).map { it.toByteArray() }.forEachIndexed { i, c -> if (ep.accept(c) && fired == null) fired = i }
+        assertNotNull(fired)
+    }
+
+    @Test
+    fun `no speech - never fires (server closes the phrase)`() {
+        val ep = LiveEndpointer(VadConfig())
+        val audio = le(silence(3_000))
+        assertFalse(audio.toList().chunked(3_200).any { ep.accept(it.toByteArray()) })
+    }
+
+    // --- порог старта live STT: громкость + минимальная длительность речи ---
+
+    private fun chunks(samples: ShortArray): List<ByteArray> = le(samples).toList().chunked(3_200).map { it.toByteArray() }
+
+    /** На каком куске (100 мс) случился старт речи; null — не случился. */
+    private fun startChunk(config: VadConfig, samples: ShortArray): Int? {
+        val ep = LiveEndpointer(config)
+        chunks(samples).forEachIndexed { i, c -> if (ep.feed(c) == LiveVadEvent.SPEECH_STARTED) return i }
+        return null
+    }
+
+    private fun quietTone(ms: Int) = pcm(ms) { (300 * sin(2 * PI * 220 * it / 16_000)).toInt() }
+
+    @Test
+    fun `default minimum speech is 250 ms`() {
+        assertEquals(250, VadConfig().startMillis)
+        assertEquals(250, MicSensitivity.NORMAL.minSpeechMillis)
+    }
+
+    @Test
+    fun `short sound does not start speech and is counted, no end is sent`() {
+        val ep = LiveEndpointer(VadConfig())
+        val events = chunks(silence(500) + tone(200) + silence(1_500)).map { ep.feed(it) }
+        assertFalse(ep.started)
+        assertFalse(events.contains(LiveVadEvent.SPEECH_STARTED))
+        assertFalse(events.contains(LiveVadEvent.SPEECH_ENDED))
+        assertEquals(1, ep.shortSounds)
+        assertTrue(ep.lastShortSoundMillis in 160..240)
+    }
+
+    @Test
+    fun `several short laughs and claps never open live STT`() {
+        val ep = LiveEndpointer(VadConfig())
+        var audio = silence(300)
+        repeat(5) { audio += tone(120) + silence(150) }
+        audio += silence(1_000)
+        assertTrue(chunks(audio).none { ep.feed(it) == LiveVadEvent.SPEECH_STARTED })
+        assertEquals(5, ep.shortSounds)
+    }
+
+    @Test
+    fun `quiet sound below the threshold does not start speech`() {
+        assertNull(startChunk(VadConfig(), silence(300) + quietTone(2_000) + silence(500)))
+    }
+
+    @Test
+    fun `speech of at least the minimum duration starts`() {
+        // речь с 300 мс; 250 мс подряд громко -> старт в куске, покрывающем 550 мс
+        assertEquals(5, startChunk(VadConfig(), silence(300) + tone(300) + silence(1_000)))
+        assertNotNull(startChunk(VadConfig(), silence(300) + tone(1_000)))
+    }
+
+    @Test
+    fun `sensitivity changes the minimum duration and the volume threshold`() {
+        val audio = silence(300) + tone(300) + silence(800)
+        assertNull("низкая: 300 мс мало", startChunk(VadConfig().withSensitivity(MicSensitivity.LOW), audio))
+        assertNotNull(startChunk(VadConfig().withSensitivity(MicSensitivity.HIGH), silence(300) + tone(200) + silence(800)))
+        assertNull(startChunk(VadConfig().withSensitivity(MicSensitivity.NORMAL), silence(300) + tone(200) + silence(800)))
+        // тихий голос (RMS ≈ 400) слышен только на высокой
+        val voice = silence(300) + pcm(1_000) { (560 * sin(2 * PI * 220 * it / 16_000)).toInt() }
+        assertNull(startChunk(VadConfig(), voice))
+        assertNotNull(startChunk(VadConfig().withSensitivity(MicSensitivity.HIGH), voice))
+    }
+}

@@ -713,19 +713,33 @@
       "post": {
         "summary": "Tts",
         "operationId": "tts_v1_tts_post",
+        "parameters": [
+          {
+            "name": "stream",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Потоковый режим: audio/mpeg кусками по мере синтеза",
+              "default": false,
+              "title": "Stream"
+            },
+            "description": "Потоковый режим: audio/mpeg кусками по мере синтеза"
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/TtsRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "MP3 целиком; с stream=true — кусками по мере синтеза (chunked)",
             "content": {
               "audio/mpeg": {
                 "schema": {
@@ -734,6 +748,97 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics/turn": {
+      "post": {
+        "summary": "Metrics Turn",
+        "operationId": "metrics_turn_v1_metrics_turn_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnMetrics"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "400": {
             "description": "Bad Request",
@@ -775,25 +880,88 @@
               }
             }
           },
-          "503": {
-            "description": "Service Unavailable",
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/metrics": {
+      "get": {
+        "summary": "Admin Metrics",
+        "description": "p50/p95/count по этапам (робот и сервер), по моделям/провайдерам и языкам, доля фолбэков, по часам.",
+        "operationId": "admin_metrics_v1_admin_metrics_get",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 744,
+              "minimum": 1,
+              "default": 24,
+              "title": "Hours"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSummary"
                 }
               }
             }
           },
-          "504": {
-            "description": "Gateway Timeout",
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
           },
           "422": {
             "description": "Validation Error",
@@ -801,6 +969,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/metrics/page": {
+      "get": {
+        "summary": "Admin Metrics Page",
+        "operationId": "admin_metrics_page_v1_admin_metrics_page_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1132,6 +1318,13 @@
             "type": "array",
             "title": "Sources"
           },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
           "actions": {
             "items": {
               "$ref": "#/components/schemas/ChatAction"
@@ -1151,6 +1344,11 @@
             ],
             "title": "Emotion",
             "default": "neutral"
+          },
+          "ignored": {
+            "type": "boolean",
+            "title": "Ignored",
+            "default": false
           }
         },
         "type": "object",
@@ -1163,6 +1361,46 @@
           "sources"
         ],
         "title": "ChatResponse"
+      },
+      "Citation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "document",
+              "fact",
+              "place"
+            ],
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "title"
+        ],
+        "title": "Citation",
+        "description": "v1.3: фрагмент, который нашёл поиск агента и отдал модели в этом ответе (для показа человеку)."
       },
       "ErrorDetail": {
         "properties": {
@@ -1206,6 +1444,39 @@
         ],
         "title": "ErrorResponse"
       },
+      "FallbackStats": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "fallbacks": {
+            "type": "integer",
+            "title": "Fallbacks"
+          },
+          "interrupted": {
+            "type": "integer",
+            "title": "Interrupted"
+          },
+          "fallback_share": {
+            "type": "number",
+            "title": "Fallback Share"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "turns",
+          "fallbacks",
+          "interrupted",
+          "fallback_share"
+        ],
+        "title": "FallbackStats"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1237,6 +1508,127 @@
           "version"
         ],
         "title": "HealthResponse"
+      },
+      "HourStats": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "hour": {
+            "type": "string",
+            "title": "Hour"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "stage",
+          "count",
+          "errors",
+          "p50",
+          "p95",
+          "hour"
+        ],
+        "title": "HourStats"
+      },
+      "LangStats": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "lang": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lang"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "stage",
+          "count",
+          "errors",
+          "p50",
+          "p95",
+          "lang"
+        ],
+        "title": "LangStats"
       },
       "LocalMessageRequest": {
         "properties": {
@@ -1322,6 +1714,69 @@
         ],
         "title": "LocalMessageResponse"
       },
+      "MetricsSummary": {
+        "properties": {
+          "hours": {
+            "type": "integer",
+            "title": "Hours"
+          },
+          "since": {
+            "type": "string",
+            "title": "Since"
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageStats"
+            },
+            "type": "array",
+            "title": "Stages"
+          },
+          "by_provider": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderStats"
+            },
+            "type": "array",
+            "title": "By Provider"
+          },
+          "by_lang": {
+            "items": {
+              "$ref": "#/components/schemas/LangStats"
+            },
+            "type": "array",
+            "title": "By Lang"
+          },
+          "fallback": {
+            "items": {
+              "$ref": "#/components/schemas/FallbackStats"
+            },
+            "type": "array",
+            "title": "Fallback"
+          },
+          "hourly": {
+            "items": {
+              "$ref": "#/components/schemas/HourStats"
+            },
+            "type": "array",
+            "title": "Hourly"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hours",
+          "since",
+          "generated_at",
+          "stages",
+          "by_provider",
+          "by_lang",
+          "fallback",
+          "hourly"
+        ],
+        "title": "MetricsSummary"
+      },
       "PlaceOut": {
         "properties": {
           "id": {
@@ -1380,6 +1835,70 @@
         ],
         "title": "PlacesResponse"
       },
+      "ProviderStats": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "stage",
+          "count",
+          "errors",
+          "p50",
+          "p95",
+          "provider"
+        ],
+        "title": "ProviderStats"
+      },
       "QuickQuestionOut": {
         "properties": {
           "id": {
@@ -1434,6 +1953,58 @@
           "messages"
         ],
         "title": "SessionMessagesResponse"
+      },
+      "StageStats": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "stage",
+          "count",
+          "errors",
+          "p50",
+          "p95"
+        ],
+        "title": "StageStats"
       },
       "SttResponse": {
         "properties": {
@@ -1504,6 +2075,148 @@
           "text"
         ],
         "title": "TtsRequest"
+      },
+      "TurnMetrics": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Session Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "lang": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ru",
+                  "kk",
+                  "en"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lang"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "ask",
+              "local"
+            ],
+            "title": "Mode"
+          },
+          "stt_final_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stt Final Ms"
+          },
+          "chat_first_event_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat First Event Ms"
+          },
+          "first_phrase_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Phrase Ms"
+          },
+          "tts_first_byte_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tts First Byte Ms"
+          },
+          "first_audio_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Audio Ms"
+          },
+          "vad_silence_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 120000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vad Silence Ms"
+          },
+          "fallback": {
+            "type": "boolean",
+            "title": "Fallback",
+            "default": false
+          },
+          "interrupted": {
+            "type": "boolean",
+            "title": "Interrupted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "mode"
+        ],
+        "title": "TurnMetrics",
+        "description": "Тайминги одного хода разговора на стороне робота. Тексты реплик сюда не отправляются:\nнезнакомые поля отбрасываются и никуда не пишутся."
       },
       "ValidationError": {
         "properties": {

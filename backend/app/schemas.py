@@ -111,10 +111,23 @@ class ChatAction(BaseModel):
 Emotion = Literal["neutral", "happy", "thinking", "surprised", "sad", "excited"]
 
 
+class Citation(BaseModel):
+    """v1.3: фрагмент, который нашёл поиск агента и отдал модели в этом ответе (для показа человеку)."""
+
+    id: str  # document:<slug>#<n> | fact:<id> | place:<id>
+    type: Literal["document", "fact", "place"]
+    title: str
+    url: str | None = None  # у документа — источник, у факта и места — null
+
+
 class ChatResponse(AnswerResponse):
+    # v1.3: пусто, если агент не искал
+    citations: list[Citation] = Field(default_factory=list)
     actions: list[ChatAction] = Field(default_factory=list)
     # v1.1: эмоция ответа для лица робота (в SSE — событие emotion перед первой phrase)
     emotion: Emotion = "neutral"
+    # v1.2: реплика — шум распознавания; модель не вызывалась, робот молчит и слушает дальше
+    ignored: bool = False
 
 
 class ErrorDetail(BaseModel):

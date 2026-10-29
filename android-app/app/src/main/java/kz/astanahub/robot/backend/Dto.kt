@@ -27,6 +27,8 @@ internal data class AnswerDto(
     val lang: String? = null,
     val found: Boolean = true,
     val sources: List<String> = emptyList(),
+    /** v1.3, необязательно: разбирается мягко ([CitationParser]) — кривой элемент не ломает ответ. */
+    val citations: kotlinx.serialization.json.JsonElement? = null,
 )
 
 @Serializable
@@ -96,4 +98,22 @@ internal data class LocalMessageDto(
     @SerialName("place_id") val placeId: String? = null,
     val found: Boolean = true,
     val interrupted: Boolean = false,
+)
+
+/** Тело `POST /v1/metrics/turn` (раздел «Мониторинг задержек»): только тайминги, без текстов. */
+@Serializable
+internal data class TurnMetricsDto(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("request_id") val requestId: String? = null,
+    val lang: String? = null,
+    val mode: String,
+    @SerialName("stt_final_ms") val sttFinalMs: Long? = null,
+    @SerialName("chat_first_event_ms") val chatFirstEventMs: Long? = null,
+    @SerialName("first_phrase_ms") val firstPhraseMs: Long? = null,
+    @SerialName("tts_first_byte_ms") val ttsFirstByteMs: Long? = null,
+    @SerialName("first_audio_ms") val firstAudioMs: Long? = null,
+    @SerialName("vad_silence_ms") val vadSilenceMs: Int? = null,
+    // Без значений по умолчанию: флаги уходят всегда (encodeDefaults выключен).
+    val fallback: Boolean,
+    val interrupted: Boolean,
 )

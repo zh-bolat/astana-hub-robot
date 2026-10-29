@@ -22,6 +22,14 @@ class FakeRobotGateway : RobotGateway {
         MapPlace("Коворкинг", -5.0, 15.0),
         MapPlace("Конференц-зал", 20.0, 6.0),
         MapPlace("Туалет", -4.0, -6.0),
+        // Имена точек как в базе мест сервера (map_name): «где X» на эмуляторе — со стрелкой, метрами и «Проводить».
+        MapPlace("cafe", 12.0, -8.0),
+        MapPlace("Пункт приема", 3.0, 0.0),
+        MapPlace("restroom", -4.0, -6.0),
+        MapPlace("lecture hall", 20.0, 6.0),
+        MapPlace("lift", -2.0, 4.0),
+        MapPlace("snacks", 8.0, 5.0),
+        MapPlace("tiktok space", -10.0, 9.0),
     )
 
     @Volatile private var cancel: CompletableDeferred<Unit>? = null
@@ -38,6 +46,8 @@ class FakeRobotGateway : RobotGateway {
             if (withTimeoutOrNull(FAKE_TRIP_MILLIS / 2) { stop.await() } != null) return NavigationResult.Cancelled
             onEvent(NavEvent.OBSTACLE)
             delay(500)
+            // Коворкинг на эмуляторе недостижим: путь «перекрыт» — итог поездки «не получилось» (остров, лицо).
+            if (placeName == UNREACHABLE) return NavigationResult.Failed(FAKE_BLOCKED_CODE, "fake: path blocked")
             onEvent(NavEvent.OBSTACLE_CLEARED)
             if (withTimeoutOrNull(FAKE_TRIP_MILLIS / 2) { stop.await() } != null) return NavigationResult.Cancelled
             return NavigationResult.Arrived
@@ -60,5 +70,7 @@ class FakeRobotGateway : RobotGateway {
 
     private companion object {
         const val FAKE_TRIP_MILLIS = 6_000L
+        const val UNREACHABLE = "Коворкинг"
+        const val FAKE_BLOCKED_CODE = -116
     }
 }

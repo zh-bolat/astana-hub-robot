@@ -26,8 +26,30 @@ interface BackendApi {
     /** Синтез одной фразы (≤ 300 символов) → MP3. */
     suspend fun tts(text: String, lang: Lang): ApiResult<ByteArray>
 
+    /**
+     * Потоковый синтез (`POST /v1/tts?stream=true`): Success — заголовки пришли, байты читаются из [TtsStream]
+     * по мере синтеза. По умолчанию — обычный [tts], обёрнутый в поток.
+     */
+    suspend fun ttsStream(text: String, lang: Lang): ApiResult<TtsStream> = when (val r = tts(text, lang)) {
+        is ApiResult.Success -> ApiResult.Success(BytesTtsStream(r.value))
+        is ApiResult.Failure -> r
+    }
+
+    /** `POST /v1/metrics/turn` — тайминги хода (без текстов). Ошибку вызывающий только логирует. */
+    suspend fun postTurnMetrics(metrics: TurnMetrics): ApiResult<Unit> =
+        ApiResult.Failure(BackendError(ErrorKind.NOT_CONFIGURED))
+
     /** Live-распознавание одной фразы (WS /v1/stt/stream); null — не поддерживается (заглушки). */
     fun openLiveStt(lang: Lang?, sessionId: String): LiveSttSession? = null
+
+    /**
+     * Live STT в принципе есть: тогда робот слушает микрофон сам и открывает WS только на речь
+     * (порог громкости и минимальная длительность). false — фраза пишется целиком и уходит в `/v1/stt`.
+     */
+    val supportsLiveStt: Boolean get() = false
+
+    /** Живой голосовой режим (WS /v1/live); null — не поддерживается (заглушки, нет адреса сервера). */
+    fun openLive(lang: Lang, sessionId: String): kz.astanahub.robot.live.LiveConnection? = null
 
     /**
      * `POST /v1/chat` (SSE). Поток заканчивается [ChatEvent.Done] или [ChatEvent.Error];

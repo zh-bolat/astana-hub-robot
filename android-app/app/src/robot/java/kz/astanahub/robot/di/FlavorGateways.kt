@@ -1,11 +1,12 @@
 package kz.astanahub.robot.di
 
 import android.app.Application
-import kz.astanahub.robot.agent.AgentMicControl
+import kz.astanahub.robot.agent.AgentAssistant
 import kz.astanahub.robot.agent.AgentVoiceGateway
 import kz.astanahub.robot.agent.HubAppAgent
 import kz.astanahub.robot.robotapi.PersonApiGateway
 import kz.astanahub.robot.robotapi.RobotApiGateway
+import kz.astanahub.robot.robotapi.RobotHeadDiagnostics
 import kz.astanahub.robot.robotapi.RobotHeadGateway
 import kz.astanahub.robot.robotapi.SurfaceShareCameraGateway
 
@@ -19,12 +20,13 @@ object FlavorGateways {
         HubAppAgent.install(app, voice)
         return Gateways(
             builtinVoice = voice,
-            builtinMic = AgentMicControl,
+            assistant = AgentAssistant,
             robot = RobotApiGateway(app),
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,
             persons = PersonApiGateway(),
             head = RobotHeadGateway(),
+            headDiagnostics = RobotHeadDiagnostics(),
         )
     }
 }

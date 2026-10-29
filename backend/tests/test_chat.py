@@ -14,12 +14,13 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agent.prompts import LOOKING
+from app.agent.prompts import GREETINGS, LOOKING
 from app.agent.service import build_chat_client
 from app.config import Settings
 from app.db.models import MessageRow
 from app.prompts import REFUSALS
 from app.schemas import ChatRequest
+from app.text import split_phrases
 from tests.conftest import AUTH, SESSION, ask_body, logged
 
 SSE = {**AUTH, "Accept": "text/event-stream"}
@@ -208,6 +209,22 @@ def test_guide_to_sends_action_and_drops_preamble(make_client):
     assert roles[2] == ("assistant", "Провожаю вас в кафе, идите за мной.", None)
 
 
+def test_place_by_alias_resolves_to_map_point(make_client):
+    """Модель передала «elevator» вместо "place:lift" — действие уходит с id точки карты."""
+    model = FakeModel(call("guide_to", {"place_id": "elevator"}), say("Провожаю к лифту."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Take me to the elevator", lang="en")
+
+    assert evs[0] == ("action", {"type": "guide_to", "place_id": "lift"})
+    assert evs[-1][1]["actions"] == [{"type": "guide_to", "place_id": "lift"}]
+    assert evs[-1][1]["sources"] == ["place:lift"]
+    result = json.loads(model.requests[1]["messages"][-1]["content"])
+    assert (
+        result["ok"] is True and result["place_id"] == "place:lift" and result["name"] == "Elevator"
+    )
+
+
 def test_unknown_place_is_reported_to_model(make_client):
     model = FakeModel(call("where_is", {"place_id": "place:mars"}), say("Такого места я не знаю."))
     client = chat_client(make_client, model)
@@ -217,7 +234,7 @@ def test_unknown_place_is_reported_to_model(make_client):
     assert [e for e, _ in evs] == ["phrase", "done"]
     assert evs[-1][1]["actions"] == []
     result = json.loads(model.requests[1]["messages"][-1]["content"])
-    assert result["ok"] is False and "place:cafe" in result["places"]
+    assert result["ok"] is False and "place:cafe" in [p["id"] for p in result["places"]]
 
 
 def test_no_answer_stops_with_refusal(make_client):
@@ -417,17 +434,83 @@ def test_narration_is_not_spoken(make_client):
     assert [d["text"] for e, d in evs if e == "phrase"] == ["Куда вас проводить?"]
 
 
-# ---------- v1.1: эмоции ----------
+def test_translate_prefix_is_cut_answer_is_kept(make_client):
+    # Haiku на проде: «Translate to Kazakh: EXPO жерасты паркингі…» — префикс не озвучиваем, ответ — да
+    model = FakeModel(
+        say("Translate to Kazakh: EXPO жерасты паркингі, шамамен 3000 орын. Перевод: Келіңіз!")
+    )
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Көлікті қайда қоюға болады?", lang="kk")
+
+    assert [d["text"] for e, d in evs if e == "phrase"] == [
+        "EXPO жерасты паркингі, шамамен 3000 орын.",
+        "Келіңіз!",
+    ]
 
 
-def test_emotion_tag_is_cut_and_sent_before_first_phrase(make_client):
-    model = FakeModel(say("[happy] Рада помочь! Кафе на первом этаже."))
+def test_reasoning_about_the_base_is_not_spoken(make_client):
+    # Haiku на проде рассуждал вслух про поиск и базу — эти фразы не озвучиваем, ответ — да
+    model = FakeModel(
+        say(
+            "Это вопрос о хабе, нужно поискать в базе. Вопрос: часы работы. Факт есть в базе: 9:00–18:30. "
+            "Should I search? Answer directly. Хотя по базе часы такие. "
+            "В базе данных о камере хранения нет. Администрация работает по будням с 9:00 до 18:30. "
+            "Интернет на базе Технопарка входит в пакет."
+        )
+    )
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Во сколько работает хаб?", lang="ru")
+
+    assert [d["text"] for e, d in evs if e == "phrase"] == [
+        "Администрация работает по будням с 9:00 до 18:30.",
+        "Интернет на базе Технопарка входит в пакет.",
+    ]
+
+
+# ---------- характер: ремарки не озвучиваются, смех словом остаётся ----------
+
+
+def test_stage_directions_are_not_spoken_but_laughter_is(make_client):
+    model = FakeModel(
+        say("[happy] *смеётся* Конечно! Кафе — справа от вас. (подмигивает) Ха-ха, проводить вас?")
+    )
     client = chat_client(make_client, model)
 
     evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
 
     assert evs[0] == ("emotion", {"name": "happy"})
-    assert [d["text"] for e, d in evs if e == "phrase"] == ["Рада помочь!", "Кафе на первом этаже."]
+    assert [d["text"] for e, d in evs if e == "phrase"] == [
+        "Конечно!",
+        "Кафе — справа от вас.",
+        "Ха-ха, проводить вас?",
+    ]
+    answer = logged(client)[0].answer
+    assert "смеётся" not in answer and "подмигивает" not in answer
+
+
+def test_remark_only_reply_is_not_spoken(make_client):
+    model = FakeModel(say("[happy] *laughs* [winks]"))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "You are funny", lang="en")
+
+    # от ответа ничего не осталось — как молчание модели: готовый отказ, а не «*laughs*»
+    assert [d["text"] for e, d in evs if e == "phrase"] == split_phrases(REFUSALS["en"])
+
+
+# ---------- v1.1: эмоции ----------
+
+
+def test_emotion_tag_is_cut_and_sent_before_first_phrase(make_client):
+    model = FakeModel(say("[happy] Рад помочь! Кафе на первом этаже."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Где тут кафе?", lang="ru", with_emotion=True)
+
+    assert evs[0] == ("emotion", {"name": "happy"})
+    assert [d["text"] for e, d in evs if e == "phrase"] == ["Рад помочь!", "Кафе на первом этаже."]
     assert [e for e, _ in evs].count("emotion") == 1
     assert "[happy]" not in logged(client)[0].answer
 
@@ -512,7 +595,8 @@ def test_visitor_arrived_without_agent_uses_ready_greeting(client):
     evs = events(client, "", lang="kk", event="visitor_arrived", with_emotion=True)
 
     assert evs[0] == ("emotion", {"name": "happy"})
-    assert evs[1][1]["text"].startswith("Сәлеметсіз бе")
+    said = " ".join(d["text"] for e, d in evs if e == "phrase")
+    assert said in GREETINGS["kk"]
     assert evs[-1][1]["lang"] == "kk" and evs[-1][1]["actions"] == []
     assert logged(client) == []
 
@@ -523,7 +607,8 @@ def test_visitor_arrived_slow_model_uses_ready_greeting(make_client):
 
     evs = events(client, "", lang="en", event="visitor_arrived")
 
-    assert evs[0] == ("phrase", {"text": "Hello!"})
+    assert evs[0][0] == "phrase"
+    assert " ".join(d["text"] for e, d in evs if e == "phrase") in GREETINGS["en"]
     assert evs[-1][0] == "done"
 
 
@@ -646,3 +731,223 @@ def test_injection_eval_chat_mode_fake():
     report = run(EVAL_DIR / "injection.yaml", sleep_s=0, force_fake=True, endpoint="chat")
     assert report["endpoint"] == "chat"
     assert report["failed"] == 0 and report["errors"] == 0
+
+
+# --- v1.2: шум распознавания ---
+
+
+def test_noise_is_ignored_without_model_log_or_memory(make_client):
+    from tests.test_latency import rows
+
+    model = FakeModel(say("Не должна отвечать."))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Ну... м-м-м (смеётся)", lang="ru", with_emotion=True)
+
+    assert evs == [
+        (
+            "done",
+            {
+                "request_id": evs[0][1]["request_id"],
+                "lang": "ru",
+                "found": False,
+                "sources": [],
+                "actions": [],
+                "ignored": True,
+            },
+        )
+    ]
+    assert model.requests == []
+    assert logged(client) == []
+    assert messages(client) == []
+    assert [(r.stage, r.provider) for r in rows(client, "chat")] == [("ignored", "local:noise")]
+
+
+def test_noise_json_mode(make_client):
+    model = FakeModel()
+    client = chat_client(make_client, model)
+
+    r = client.post("/v1/chat", json=ask_body("Эээ, ну", lang="ru"), headers=AUTH)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ignored"] is True
+    assert body["answer"] == "" and body["phrases"] == [] and body["actions"] == []
+    assert body["found"] is False
+    assert model.requests == []
+
+
+def test_noise_ignored_when_chat_off(client):
+    r = client.post("/v1/chat", json=ask_body("(музыка)"), headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["ignored"] is True and r.json()["phrases"] == []
+    assert logged(client) == []
+
+
+def test_regular_answer_is_not_ignored(make_client):
+    client = chat_client(make_client, FakeModel(say("Кафе на первом этаже.")))
+    r = client.post("/v1/chat", json=ask_body("Где кафе?", lang="ru"), headers=AUTH)
+    assert r.json()["ignored"] is False
+
+
+def test_yes_after_robot_question_reaches_model(make_client):
+    model = FakeModel(call("guide_to", {"place_id": "place:cafe"}), say("Провожаю."))
+    client = chat_client(make_client, model)
+    client.post(
+        f"/v1/sessions/{SESSION}/messages",
+        json={
+            "kind": "where_is",
+            "question": "Где кафе?",
+            "answer": "Кафе на первом этаже. Проводить вас?",
+            "lang": "ru",
+        },
+        headers=AUTH,
+    )
+    assert client.app.state.log_writer.wait_idle(5)
+
+    evs = events(client, "Да", lang="ru")
+
+    assert evs[-1][1].get("ignored") is not True
+    assert model.requests  # «да» — ответ на вопрос робота
+
+
+def test_yes_without_robot_question_is_noise(make_client):
+    model = FakeModel()
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Да, я.", lang="ru")
+
+    assert evs[-1][1]["ignored"] is True
+    assert model.requests == []
+
+
+# --- v1.4: «не мне» — реплика не обращена к роботу ---
+
+
+def test_not_addressed_sse_done_ignored_without_phrases(make_client):
+    model = FakeModel(say("[not_for_me]"))
+    client = chat_client(make_client, model)
+
+    evs = events(client, "Ты по нему тапнул?", lang="ru", with_emotion=True)
+
+    assert evs == [
+        (
+            "done",
+            {
+                "request_id": evs[0][1]["request_id"],
+                "lang": "ru",
+                "found": False,
+                "sources": [],
+                "actions": [],
+                "ignored": True,
+            },
+        )
+    ]
+    assert len(model.requests) == 1
+    row = logged(client)[0]
+    assert (row.endpoint, row.category, row.found, row.answer) == (
+        "chat",
+        "not_addressed",
+        False,
+        "",
+    )
+    assert logged(client, only_unanswered=True) == []  # не «вопрос без ответа» для админа
+    assert messages(client) == []  # память агента не засоряется чужим разговором
+    r = client.get(f"/v1/sessions/{SESSION}/messages", headers=AUTH)
+    assert r.status_code == 200 and r.json()["messages"] == []  # и чат на экране робота
+
+
+def test_not_addressed_json_mode(make_client):
+    client = chat_client(make_client, FakeModel(say("[neutral] [not_for_me]")))
+
+    r = client.post("/v1/chat", json=ask_body("Это странно будет просто", lang="ru"), headers=AUTH)
+
+    body = r.json()
+    assert r.status_code == 200 and body["ignored"] is True
+    assert body["answer"] == "" and body["phrases"] == [] and body["actions"] == []
+
+
+def test_not_addressed_tag_inside_answer_is_never_spoken(make_client):
+    """Тег не в начале ответа — не «не мне»: ответ звучит, сам тег вырезается."""
+    client = chat_client(
+        make_client, FakeModel(say("[happy] Кафе справа. [not_for_me] Проводить вас?"))
+    )
+
+    evs = events(client, "Где кафе и что там есть?", lang="ru")
+
+    phrases = [d["text"] for e, d in evs if e == "phrase"]
+    assert phrases == ["Кафе справа.", "Проводить вас?"]
+    assert evs[-1][1].get("ignored") is not True
+    assert "not_for_me" not in json.dumps(evs, ensure_ascii=False)
+
+
+def test_not_addressed_rule_is_in_prompt(make_client):
+    from app.agent.prompts import NOT_ADDRESSED_TAG
+
+    model = FakeModel(say("[happy] Здравствуйте!"))
+    client = chat_client(make_client, model)
+    events(client, "Здравствуйте, а тут можно сфоткаться?", lang="ru")
+
+    system = model.requests[0]["messages"][0]["content"]
+    system = system if isinstance(system, str) else system[0]["text"]
+    assert NOT_ADDRESSED_TAG in system and "Ты по нему тапнул?" in system
+    assert "Ол бізді естіп тұр ма?" in system and "Did you tap it?" in system
+    assert "Сомневаешься — отвечай как обычно" in system
+
+
+class ScriptedAddressModel(FakeModel):
+    """Отвечает тегом «не мне» на реплики из `ignore` (или на все — ignore=None), на остальные — текстом."""
+
+    def __init__(self, ignore: set[str] | None) -> None:
+        super().__init__()
+        self.ignore = ignore
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.requests.append(body)
+        text = body["messages"][-1]["content"]
+        said = text.split("<visitor_message>\n", 1)[1].split("\n</visitor_message>", 1)[0]
+        hit = self.ignore is None or said in self.ignore
+        answer = "[neutral] [not_for_me]" if hit else "[happy] Кафе справа от входа."
+        return httpx.Response(
+            200, content=_sse(say(answer)), headers={"content-type": "text/event-stream"}
+        )
+
+
+def test_addressed_eval_scores_model_decisions():
+    import yaml
+
+    from eval.run_addressed import failed, run
+
+    fake = {"llm_provider": "fake", "vision_provider": "fake", "gemini_api_key": None}
+    cases = yaml.safe_load((EVAL_DIR / "addressed.yaml").read_text(encoding="utf-8"))["cases"]
+    ignore = {c["question"] for c in cases if c["expect"] == "ignore"}
+    assert len(ignore) >= 15 and len(cases) - len(ignore) >= 15
+    assert {c["lang"] for c in cases} == {"ru", "kk", "en"}
+
+    report = run(chat_client=ScriptedAddressModel(ignore).client(), overrides=fake)
+    assert report["provider"] == "openrouter:anthropic/claude-haiku-5.5"
+    assert report["errors"] == 0 and report["tag_spoken"] == 0
+    assert report["false_ignores"] == 0 and report["ignore_recall"] == 1.0
+    assert report["answered_ok"] == report["should_answer"]
+    assert {r["category"] for r in report["results"] if r["expect"] == "ignore"} == {
+        "not_addressed"
+    }
+    assert not failed(report, 0.8, 0)
+
+    always_silent = run(chat_client=ScriptedAddressModel(None).client(), overrides=fake)
+    assert always_silent["false_ignores"] > 0 and failed(always_silent, 0.8, 0)
+
+    always_answers = run(chat_client=ScriptedAddressModel(set()).client(), overrides=fake)
+    assert always_answers["ignore_recall"] == 0.0 and failed(always_answers, 0.8, 0)
+
+
+def test_not_addressed_head_detection():
+    from app.agent.service import not_addressed_head
+
+    assert not_addressed_head("[not_for_me]") is True
+    assert not_addressed_head(" [happy] [NOT FOR ME] Люди говорят.") is True
+    assert not_addressed_head("[not_fo") is None  # ещё не ясно — фразу не отдаём
+    assert not_addressed_head("[happy] ") is None
+    assert not_addressed_head("[happy] Кафе справа.") is False
+    assert not_addressed_head("Кафе справа.") is False

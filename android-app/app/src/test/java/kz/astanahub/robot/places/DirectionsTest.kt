@@ -4,6 +4,7 @@ import kotlin.math.PI
 import kz.astanahub.robot.core.Lang
 import kz.astanahub.robot.robot.RobotPose
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -35,6 +36,19 @@ class DirectionsTest {
         assertEquals(Side.LEFT, Directions.toVisitor(RobotSide.RIGHT))
         assertEquals(Side.BEHIND, Directions.toVisitor(RobotSide.AHEAD))
         assertEquals(Side.AHEAD, Directions.toVisitor(RobotSide.BEHIND))
+    }
+
+    @Test
+    fun `visitor angle - the screen arrow points the way for the visitor facing the robot`() {
+        // Место у робота слева — у посетителя справа (−90°); прямо перед роботом — за спиной посетителя (180°).
+        assertEquals(-Math.PI / 2, Directions.visitorAngle(Math.PI / 2), 1e-9)
+        assertEquals(Math.PI, kotlin.math.abs(Directions.visitorAngle(0.0)), 1e-9)
+        // За роботом — прямо перед посетителем.
+        assertEquals(0.0, Directions.visitorAngle(Math.PI), 1e-9)
+        // Сторона стрелки совпадает со словами («справа от вас»).
+        val bearing = Bearing(10.0, Math.PI / 2)
+        assertEquals(Side.RIGHT, bearing.visitorSide)
+        assertTrue(Directions.visitorAngle(bearing.relativeAngleRad) < 0) // по часовой от «вперёд» — вправо
     }
 
     @Test

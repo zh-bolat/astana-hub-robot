@@ -16,7 +16,16 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.db.models import FeedbackRow, MessageRow, QuestionLog, RobotRow, SessionRow
+from app.db.models import (
+    FeedbackRow,
+    LatencyEvent,
+    MessageRow,
+    QuestionLog,
+    RobotRow,
+    SessionRow,
+)
+
+NOT_ADDRESSED = "not_addressed"  # v1.4: реплика не роботу (решение агента), робот промолчал
 
 CSV_FIELDS = [
     "id",
@@ -58,13 +67,17 @@ class QuestionLogRepo:
             result = s.execute(delete(QuestionLog).where(QuestionLog.created_at < cutoff))
             s.execute(delete(MessageRow).where(MessageRow.created_at < cutoff))
             s.execute(delete(SessionRow).where(SessionRow.last_seen_at < cutoff))
+            # тайминги этапов — тот же срок хранения
+            s.execute(delete(LatencyEvent).where(LatencyEvent.ts < cutoff))
             s.commit()
             return result.rowcount or 0
 
     def all(self, only_unanswered: bool = False) -> list[QuestionLog]:
         stmt = select(QuestionLog).order_by(QuestionLog.id)
-        if only_unanswered:
-            stmt = stmt.where(QuestionLog.found.is_(False))
+        if only_unanswered:  # «не мне» (чужой разговор рядом с роботом) — не вопрос без ответа
+            stmt = stmt.where(
+                QuestionLog.found.is_(False), QuestionLog.category.is_distinct_from(NOT_ADDRESSED)
+            )
         with Session(self.engine) as s:
             return list(s.scalars(stmt))
 
@@ -72,7 +85,11 @@ class QuestionLogRepo:
         """Последние `limit` обменов разговора, по порядку (старые первыми)."""
         stmt = (
             select(QuestionLog)
-            .where(QuestionLog.session_id == session_id)
+            .where(
+                QuestionLog.session_id == session_id,
+                # «не мне» робот не отвечал и в чат на экране не выводил
+                QuestionLog.category.is_distinct_from(NOT_ADDRESSED),
+            )
             .order_by(QuestionLog.id.desc())
             .limit(limit)
         )

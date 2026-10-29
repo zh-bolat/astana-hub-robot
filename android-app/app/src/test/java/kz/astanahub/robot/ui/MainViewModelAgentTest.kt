@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -56,6 +57,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kz.astanahub.robot.ui.face.FaceInputMapper
 
 /** Агентский чат на экране: события `/v1/chat`, действия, запасной путь, режимы экрана, человек и голова. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -80,6 +82,18 @@ class MainViewModelAgentTest {
             return true
         }
 
+        /** Сколько непрерывных озвучек (speakStream) открыто за ход. */
+        var streams = 0
+
+        override suspend fun speakStream(
+            phrases: kotlinx.coroutines.channels.ReceiveChannel<String>,
+            lang: Lang,
+            listener: kz.astanahub.robot.voice.SpeechListener,
+        ): Boolean {
+            streams++
+            return super.speakStream(phrases, lang, listener)
+        }
+
         override fun stopSpeaking() { stops++ }
         override fun setLanguage(lang: Lang) = Unit
     }
@@ -89,7 +103,9 @@ class MainViewModelAgentTest {
         override fun startFocusFollow(faceId: Int, onLost: () -> Unit): Boolean { calls += "follow:$faceId"; return true }
         override fun stopFocusFollow() { calls += "stop" }
         override fun resetHead() { calls += "reset" }
-        override fun nod() { calls += "nod" }
+        override fun nod(degrees: Int) { calls += "nod:$degrees" }
+        override fun turnTo(degrees: Int) { calls += "turn:$degrees" }
+        override fun tilt(degrees: Int) { calls += "tilt:$degrees" }
     }
 
     private val phrases = Phrases { key, lang -> "${key.name}:${lang.code}" }
@@ -136,7 +152,10 @@ class MainViewModelAgentTest {
     private fun TestScope.vm(
         withMap: Boolean = true,
         screensaverMillis: Long? = null,
-        head: HeadController? = HeadController(headGateway, clock = { testScheduler.currentTime }),
+        head: HeadController? = HeadController(
+            headGateway, clock = { testScheduler.currentTime },
+            schedule = { ms, block -> backgroundScope.launch { delay(ms); block() } },
+        ),
     ): MainViewModel {
         val wf = if (withMap) {
             val file = java.io.File.createTempFile("places", ".json").apply { delete(); deleteOnExit() }
@@ -180,6 +199,24 @@ class MainViewModelAgentTest {
     }
 
     @Test
+    fun `agent phrases of one turn go to the voice as one continuous stream`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Раз."))
+            delay(50)
+            emit(ChatEvent.Phrase("Два."))
+            delay(300) // первая и вторая уже доиграли — пауза в потоке не рвёт озвучку
+            emit(ChatEvent.Phrase("Три."))
+            emit(done)
+        }
+        val vm = vm()
+        vm.submit("Расскажи")
+        advanceUntilIdle()
+        assertEquals(listOf("Раз.", "Два.", "Три."), voice.spoken)
+        assertEquals(1, voice.streams)
+        assertEquals("Раз. Два. Три.", vm.state.value.answer)
+    }
+
+    @Test
     fun `where_is action - robot speaks the direction before the agent phrase, not duplicated in history`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Action(ChatAction("where_is", "cafe")))
@@ -192,8 +229,44 @@ class MainViewModelAgentTest {
         assertEquals(voice.spoken.toString(), "Могу проводить.", voice.spoken.last())
         assertTrue(voice.spoken.toString(), voice.spoken.first().contains("Кафе"))
         assertEquals("cafe", vm.state.value.guideTarget?.id)
+        assertEquals("island where_is", "Кафе", vm.state.value.whereIs?.place)
         coVerify(exactly = 0) { robot.navigateTo(any(), any()) }
         coVerify(exactly = 0) { backend.postLocalMessage(any(), any()) }
+    }
+
+    @Test
+    fun `yes after the robot offered to guide - drives at once, even while the robot is still speaking`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Action(ChatAction("where_is", "cafe")))
+            emit(ChatEvent.Phrase("Кафе справа. Проводить вас туда?"))
+            delay(3_000) // ответ ещё идёт — робот «занят», короткие реплики обычно отбрасываются
+            emit(done.copy(actions = listOf(ChatAction("where_is", "cafe"))))
+        }
+        coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(1_000); NavigationResult.Arrived }
+        val vm = vm()
+        vm.submit("Где поесть?")
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals("cafe", vm.state.value.guideTarget?.id)
+        voice.asr.emit(Transcript("Да, проводи", isFinal = true))
+        runCurrent()
+        coVerify(exactly = 1) { robot.navigateTo(any(), any()) }
+        advanceUntilIdle()
+        coVerify(exactly = 1) { backend.chat(any()) } // «да» не ушло на сервер — поездка началась локально
+    }
+
+    @Test
+    fun `short command while the robot speaks is not dropped`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Добро пожаловать в Astana Hub, рад вас видеть!"))
+            delay(3_000)
+            emit(done)
+        }
+        val vm = vm()
+        vm.submit("Привет")
+        advanceTimeBy(500); runCurrent()
+        voice.asr.emit(Transcript("Где кафе", isFinal = true)) // 2 слова, но это команда роботу
+        advanceUntilIdle()
+        coVerify(exactly = 2) { backend.chat(any()) }
     }
 
     @Test
@@ -370,22 +443,20 @@ class MainViewModelAgentTest {
     // --- режимы экрана, человек, приветствие ---
 
     @Test
-    fun `menu opens by button and returns to the face after 30 s`() = runTest(dispatcher) {
+    fun `menu opens by swipe and stays - no timer back to the face, swipe back to the face`() = runTest(dispatcher) {
         chat { emit(done) }
         val vm = vm()
         vm.openMenu()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
-        advanceTimeBy(MainViewModel.MENU_IDLE_MILLIS - 1_000); runCurrent()
+        // MF5: прежний таймер (90 с) больше не возвращает к лицу.
+        advanceTimeBy(150_000); runCurrent()
         assertEquals(ScreenMode.MENU, vm.state.value.mode)
-        advanceTimeBy(2_000); runCurrent()
-        assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        vm.openMenu()
         vm.showFace()
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
     }
 
     @Test
-    fun `visitor arrives - wakes from sleep, greets through the agent with a new session`() = runTest(dispatcher) {
+    fun `tap wakes from sleep, greets through the agent with a new session, visitor alone does not`() = runTest(dispatcher) {
         chat {
             emit(ChatEvent.Phrase("Здравствуйте! Чем помочь?"))
             emit(done)
@@ -393,20 +464,23 @@ class MainViewModelAgentTest {
         val vm = vm(screensaverMillis = 60_000)
         advanceTimeBy(61_000); runCurrent()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        // MF4: подошедший не будит и не здоровается.
         presence.emit(PresenceEvent.Arrived(4, greet = true))
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
+        assertTrue(requests.isEmpty())
+        vm.wakeByTap()
         advanceTimeBy(100); runCurrent()
         assertEquals(ScreenMode.FACE, vm.state.value.mode)
-        assertEquals(Emotion.EXCITED, vm.state.value.emotion)
         advanceTimeBy(2_000); runCurrent()
         val req = requests.single()
         assertEquals(ChatRequest.EVENT_VISITOR_ARRIVED, req.event)
         assertEquals("", req.question)
         assertEquals(listOf("Здравствуйте! Чем помочь?"), voice.spoken)
-        assertEquals("follow:4", headGateway.calls.last())
         vm.submit("Привет")
         advanceTimeBy(500); runCurrent()
         assertEquals(req.sessionId, requests[1].sessionId)
-        presence.emit(PresenceEvent.Left) // иначе таймер заставки перезапускается бесконечно (человек рядом)
+        // Человек рядом сон не держит: 5 мин (тут 60 с) без разговора — спит.
         advanceUntilIdle()
         assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
     }
@@ -431,7 +505,7 @@ class MainViewModelAgentTest {
     }
 
     @Test
-    fun `visitor left - sleep, session closed, head reset - but not while driving`() = runTest(dispatcher) {
+    fun `visitor left - head reset, screen stays awake - but not while driving`() = runTest(dispatcher) {
         chat { emit(done) }
         coEvery { robot.navigateTo(any(), any()) } coAnswers { delay(10_000); NavigationResult.Arrived }
         val vm = vm()
@@ -449,8 +523,7 @@ class MainViewModelAgentTest {
         runCurrent()
         presence.emit(PresenceEvent.Left)
         runCurrent()
-        assertEquals(ScreenMode.SLEEP, vm.state.value.mode)
-        assertEquals(Emotion.NEUTRAL, vm.state.value.emotion)
+        assertEquals(ScreenMode.FACE, vm.state.value.mode) // не усыпляет: мешало входу в диагностику
         assertEquals("reset", headGateway.calls.last())
     }
 
@@ -478,5 +551,63 @@ class MainViewModelAgentTest {
         assertEquals(listOf(Lang.EN), voice.langs)
         assertEquals(Lang.EN, vm.state.value.lang)
         assertFalse(vm.state.value.offline)
+    }
+
+    // --- ответ там, где посетитель (MF5: без прототипного `autoFace`) ---
+
+    @Test
+    fun `answer to a menu question stays on the page, speech is not cut, nothing switches the screen`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Кафе на первом этаже."))
+            delay(500)
+            emit(ChatEvent.Phrase("Проводить вас?"))
+            emit(done)
+        }
+        val vm = vm()
+        vm.openMenu()
+        vm.submitButton("Где кафе?")
+        assertEquals(ScreenMode.MENU, vm.state.value.mode) // пока думает — меню на месте
+        advanceTimeBy(50); runCurrent()
+        assertEquals(Phase.SPEAKING, vm.state.value.phase)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+
+        val stopsBefore = voice.stops
+        advanceTimeBy(1_000); runCurrent()
+        // Договорил обе фразы на странице — экран не менялся.
+        assertEquals(listOf("Кафе на первом этаже.", "Проводить вас?"), voice.spoken)
+        assertEquals(stopsBefore, voice.stops)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+    }
+
+    @Test
+    fun `legacy mode - answer stays on the page, swipes go both ways`() = runTest(dispatcher) {
+        mode = ChatMode.LEGACY
+        val vm = vm()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        vm.submitButton("Что такое Astana Hub?")
+        advanceTimeBy(50); runCurrent()
+        assertEquals(listOf("Ответ ask."), voice.spoken)
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        advanceUntilIdle()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+        vm.showFace()
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.openMenu()
+        assertEquals(ScreenMode.MENU, vm.state.value.mode)
+    }
+
+    @Test
+    fun `question asked on the face - the answer stays on the face`() = runTest(dispatcher) {
+        chat {
+            emit(ChatEvent.Phrase("Есть коворкинг."))
+            delay(2_000)
+            emit(done)
+        }
+        val vm = vm()
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
+        vm.submit("Есть коворкинг?")
+        advanceTimeBy(50); runCurrent()
+        assertEquals(Phase.SPEAKING, vm.state.value.phase)
+        assertEquals(ScreenMode.FACE, vm.state.value.mode)
     }
 }

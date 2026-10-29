@@ -23,7 +23,10 @@ class AstanaHubApp : Application() {
         // (только длина и хеш, см. core/LogSafe). В release дерево Timber не сажаем — logcat пуст.
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
         // Первым делом — обработчик падений: перезапуск киоска вместо системного диалога.
-        crashGuard = CrashGuard(this, MainActivity::class.java, TechPauseActivity::class.java).also { it.install() }
+        crashGuard = CrashGuard(
+            this, MainActivity::class.java, TechPauseActivity::class.java,
+            buildLabel = "${BuildConfig.FLAVOR} ${BuildConfig.BUILD_TYPE} ${BuildConfig.VERSION_NAME}",
+        ).also { it.install() }
         techPause = crashGuard.inPause()
         if (techPause) {
             Timber.w("technical pause: SDK and network are not started")
@@ -31,5 +34,36 @@ class AstanaHubApp : Application() {
         }
         // На роботе здесь же создаётся единственный AppAgent (см. src/robot/.../FlavorGateways.kt).
         container = AppContainer(this)
+        registerActivityLifecycleCallbacks(ForegroundTracker { visible, force ->
+            container.assistantGuard.setForeground(visible, force)
+            // Ушли с экрана — микрофон глушится (MainViewModel: пауза прослушивания, live закрыт); вернулись — снова.
+            container.appForeground.value = visible
+        })
+    }
+
+    /**
+     * Приложение на переднем плане, пока виден хоть один его экран. onResume — применить заново (AgentOS сам
+     * открывает микрофон при выходе приложения на передний план, глушим после него).
+     */
+    private class ForegroundTracker(private val onChange: (visible: Boolean, force: Boolean) -> Unit) :
+        ActivityLifecycleCallbacks {
+        private var started = 0
+
+        override fun onActivityStarted(activity: android.app.Activity) {
+            started++
+            if (started == 1) onChange(true, false)
+        }
+
+        override fun onActivityResumed(activity: android.app.Activity) = onChange(true, true)
+
+        override fun onActivityStopped(activity: android.app.Activity) {
+            started = (started - 1).coerceAtLeast(0)
+            if (started == 0) onChange(false, false)
+        }
+
+        override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+        override fun onActivityPaused(activity: android.app.Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+        override fun onActivityDestroyed(activity: android.app.Activity) = Unit
     }
 }

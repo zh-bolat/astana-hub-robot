@@ -18,15 +18,21 @@ from app.agent.service import ChatService, build_chat_client
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
 from app.config import Settings
-from app.db import MessageRepo, QuestionLogRepo, SessionRepo, make_engine
+from app.db import LatencyRepo, MessageRepo, QuestionLogRepo, SessionRepo, make_engine
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
 from app.guard import GuardMiddleware
+from app.knowledge.index import KbIndexer
 from app.knowledge.pg import DbKnowledgeSource, KnowledgeRepo
+from app.knowledge.search import KbSearch
 from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
+from app.live.services import LiveServicesFactory, build_live_services
+from app.live.session import LiveRegistry, route_pipecat_logs
+from app.live.session import router as live_router
 from app.llm.base import LLMProvider
+from app.llm.embeddings import Embedder, build_embedder
 from app.llm.factory import build_text_provider, build_vision_provider
 from app.log_writer import BackgroundLogWriter, purge_job
 from app.logging_setup import (
@@ -36,6 +42,8 @@ from app.logging_setup import (
     reset_request_id,
     set_request_id,
 )
+from app.metrics import NULL_RECORDER, LatencyRecorder
+from app.metrics_api import router as metrics_router
 from app.ratelimit import RateLimiter
 from app.sentry_setup import init_sentry
 from app.service import AnswerService
@@ -174,12 +182,18 @@ def create_app(
     log_repo: QuestionLogRepo | None = None,
     stt_stream: StreamingStt | None = None,
     chat_client: AsyncOpenAI | None = None,
+    live_services: LiveServicesFactory | None = None,
+    embedder: Embedder | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
-    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi).
-    chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт)."""
+    knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi); с подменённой базой
+    поиска по базе нет (он работает по kb_chunks в Postgres).
+    chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт).
+    live_services — фабрика сервисов Pipecat для WS /v1/live (тесты: фейковые VAD/STT/TTS).
+    embedder — эмбеддинги поиска (тесты: FakeEmbeddings); иначе по EMBEDDING_PROVIDER."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    route_pipecat_logs()
     # ADR 0001: трассировка Agents SDK выключена всегда (тексты посетителей не уходят в OpenAI)
     ensure_tracing_disabled()
     if not settings.robot_token.get_secret_value():
@@ -205,7 +219,28 @@ def create_app(
         sessions=SessionRepo(engine) if log_repo is None else None,
         max_pending=settings.question_log_queue_max,
     )
-    service = AnswerService(settings, store, text_llm, vision_llm, log_writer)
+    latency_repo = LatencyRepo(engine)
+    # Тайминги этапов — той же фоновой очередью; при подменённом логе (eval, openapi) — выключены
+    metrics = (
+        LatencyRecorder(log_writer.submit_job, latency_repo.add_many)
+        if log_repo is None
+        else NULL_RECORDER
+    )
+    service = AnswerService(settings, store, text_llm, vision_llm, log_writer, metrics)
+    # Поиск по базе (RAG): справка к ходу (prefetch) или инструмент search_kb (tool) + фоновая индексация
+    kb_search: KbSearch | None = None
+    indexer: KbIndexer | None = None
+    if (
+        syncer is not None  # база из Postgres (не подменена)
+        and settings.retrieval_kind() != "off"
+        and (embedder is not None or settings.resolved_retrieval_mode() != "off")
+    ):
+        embedder = embedder or build_embedder(settings)
+    else:
+        embedder = None
+    if embedder is not None:
+        kb_search = KbSearch(engine, embedder, settings.embedding_query_timeout_s)
+        indexer = KbIndexer(engine, embedder, settings.embedding_batch_size)
     chat = ChatService(
         settings,
         store,
@@ -214,13 +249,15 @@ def create_app(
         chat_client or build_chat_client(settings),
         messages=MessageRepo(engine) if log_repo is None else None,
         sessions=SessionRepo(engine) if log_repo is None else None,
+        metrics=metrics,
+        search=kb_search,
     )
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        sync_task = refresh_task = retention_task = None
+        sync_task = refresh_task = retention_task = index_task = None
         sheet_client = None
         if syncer is not None:
             refresh_task = asyncio.create_task(
@@ -231,6 +268,11 @@ def create_app(
                 sync_task = asyncio.create_task(
                     syncer.run_sheet_periodic(settings.knowledge_sync_interval_s, sheet_client)
                 )
+        if indexer is not None:
+            # при старте (фрагментов нет / устарели) и после синков, которые что-то поменяли; не блокирует
+            index_task = asyncio.create_task(
+                indexer.run_periodic(settings.knowledge_reload_interval_s)
+            )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(
                 _retention_loop(log_writer, repo, settings.question_log_retention_days)
@@ -241,7 +283,10 @@ def create_app(
             await _cancel(sync_task)
             await _cancel(refresh_task)
             await _cancel(retention_task)
-            await close_resources(sheet_client, text_llm, vision_llm, stt, tts_provider, chat)
+            await _cancel(index_task)
+            await close_resources(
+                sheet_client, text_llm, vision_llm, stt, tts_provider, chat, embedder
+            )
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
 
@@ -262,12 +307,21 @@ def create_app(
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service
     app.state.chat = chat
+    app.state.kb_search = kb_search
+    app.state.indexer = indexer
     app.state.log_repo = repo
     app.state.log_writer = log_writer
+    app.state.metrics = metrics
+    app.state.latency_repo = latency_repo
+    app.state.admin_rate_limiter = RateLimiter(settings.admin_rate_limit_per_min)
     app.state.stt = stt
     app.state.tts = tts_provider
     app.state.stt_stream = stt_stream or build_stt_stream_provider(settings, stt)
     app.state.speech_rate_limiter = RateLimiter(settings.speech_rate_limit_per_min)
+    app.state.live_registry = LiveRegistry()
+    app.state.live_services = live_services or (
+        build_live_services if settings.resolved_live_enabled() else None
+    )
     app.state.tts_cache = TtsCache(
         memory_bytes=settings.tts_cache_memory_mb * 1024 * 1024,
         disk_dir=settings.tts_cache_dir,
@@ -277,6 +331,8 @@ def create_app(
     install_error_handlers(app)
     app.include_router(router)
     app.include_router(speech_router)
+    app.include_router(live_router)
+    app.include_router(metrics_router)
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(
@@ -290,9 +346,13 @@ def create_app(
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
             "chat": chat.name,
+            "retrieval": (
+                f"{chat.retrieval}:{embedder.name}:{embedder.model}" if embedder else "off"
+            ),
             "stt": app.state.stt.name,
             "stt_stream": app.state.stt_stream.name,
             "tts": app.state.tts.name,
+            "live": app.state.live_services is not None and settings.resolved_live_enabled(),
         },
     )
     return app

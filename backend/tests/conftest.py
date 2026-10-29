@@ -186,6 +186,8 @@ def settings(tmp_path: Path, knowledge_dir: Path, db: Engine, pg_url: str) -> Se
         elevenlabs_api_key=None,
         tts_cache_dir=tmp_path / "tts_cache",
         speech_rate_limit_per_min=1000,
+        # поиск по базе — только в тестах, которые передают embedder (FakeEmbeddings), без сети
+        embedding_provider="off",
     )
 
 
@@ -194,7 +196,13 @@ def make_client(settings: Settings):
     clients: list[TestClient] = []
 
     def _make(
-        text_llm=None, vision_llm=None, speech=None, chat_client=None, **overrides
+        text_llm=None,
+        vision_llm=None,
+        speech=None,
+        chat_client=None,
+        tts=None,
+        embedder=None,
+        **overrides,
     ) -> TestClient:
         s = settings.model_copy(update=overrides)
         app = create_app(
@@ -202,7 +210,9 @@ def make_client(settings: Settings):
             text_llm or FakeProvider(),
             vision_llm or FakeProvider(),
             speech,
+            tts=tts,
             chat_client=chat_client,
+            embedder=embedder,
         )
         c = TestClient(app)
         clients.append(c)

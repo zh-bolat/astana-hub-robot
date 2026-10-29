@@ -64,6 +64,30 @@ class SkillVoiceGatewayTest {
     }
 
     @Test
+    fun `assistant guard - foreground with server ASR silences SkillApi, background restores, no playText`() = runTest {
+        every { api.addApiEventListener(capture(apiListener)) } returns Unit
+        val g = SkillVoiceGateway(backgroundScope, { api }, EchoGate(clock = { now }))
+        g.connect(context)
+        apiListener.captured.handleApiConnected()
+        val guard = kz.astanahub.robot.voice.AssistantGuard(g)
+        guard.setBuiltinListening(false) // ASR=server
+        guard.setForeground(true)
+        verify { api.setRecognizable(false) }
+
+        // системный запрос, пока ассистент заглушён, — не становится репликой посетителя
+        val heard = mutableListOf<String>()
+        backgroundScope.launch { g.transcripts.collect { heard += it.text } }
+        runCurrent()
+        g.onSystemRequest("chat", "где кафе", null)
+        runCurrent()
+        assertTrue(heard.isEmpty())
+
+        guard.setForeground(false)
+        verify { api.setRecognizable(true) }
+        verify(exactly = 0) { api.playText(any<com.ainirobot.coreservice.client.speech.entity.TTSEntity>(), any()) }
+    }
+
+    @Test
     fun `skill api constructor failing leaves a silent but working gateway`() = runTest {
         val g = SkillVoiceGateway(backgroundScope, { throw NoClassDefFoundError("SkillApi") })
         g.connect(context)

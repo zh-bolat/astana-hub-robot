@@ -10,10 +10,13 @@ data class VadConfig(
     val minSpeechRms: Double = 500.0,
     /** Порог речи = max(minSpeechRms, шумовой фон × noiseFactor). */
     val noiseFactor: Double = 3.0,
-    /** Сколько подряд «громкого» нужно для старта (отсекает щелчки). */
-    val startMillis: Int = 120,
-    /** Тишина после речи, после которой фраза закончена. */
-    val endSilenceMillis: Int = 800,
+    /**
+     * Минимальная длительность речи: столько подряд «громкого» нужно для старта (отсекает щелчки, смешки, «м»).
+     * Live STT открывается только после старта — короткие звуки не тратят запрос.
+     */
+    val startMillis: Int = DEFAULT_MIN_SPEECH_MS,
+    /** Тишина после речи, после которой фраза закончена (меняется на экране диагностики). */
+    val endSilenceMillis: Int = DEFAULT_END_SILENCE_MS,
     val maxUtteranceMillis: Int = 15_000,
     /** Сколько звука до старта сохранить, чтобы не обрезать первый слог. */
     val preRollMillis: Int = 300,
@@ -21,6 +24,41 @@ data class VadConfig(
     val noSpeechTimeoutMillis: Int = 8_000,
 ) {
     val frameSamples: Int get() = sampleRate * frameMillis / 1000
+
+    /** Пороги под выбранную чувствительность микрофона (экран диагностики). */
+    fun withSensitivity(sensitivity: MicSensitivity): VadConfig = copy(
+        minSpeechRms = sensitivity.minSpeechRms,
+        noiseFactor = sensitivity.noiseFactor,
+        startMillis = sensitivity.minSpeechMillis,
+    )
+
+    companion object {
+        /** Было 0,8 с; 0,5 с — робот начинает думать заметно раньше. */
+        const val DEFAULT_END_SILENCE_MS = 500
+
+        /** Было 120 мс; на роботе live STT открывался на каждый шорох (пустые распознавания каждые ~10 с). */
+        const val DEFAULT_MIN_SPEECH_MS = 250
+
+        /** Звук громче порога хотя бы столько, но короче минимальной речи — «короткий звук» (счётчик). */
+        const val SHORT_SOUND_MIN_MS = 60
+    }
+}
+
+/**
+ * Чувствительность микрофона: порог громкости (минимальный RMS и множитель над шумовым фоном) и минимальная
+ * длительность речи до старта распознавания. ПРОВЕРИТЬ НА РОБОТЕ: подобрать уровень в шумном холле.
+ */
+enum class MicSensitivity(val code: String, val minSpeechRms: Double, val noiseFactor: Double, val minSpeechMillis: Int) {
+    /** Шумный холл: только громкая и длинная речь рядом. */
+    LOW("low", 900.0, 4.0, 350),
+    NORMAL("normal", 500.0, 3.0, VadConfig.DEFAULT_MIN_SPEECH_MS),
+    /** Тихое помещение / тихий голос. */
+    HIGH("high", 300.0, 2.2, 180),
+    ;
+
+    companion object {
+        fun fromCode(code: String?): MicSensitivity? = entries.firstOrNull { it.code.equals(code?.trim(), ignoreCase = true) }
+    }
 }
 
 enum class VadEvent { NONE, SPEECH_STARTED, SPEECH_ENDED, MAX_LENGTH, NO_SPEECH }
@@ -46,12 +84,19 @@ class EnergyVad(private val config: VadConfig = VadConfig()) {
     /** Последний RMS 0..1 — для индикатора уровня микрофона. */
     var level: Float = 0f
         private set
+    /** Звуки громче порога, оборвавшиеся раньше [VadConfig.startMillis] (до начала речи). */
+    var shortSounds: Int = 0
+        private set
+    /** Длительность последнего такого звука, мс. */
+    var lastShortSoundMillis: Int = 0
+        private set
 
     private val startFrames = max(1, config.startMillis / config.frameMillis)
     private val endFrames = max(1, config.endSilenceMillis / config.frameMillis)
     private val maxFrames = config.maxUtteranceMillis / config.frameMillis
     private val preRollFrames = config.preRollMillis / config.frameMillis
     private val noSpeechFrames = config.noSpeechTimeoutMillis / config.frameMillis
+    private val shortSoundFrames = max(1, VadConfig.SHORT_SOUND_MIN_MS / config.frameMillis)
 
     fun accept(frame: ShortArray): VadEvent {
         if (finished) return VadEvent.NONE
@@ -62,10 +107,19 @@ class EnergyVad(private val config: VadConfig = VadConfig()) {
         val loud = rms >= threshold
 
         if (!isSpeaking) {
-            // Шумовой фон считаем только до начала речи.
-            noiseFloor = if (noiseFloor == 0.0) rms else noiseFloor * 0.95 + rms * 0.05
+            // Шумовой фон считаем только до начала речи; громкие кадры подтягивают его медленно —
+            // иначе на минимальной длительности речи порог догоняет сам голос и старт не наступает.
+            noiseFloor = when {
+                noiseFloor == 0.0 -> rms
+                loud -> noiseFloor * 0.995 + rms * 0.005
+                else -> noiseFloor * 0.95 + rms * 0.05
+            }
             preRoll.addLast(frame)
             while (preRoll.size > preRollFrames + startFrames) preRoll.removeFirst()
+            if (!loud && loudFrames >= shortSoundFrames) {
+                shortSounds++
+                lastShortSoundMillis = loudFrames * config.frameMillis
+            }
             loudFrames = if (loud) loudFrames + 1 else 0
             if (loudFrames >= startFrames) {
                 isSpeaking = true

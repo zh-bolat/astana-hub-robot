@@ -69,6 +69,12 @@ class OkHttpChatClient(
      */
     private suspend fun read(response: Response, emit: suspend (ChatEvent) -> Unit): ChatEvent? {
         if (!response.isSuccessful) return ChatEvent.Error(httpError(response))
+        if (response.body?.contentType()?.subtype == "json") {
+            // JSON-режим (v1.2: в т.ч. `ignored: true` на шум): те же события, что и в потоке.
+            val events = ChatEventDecoder.decodeJsonBody(response.body?.string().orEmpty())
+            events.forEach { emit(it) }
+            return null
+        }
         val source = response.body?.source() ?: return ChatEvent.Error(BackendError(ErrorKind.UNKNOWN, message = "empty body"))
         val parser = SseParser()
         while (true) {

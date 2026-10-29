@@ -9,7 +9,7 @@ import pytest
 
 from app.config import Settings
 from app.speech.base import SpeechError, has_letters
-from app.speech.elevenlabs import ElevenLabsProvider
+from app.speech.elevenlabs import ElevenLabsProvider, VoiceSettings
 from app.speech.factory import FallbackTtsProvider, build_stt_provider, build_tts_provider
 from app.speech.fake import SILENT_MP3, FakeSpeechProvider
 from tests.conftest import AUTH
@@ -79,6 +79,14 @@ def test_tts_speech_provider_header(make_client):
     assert r.headers["x-speech-provider"] == "fake"
 
 
+def test_tts_voice_header_names_the_voice_for_the_robot_phrase_cache(make_client):
+    c = make_client()
+    speech = c.app.state.tts
+    for _ in range(2):  # и промах, и попадание в кеш сервера
+        r = c.post("/v1/tts", json={"text": "Привет.", "lang": "ru"}, headers=AUTH)
+        assert r.headers["x-tts-voice"] == speech.voice_id("ru")
+
+
 def test_tts_speech_provider_header_on_error(make_client):
     c = make_client(speech=FakeSpeechProvider(fail=True))
     r = c.post("/v1/tts", json={"text": "Привет.", "lang": "ru"}, headers=AUTH)
@@ -140,8 +148,71 @@ def test_elevenlabs_tts_request(lang, model, voice):
     assert req.url.path == f"/v1/text-to-speech/{voice}"
     assert req.url.params["output_format"] == "mp3_44100_128"
     assert req.headers["xi-api-key"] == "test"
-    assert json.loads(req.content) == {"text": "Сәлем.", "model_id": model, "language_code": lang}
+    body = json.loads(req.content)
+    assert body.pop("voice_settings") == VoiceSettings().for_model(model)
+    # тег подачи v3 (ELEVENLABS_V3_TAG) — только в теле запроса синтеза
+    text = "[cheerfully] Сәлем." if model == "eleven_v3" else "Сәлем."
+    assert body == {"text": text, "model_id": model, "language_code": lang}
     assert model in p.voice_id(lang)  # модель входит в ключ кеша
+
+
+def test_elevenlabs_voice_settings_per_model():
+    vs = VoiceSettings(
+        stability=0.3, similarity_boost=0.7, style=0.2, use_speaker_boost=False, speed=1.5
+    )
+    # Eleven v3: только своя stability (ELEVENLABS_V3_STABILITY), округлённая до 0.0 / 0.5 / 1.0
+    assert vs.for_model("eleven_v3") == {"stability": 0.5}
+    assert VoiceSettings(v3_stability=0.2).for_model("eleven_v3") == {"stability": 0.0}
+    assert VoiceSettings(v3_stability=0.9).for_model("eleven_v3") == {"stability": 1.0}
+    assert VoiceSettings(stability=0.0).for_model("eleven_v3") == {"stability": 0.5}
+    flash = vs.for_model("eleven_flash_v2_5")
+    assert flash == {
+        "stability": 0.3,
+        "similarity_boost": 0.7,
+        "style": 0.2,
+        "use_speaker_boost": False,
+        "speed": 1.2,  # обрезано до допустимого максимума
+    }
+
+
+def test_elevenlabs_voice_settings_change_cache_key():
+    a = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    b = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    b.voice_settings = VoiceSettings(stability=0.9, v3_stability=1.0)
+    assert a.voice_id("ru") != b.voice_id("ru")
+    assert a.voice_id("kk") != b.voice_id("kk")  # v3: 0.5 -> 1.0
+    c = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    c.voice_settings = VoiceSettings(v3_tag="")
+    assert a.voice_id("kk") != c.voice_id("kk")  # тег v3 — другое аудио
+    assert a.voice_id("ru") == c.voice_id("ru")  # flash тег не получает
+
+
+def test_elevenlabs_defaults_are_the_chosen_voices():
+    s = Settings(_env_file=None)
+    assert (s.elevenlabs_voice_ru, s.elevenlabs_voice_en, s.elevenlabs_voice_kk) == (
+        "dVRDrbP5ULGXB94se4KZ",  # Alina
+        "FGY2WhTYpPnrIDTdsKH5",  # Laura
+        "Jbte7ht1CqapnZvc4KpK",  # Kari
+    )
+    vs = VoiceSettings.from_settings(s)
+    assert vs.for_model("eleven_flash_v2_5") == {
+        "stability": 0.35,
+        "similarity_boost": 0.8,
+        "style": 0.45,
+        "use_speaker_boost": True,
+        "speed": 1.1,
+    }
+    assert vs.for_model("eleven_v3") == {"stability": 0.5}
+    assert vs.tag_text("eleven_v3", "Сәлем!") == "[cheerfully] Сәлем!"
+    assert vs.tag_text("eleven_flash_v2_5", "Привет!") == "Привет!"
+
+
+def test_elevenlabs_kk_never_uses_flash():
+    p = _eleven(lambda r: httpx.Response(200, content=b"mp3"))
+    p.tts_model_kk = "eleven_flash_v2_5"  # ошибка в env
+    assert p.tts_model("kk") == "eleven_v3"
+    p.tts_models = {"ru": "eleven_turbo_v2_5"}
+    assert p.tts_model("ru") == "eleven_turbo_v2_5" and p.tts_model("en") == "eleven_flash_v2_5"
 
 
 def test_elevenlabs_tts_no_language_code_for_multilingual_v2():
@@ -431,6 +502,43 @@ def test_tts_fallback_used_on_primary_error():
     assert (tts.name, tts.voice_id("kk")) == ("broken", "broken-kk")
 
 
+class _QuotaTts(_BrokenTts):
+    calls = 0
+
+    async def tts(self, text, lang):
+        self.calls += 1
+        raise SpeechError("elevenlabs tts http 401: quota_exceeded")
+
+
+def test_tts_primary_paused_after_quota_error():
+    """Кончилась квота: следующие фразы идут сразу в запасной, основной не дёргаем PAUSE_S."""
+    now = [1000.0]
+    primary, fallback = _QuotaTts(), FakeSpeechProvider()
+    tts = FallbackTtsProvider(primary, fallback, clock=lambda: now[0])
+    assert asyncio.run(tts.tts("Раз", "ru")) == SILENT_MP3
+    assert asyncio.run(tts.tts("Два", "ru")) == SILENT_MP3
+    assert (primary.calls, fallback.tts_calls, tts.primary_paused()) == (1, 2, True)
+    assert b"".join(asyncio.run(_collect(tts.tts_stream("Три", "ru")))) == SILENT_MP3
+    assert primary.calls == 1
+    now[0] += FallbackTtsProvider.PAUSE_S + 1
+    asyncio.run(tts.tts("Четыре", "ru"))
+    assert primary.calls == 2  # пауза прошла — снова пробуем основной
+
+
+async def _collect(stream):
+    return [chunk async for chunk in stream]
+
+
+def test_tts_network_error_does_not_pause_primary():
+    primary, fallback = (
+        _BrokenTts(),
+        FakeSpeechProvider(),
+    )  # "quota exceeded" без кода — обычная ошибка
+    tts = FallbackTtsProvider(primary, fallback)
+    asyncio.run(tts.tts("Раз", "ru"))
+    assert tts.primary_paused() is False
+
+
 def test_tts_fallback_built_from_settings():
     s = Settings(
         _env_file=None,
@@ -445,3 +553,27 @@ def test_tts_fallback_built_from_settings():
     assert (tts.primary.name, tts.fallback.name) == ("elevenlabs", "openrouter")
     same = s.model_copy(update={"tts_fallback_provider": "elevenlabs"})
     assert build_tts_provider(same).name == "elevenlabs"
+
+
+def test_laugh_word_becomes_real_laughter_on_tag_models_and_is_dropped_for_flash():
+    from app.speech.elevenlabs import VoiceSettings
+
+    v = VoiceSettings(v3_tag="[cheerfully]")
+    assert (
+        v.tag_text("eleven_v4_turbo", "Ха-ха! Кофе я не пью.")
+        == "[cheerfully] [laughs] Кофе я не пью."
+    )
+    assert (
+        v.tag_text("eleven_v4_turbo", "Ха! Хороший вопрос.")
+        == "[cheerfully] [chuckles] Хороший вопрос."
+    )
+    assert (
+        v.tag_text("eleven_v3", "Haha! I know the way.") == "[cheerfully] [laughs] I know the way."
+    )
+    assert v.tag_text("eleven_v4_turbo", "Хабар бар.") == "[cheerfully] Хабар бар."  # не смех
+    assert v.tag_text("eleven_flash_v2_5", "Ха-ха! Кофе я не пью.") == "Кофе я не пью."
+    assert v.tag_text("eleven_flash_v2_5", "Ха-ха!") == "Ха-ха!"  # кроме смеха ничего — как есть
+    assert (
+        v.tag_text("eleven_v4_turbo", "Haha!") == "[cheerfully] Haha!"
+    )  # пусто после тегов — ElevenLabs 400
+    assert "laugh=1" in v.signature("eleven_v4_turbo")  # старый кеш аудио со смехом не подхватится

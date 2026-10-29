@@ -6,6 +6,7 @@ import com.ainirobot.coreservice.client.RobotApi
 import com.ainirobot.coreservice.client.module.ModuleCallbackApi
 import kz.astanahub.robot.robotapi.PersonApiGateway
 import kz.astanahub.robot.robotapi.RobotApiGateway
+import kz.astanahub.robot.robotapi.RobotHeadDiagnostics
 import kz.astanahub.robot.robotapi.RobotHeadGateway
 import kz.astanahub.robot.robotapi.SurfaceShareCameraGateway
 import kz.astanahub.robot.robotos.SkillVoiceGateway
@@ -41,12 +42,13 @@ object FlavorGateways {
         })
         return Gateways(
             builtinVoice = voice,
-            builtinMic = voice,
+            assistant = voice,
             robot = robot,
             camera = SurfaceShareCameraGateway(),
             builtinAsrAvailable = true,
             persons = PersonApiGateway(),
             head = RobotHeadGateway(),
+            headDiagnostics = RobotHeadDiagnostics(),
         )
     }
 }

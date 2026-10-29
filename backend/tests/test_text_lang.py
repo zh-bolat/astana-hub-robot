@@ -99,3 +99,84 @@ def test_split_empty():
 def test_clean_for_tts():
     raw = "## Ответ\n- **Кафе** на 1 этаже 😊\n- [Сайт](https://example.com) www.example.com"
     assert clean_for_tts(raw) == "Ответ Кафе на 1 этаже Сайт"
+
+
+# ---------- ремарки (игривый характер робота): не озвучиваются и не показываются ----------
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("*смеётся* Конечно! Кафе — справа от вас.", "Конечно! Кафе — справа от вас."),
+        ("Конечно! (улыбается) Кафе справа.", "Конечно! Кафе справа."),
+        ("Кафе справа (подмигивает).", "Кафе справа."),
+        ("Кафе справа, *машет рукой*, идёмте!", "Кафе справа, идёмте!"),
+        ("*тихо смеётся*, конечно!", "Конечно!"),
+        ("Конечно! *смеётся*. Кафе справа.", "Конечно! Кафе справа."),
+        ("(с улыбкой) Здравствуйте!", "Здравствуйте!"),
+        ("(күледі) Әрине! Кафе оң жақта.", "Әрине! Кафе оң жақта."),
+        (
+            "*laughs* Sure thing! The cafe is on your right.",
+            "Sure thing! The cafe is on your right.",
+        ),
+        ("[playful] Sure! [winks]", "Sure!"),
+        ("*beep boop* Hello there!", "Hello there!"),
+        ("*смеётся* Ха-ха! Конечно.", "Ха-ха! Конечно."),
+        ("[laughs] Haha! Sure.", "Haha! Sure."),
+        ("*laughs*", ""),
+    ],
+)
+def test_clean_for_tts_drops_stage_directions(raw, clean):
+    assert clean_for_tts(raw) == clean
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        # скобки и звёздочки по делу — не ремарка: остаются (у разметки снимаются только звёздочки)
+        (
+            "Павильон (C4.6) рядом, кафе *на втором этаже*.",
+            "Павильон (C4.6) рядом, кафе на втором этаже.",
+        ),
+        ("Astana Hub (EXPO) — **главный** IT-хаб.", "Astana Hub (EXPO) — главный IT-хаб."),
+        (
+            "Кафе справа. (Смотрите стрелку на экране.)",
+            "Кафе справа. (Смотрите стрелку на экране.)",
+        ),
+        ("Hi! Welcome to the hub.", "Hi! Welcome to the hub."),
+        (
+            "Он хихикнул бы, но это кафе Global coffee.",
+            "Он хихикнул бы, но это кафе Global coffee.",
+        ),
+    ],
+)
+def test_clean_for_tts_keeps_parentheses_with_content(raw, clean):
+    assert clean_for_tts(raw) == clean
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ха-ха! Кофе я не пью, но дорогу к нему знаю.",
+        "Ха! Хороший вопрос.",
+        "Кафе справа, ха-ха, прямо за углом.",
+        "Хаха, конечно!",
+        "Ха-ха-ха! Конечно.",
+        "Haha! Sure thing.",
+        "Hehe, hi! Welcome.",
+    ],
+)
+def test_clean_for_tts_keeps_short_laughter(text):
+    # смех словом — часть речи робота (звук смеха делает синтез)
+    assert clean_for_tts(text) == text
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("Хахахахаха! Конечно.", "Ха-ха! Конечно."),
+        ("Ха-ха-ха-ха-ха, конечно!", "Ха-ха, конечно!"),
+        ("Кафе справа, хахахахах.", "Кафе справа, ха-ха."),
+        ("Hahahahaha! Sure.", "Haha! Sure."),
+    ],
+)
+def test_clean_for_tts_shortens_long_laughter(raw, clean):
+    assert clean_for_tts(raw) == clean

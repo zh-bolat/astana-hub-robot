@@ -17,6 +17,8 @@ class SttResult:
     text: str
     lang: Lang
     confidence: float | None = None
+    # Язык, который услышал провайдер, как он его вернул («kaz», «ky»), если известен; lang — уже ru/kk/en
+    detected: str | None = None
 
 
 class SttProvider(Protocol):

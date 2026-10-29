@@ -53,5 +53,16 @@ interface RobotGateway {
 
     companion object {
         const val STOP_CONFIRM_TIMEOUT_MS = 3_000L
+
+        /** Поездка дольше этого — считаем сбоем (колбэк RobotApi потерялся, робот застрял): stopNavigation + Failed. */
+        const val TRIP_TIMEOUT_MS = 5 * 60_000L
+
+        // Коды [NavigationResult.Failed], которые ставит само приложение (у RobotApi — от -1 до -200 и статусы 1000+).
+        const val CODE_NOT_CONNECTED = -9001
+        const val CODE_SDK_EXCEPTION = -9002
+        const val CODE_TRIP_TIMEOUT = -9003
+        const val CODE_API_DISCONNECTED = -9004
+        const val CODE_CONTROL_SUSPENDED = -9005
+        const val CODE_START_REJECTED = -9006
     }
 }

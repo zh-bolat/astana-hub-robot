@@ -133,6 +133,64 @@
             </LinearLayout>
 
 
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/builtinFallbackSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/diag_builtin_fallback"
+                android:textSize="20sp" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/ttsStreamingSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/diag_tts_streaming"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/vadLabel"
+                style="@style/Widget.Hub.DiagLabel" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/vadSlider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="100"
+                android:valueFrom="300"
+                android:valueTo="1500" />
+
+            <TextView
+                android:id="@+id/micLabel"
+                style="@style/Widget.Hub.DiagLabel" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical">
+
+                <Button android:id="@+id/micLow" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_mic_low" />
+                <Button android:id="@+id/micNormal" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_mic_normal" />
+                <Button android:id="@+id/micHigh" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_mic_high" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical">
+
+                <Button android:id="@+id/voiceCacheRefresh" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_voice_cache_refresh" />
+
+                <TextView
+                    android:id="@+id/voiceCacheStatus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="16dp"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
             <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_server" />
 
             <com.google.android.material.textfield.TextInputLayout
@@ -177,6 +235,90 @@
                 <Button android:id="@+id/refreshPlaces" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_refresh_places" />
             </LinearLayout>
 
+            <!-- Костюм робота-компаньона на странице приложения (только вид). -->
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_costume" />
+
+            <LinearLayout
+                android:id="@+id/costumeRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+            <!-- Голова: мотор и слежение напрямую через RobotApi; ответы SDK — здесь и в журнале навигации. -->
+            <TextView android:id="@+id/headLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_head" />
+
+            <LinearLayout android:id="@+id/headRow1" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/headNod" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_nod" />
+                <Button android:id="@+id/headLeft" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_left" />
+                <Button android:id="@+id/headRight" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_right" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/headRow2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/headUp" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_up" />
+                <Button android:id="@+id/headDown" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_down" />
+                <Button android:id="@+id/headReset" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_reset" />
+                <Button android:id="@+id/headStatus" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_status" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/headRow3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                <Button android:id="@+id/headFollow" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_follow" />
+                <Button android:id="@+id/headStopFollow" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_stop_follow" />
+                <Button android:id="@+id/headPersons" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_head_persons" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/headHint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/diag_head_hint"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/headLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/card_bg"
+                android:fontFamily="monospace"
+                android:padding="12dp"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+
+            <TextView android:id="@+id/headPresenceLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_head_presence" />
+
+            <TextView
+                android:id="@+id/headPresenceLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/card_bg"
+                android:fontFamily="monospace"
+                android:padding="12dp"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+
+            <!-- Точки карты робота с кнопкой «Поехать» у каждой (заполняется по getPlaceList). -->
+            <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_map_points" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <Button android:id="@+id/loadMapPoints" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_map_points_load" />
+                <Button android:id="@+id/navStop" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_nav_stop" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/navTripStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="18sp" />
+
+            <LinearLayout
+                android:id="@+id/mapPointsList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical" />
+
             <TextView style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_chat" />
 
             <com.google.android.material.button.MaterialButtonToggleGroup
@@ -190,6 +332,8 @@
                     android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="agent" />
                 <Button android:id="@+id/chatModeLegacy" style="@style/Widget.Hub.LangButton"
                     android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="legacy" />
+                <Button android:id="@+id/chatModeLive" style="@style/Widget.Hub.LangButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="live" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
             <TextView android:id="@+id/presenceLabel" style="@style/Widget.Hub.DiagLabel" android:text="@string/diag_presence" />
@@ -321,6 +465,41 @@
         android:layout_marginStart="24dp"
         android:layout_weight="1"
         android:orientation="vertical">
+
+        <!-- Журнал навигации: живёт в памяти приложения, переживает закрытие экрана диагностики. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/diag_nav_journal"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <Button android:id="@+id/navJournalClear" style="@style/Widget.Hub.DiagButton" android:text="@string/diag_clear" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/navJournalScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginBottom="16dp"
+            android:layout_weight="1"
+            android:background="@drawable/card_bg"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/navJournalText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+        </ScrollView>
 
         <LinearLayout
             android:layout_width="match_parent"

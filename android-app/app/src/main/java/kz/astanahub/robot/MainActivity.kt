@@ -1,68 +1,75 @@
 package kz.astanahub.robot
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.view.GestureDetector
-import android.view.LayoutInflater
-import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
-import android.widget.LinearLayout
-import android.widget.Space
-import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kz.astanahub.robot.chat.ChatMode
+import kz.astanahub.robot.backend.QuickQuestion
 import kz.astanahub.robot.core.Lang
-import kz.astanahub.robot.databinding.ActivityMainBinding
-import kz.astanahub.robot.databinding.ItemFaqRowBinding
-import kz.astanahub.robot.databinding.ItemTileBinding
+import kz.astanahub.robot.live.LiveDirectionsReporter
 import kz.astanahub.robot.places.WayFinder
 import kz.astanahub.robot.security.DiagAccess
-import kz.astanahub.robot.ui.DiagPinDialog
+import kz.astanahub.robot.ui.screen.PinPadActions
+import kz.astanahub.robot.ui.screen.PinPadState
+import kz.astanahub.robot.ui.screen.PinPurpose
+import kz.astanahub.robot.ui.screen.PinTexts
+import kz.astanahub.robot.security.ExitMode
+import kz.astanahub.robot.security.PinBuffer
+import kz.astanahub.robot.security.DiagPinGuard
 import kz.astanahub.robot.ui.MainUiState
 import kz.astanahub.robot.ui.MainViewModel
-import kz.astanahub.robot.ui.MoodEmoji
 import kz.astanahub.robot.ui.Phase
 import kz.astanahub.robot.ui.Screen
 import kz.astanahub.robot.ui.ScreenMode
-import kz.astanahub.robot.ui.SubtitlePacer
-import kz.astanahub.robot.ui.TileIcons
 import kz.astanahub.robot.ui.UiScale
-import kz.astanahub.robot.ui.setOnHoldListener
+import kz.astanahub.robot.ui.face.FaceController
+import kz.astanahub.robot.ui.face.FaceCue
+import kz.astanahub.robot.ui.face.IslandContent
+import kz.astanahub.robot.ui.face.IslandGeometry
+import kz.astanahub.robot.ui.face.IslandModel
+import kz.astanahub.robot.ui.face.IslandTexts
+import kz.astanahub.robot.ui.face.TripOutcome
+import kz.astanahub.robot.ui.face.FaceDebug
+import kz.astanahub.robot.ui.screen.ChatLog
+import kz.astanahub.robot.ui.screen.RobotScreens
+import kz.astanahub.robot.ui.screen.RobotScreensHost
+import kz.astanahub.robot.ui.screen.ScreenTexts
+import kz.astanahub.robot.ui.screen.ScreenTwoActions
+import kz.astanahub.robot.ui.screen.ScreenTwoMapper
+import kz.astanahub.robot.ui.screen.ScreenTwoState
+import kz.astanahub.robot.ui.screen.Tile
+import kz.astanahub.robot.ui.screen.TileAction
+import kz.astanahub.robot.ui.screen.Tiles
 
 /**
- * Главный экран-киоск, вариант А (прототип: docs/design/robot-mvp.html).
- * Вся логика разговора и навигации по экранам — в [MainViewModel]; здесь только отрисовка состояния,
- * субтитры (темп — оценка, см. [SubtitlePacer]) и подтверждение выхода.
+ * Главный экран-киоск (docs/ui-redesign/DESIGN.md): экран 1 — живое лицо, экран 2 — чат, плитки, язык и управление
+ * (Compose, [RobotScreens]). Вся логика разговора, навигации и режимов — в [MainViewModel]; здесь только перевод
+ * его состояния в состояние экранов, действия кнопок и жестов, разрешение на микрофон, подтверждение выхода.
  */
 class MainActivity : AppCompatActivity() {
-
-    private lateinit var binding: ActivityMainBinding
 
     private val container by lazy { (application as AstanaHubApp).container }
 
@@ -81,6 +88,12 @@ class MainActivity : AppCompatActivity() {
                     chatMode = { container.chatSettings.mode.value },
                     presence = container.presence,
                     head = container.head,
+                    vadSilenceMillis = { container.voiceSettings.config.value.vadEndSilenceMillis },
+                    liveFactory = container.liveFactory,
+                    foreground = container.appForeground,
+                    liveDirectionsPeriodMillis = LiveDirectionsReporter.PERIOD_MILLIS,
+                    // MF4, шумный зал: после запуска робот спит — будит тап по лицу.
+                    startAsleep = true,
                 )
             }
         }
@@ -88,19 +101,26 @@ class MainActivity : AppCompatActivity() {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    /** Что уже нарисовано (перерисовываем плитки и строки вопросов только при изменении). */
-    private var renderedTiles: Any? = null
-    private var renderedFaceChips: Any? = null
-    private var renderedFaq: Any? = null
+    /** Экран 1: живое лицо; экран 2: функции; чат собирается из ходов MainViewModel. */
+    private lateinit var face: FaceController
+    private val two = ScreenTwoState()
+    private val chatLog = ChatLog()
+    private var faceDebug: FaceDebug? = null
 
-    /** Плитка, которую нажал посетитель (подсвечена, пока не ушли с приветствия). */
-    private var selectedTile: String? = null
+    /** Что уже собрано (подписи и плитки пересобираем только при смене языка / списка вопросов). */
+    private var textsFor: Lang? = null
+    private var islandTextsFor: Lang? = null
 
-    /** «Показать полностью» в ответе и в раскрытом вопросе — состояние экрана, сбрасывается с новым ответом. */
-    private var answerExpanded = false
-    private var answerExpandedFor: String? = null
-    private var faqExpanded = false
-    private var faqExpandedFor: String? = null
+    /** Остров экрана лица и его таймер (where_is ~9 с, итог поездки ~2 с). */
+    private val island = IslandModel()
+    private var firstRender = true
+
+    /** Робот спал при прошлой отрисовке: уснул — страница приложения снова с приветствия (MF4). */
+    private var wasAsleep = false
+    private val islandTick = Runnable {
+        if (island.tick(SystemClock.uptimeMillis())) applyIsland() else scheduleIsland()
+    }
+    private var tilesFor: Any? = null
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         timber.log.Timber.i("RECORD_AUDIO granted=%s", granted)
@@ -139,96 +159,16 @@ class MainActivity : AppCompatActivity() {
             finish()
             return
         }
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
         enterKioskMode()
+        setUpScreens()
 
-        binding.buildText.text = getString(
-            R.string.build_label, getString(R.string.flavor_name), BuildConfig.BUILD_TYPE, BuildConfig.VERSION_NAME,
-        )
-
-        // Текстовый ввод — основной способ на эмуляторе; на роботе — голос, поле скрыто.
-        binding.inputRow.isVisible = !BuildConfig.IS_ROBOT
-        binding.sendButton.setOnClickListener { sendTyped() }
-        binding.inputText.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_SEND) { sendTyped(); true } else false
-        }
-
-        // Верхняя полоса.
-        binding.backButton.setOnClickListener { viewModel.back() }
-        binding.langRu.setOnClickListener { viewModel.selectLanguage(Lang.RU) }
-        binding.langKk.setOnClickListener { viewModel.selectLanguage(Lang.KK) }
-        binding.langEn.setOnClickListener { viewModel.selectLanguage(Lang.EN) }
-        binding.exitButton.setOnClickListener { askExit() }
-        // Скрытый жест: удержание логотипа ≥ 3 с → PIN → диагностика. Без PIN на роботе жест отключён.
-        if (container.diagnostics.access != DiagAccess.DISABLED) {
-            binding.brandLogo.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
-        }
-
-        // Нижняя полоса.
-        binding.homeButton.setOnClickListener { viewModel.goHome() }
-        binding.hintButton.setOnClickListener { listenOnce() }
-        binding.stopButton.setOnClickListener {
-            viewModel.stop()
-            showSubtitles(false)
-        }
-        binding.guideButton.setOnClickListener { viewModel.guideToOffered() }
-        binding.faqMoreButton.setOnClickListener { viewModel.faqNextPage() }
-        binding.lookButton.setOnClickListener { viewModel.lookAround() }
-        binding.showMoreButton.setOnClickListener {
-            answerExpanded = !answerExpanded
-            render(viewModel.state.value)
-        }
-
-        // Лицо на весь экран (agent): меню — кнопкой или жестом вверх.
-        binding.faceInputRow.isVisible = !BuildConfig.IS_ROBOT
-        binding.faceSendButton.setOnClickListener { sendTyped(binding.faceInputText) }
-        binding.faceInputText.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_SEND) { sendTyped(binding.faceInputText); true } else false
-        }
-        binding.faceMenuButton.setOnClickListener { viewModel.openMenu() }
-        binding.faceButton.setOnClickListener { viewModel.showFace() }
-        binding.faceStopButton.setOnClickListener {
-            viewModel.stop()
-            showSubtitles(false)
-        }
-        binding.faceMicButton.setOnClickListener { listenOnce() }
-        binding.faceLangRu.setOnClickListener { viewModel.selectLanguage(Lang.RU) }
-        binding.faceLangKk.setOnClickListener { viewModel.selectLanguage(Lang.KK) }
-        binding.faceLangEn.setOnClickListener { viewModel.selectLanguage(Lang.EN) }
-        if (container.diagnostics.access != DiagAccess.DISABLED) {
-            binding.faceLogo.setOnHoldListener(DIAG_HOLD_MILLIS) { openDiagnostics() }
-        }
-        val swipe = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean = true
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                val dy = (e1?.y ?: return false) - e2.y
-                if (dy > SWIPE_MIN_PX * resources.displayMetrics.density && velocityY < 0) {
-                    viewModel.openMenu()
-                    return true
-                }
-                return false
-            }
-        })
-        binding.bigFace.setOnTouchListener { v, ev ->
-            if (ev.actionMasked == MotionEvent.ACTION_UP) v.performClick()
-            swipe.onTouchEvent(ev)
-        }
-        binding.bigFace.setOnClickListener { binding.bigFace.wink() }
-        binding.saverFace.sleeping = true
-
-        // Слои поверх экрана.
-        binding.guideStopButton.setOnClickListener { viewModel.stop() }
-        binding.screensaver.setOnClickListener { viewModel.wake() }
-        binding.exitOverlay.setOnClickListener { stayIn() } // касание мимо карточки = «Остаться»
-        binding.exitNoButton.setOnClickListener { stayIn() }
-        binding.exitYesButton.setOnClickListener { exitApp() }
-
-        // Системная «Назад»: закрыть подтверждение выхода или вернуться на экран назад. На приветствии — ничего (киоск).
+        // Системная «Назад»: закрыть подтверждение выхода; на экране 2 — из частых вопросов назад, иначе к лицу.
+        // На лице — ничего (киоск).
         onBackPressedDispatcher.addCallback(this) {
             when {
-                binding.exitOverlay.isVisible -> stayIn()
-                viewModel.state.value.canGoBack -> viewModel.back()
+                two.exitConfirm -> stayIn()
+                face.screen.menuOpen && viewModel.state.value.screen == Screen.FAQ -> viewModel.back()
+                face.screen.menuOpen -> viewModel.showFace()
             }
         }
         requestMicPermissionOnce()
@@ -238,11 +178,187 @@ class MainActivity : AppCompatActivity() {
                 viewModel.state.collect(::render)
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.faceCues.collect { cue ->
+                    face.onCue(cue)
+                    // Итог поездки — коротко на острове.
+                    val outcome = when (cue) {
+                        FaceCue.ARRIVED -> TripOutcome.ARRIVED
+                        FaceCue.TRIP_FAILED -> TripOutcome.FAILED
+                        FaceCue.TRIP_CANCELLED -> TripOutcome.STOPPED
+                        else -> null
+                    }
+                    if (outcome != null && island.onOutcome(outcome, SystemClock.uptimeMillis())) applyIsland()
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        faceDebug?.unregister(this)
         super.onDestroy()
+    }
+
+    /**
+     * Экраны 1 и 2 — одно Compose-дерево (переход ведёт палец, лицо сжимается в мини-лицо в шапке экрана 2).
+     * Отладка (debug + emulator): adb broadcast [FaceDebug.ACTION].
+     */
+    private fun setUpScreens() {
+        val reduced = !ValueAnimator.areAnimatorsEnabled()
+        face = FaceController(container.audioLevels, reducedMotion = reduced)
+        // «?» на лице — глиф Nunito ExtraBold, как в прототипе.
+        face.renderer.typeface = runCatching { ResourcesCompat.getFont(this, R.font.nunito_extrabold) }.getOrNull()
+        two.reducedMotion = reduced
+        // Костюм робота-компаньона (только вид) — выбор в диагностике, применяется сразу.
+        lifecycleScope.launch { container.costume.costume.collect { two.costume = it } }
+        two.textInput = !BuildConfig.IS_ROBOT
+        two.diagnosticsHold = container.diagnostics.access != DiagAccess.DISABLED
+        // Подпись сборки — только эмулятор (в прототипе её нет; на роботе версия — в диагностике).
+        two.buildLabel = if (BuildConfig.IS_ROBOT) "" else getString(
+            R.string.build_label, getString(R.string.flavor_name), BuildConfig.BUILD_TYPE, BuildConfig.VERSION_NAME,
+        )
+        // Шрифт грузится заранее и не на главном потоке: первый показ текста не теряет кадр на чтении .ttf.
+        lifecycleScope.launch(Dispatchers.IO) {
+            for (font in FONTS) runCatching { ResourcesCompat.getFont(this@MainActivity, font) }
+        }
+        val view = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                RobotScreens(
+                    face = face,
+                    two = two,
+                    actions = actions,
+                    host = host,
+                    pin = pin,
+                    pinActions = pinActions,
+                )
+            }
+        }
+        setContentView(view)
+        // Экраны сами закрашивают всё чёрным: фон окна не рисуем (одна заливка вместо двух).
+        window.setBackgroundDrawable(null)
+        if (BuildConfig.DEBUG && !BuildConfig.IS_ROBOT) {
+            faceDebug = FaceDebug(face, viewModel, container.audioLevels, container.presenceSimulator).also { it.register(this) }
+        }
+    }
+
+    private val host = object : RobotScreensHost {
+        override fun onFaceTap() = this@MainActivity.onFaceTap()
+
+        override fun onFaceHold() = openDiagnostics()
+
+        override fun onTravelStop() = viewModel.stop()
+
+        override fun onIslandGuide() = viewModel.guideToOffered()
+
+        override fun onSwitch(open: Boolean): Boolean {
+            if (open) {
+                viewModel.openMenu()
+                // Посетитель сам ушёл на экран 2 — итог поездки на острове его не держит.
+                if (island.clear()) applyIsland()
+            } else {
+                viewModel.showFace()
+            }
+            // Состояние ViewModel обновлено синхронно — сразу отдаём, куда доехать (без кадра «туда-обратно»).
+            refreshMenuOpen()
+            return face.screen.menuOpen
+        }
+    }
+
+    private val actions = object : ScreenTwoActions {
+        override fun onTile(tile: Tile) {
+            // Прототип `.tile.sel`: нажатая плитка подсвечена, пока не пришёл ответ.
+            two.selectedTile = tile.key
+            if (tile.action == TileAction.Look) lookRequestedAt = SystemClock.uptimeMillis()
+            when (val a = tile.action) {
+                is TileAction.Ask -> viewModel.submitButton(a.text, a.display)
+                TileAction.Where -> viewModel.whereListSoon(tile.label)
+                TileAction.Faq -> viewModel.openFaq()
+                TileAction.Look -> viewModel.lookAround()
+            }
+        }
+
+        override fun onLanguage(lang: Lang) = viewModel.selectLanguage(lang)
+
+        override fun onAskVoice() = listenOnce()
+
+        override fun onStop() {
+            speechCutAt = SystemClock.uptimeMillis()
+            viewModel.stop()
+        }
+
+        override fun onSend(text: String) {
+            if (text.isNotBlank()) viewModel.submit(text)
+        }
+
+        override fun onGuide() = viewModel.guideToOffered()
+
+        override fun onFaqToggle(item: QuickQuestion) = viewModel.faqToggle(item)
+
+        override fun onFaqMore() = viewModel.faqNextPage()
+
+        override fun onFaqBack() = viewModel.back()
+
+        override fun onExit() = askExit()
+
+        override fun onExitConfirm() = exitApp()
+
+        override fun onReopen() = reopen()
+
+        override fun onExitCancel() = stayIn()
+
+        override fun onDiagnostics() = openDiagnostics()
+
+        override fun onClose() {
+            viewModel.showFace()
+        }
+
+        // --- кнопки прототипа ---
+
+        override fun onBack() {
+            // Наш «Назад» (история экранов ViewModel); разговор без экрана ответа (live) — к приветствию.
+            if (viewModel.state.value.screen != Screen.HOME) viewModel.back() else showHomeView()
+        }
+
+        override fun onHome() {
+            viewModel.goHome()
+            showHomeView()
+        }
+
+        override fun onLook() {
+            lookRequestedAt = SystemClock.uptimeMillis()
+            viewModel.lookAround()
+        }
+
+        override fun onPlace(index: Int) {
+            placeChipTargets.getOrNull(index)?.let(viewModel::askWhere)
+        }
+
+        override fun onCostume(c: kz.astanahub.robot.ui.screen.Costume) = setCostume(c)
+
+        override fun onCostumeSwipe(step: Int) = setCostume(container.costume.costume.value.next(step))
+    }
+
+    /** Тапы по лицу (MF4): спит — один тап будит; не спит — двойной тап усыпляет, одиночный — только моргнуть. */
+    private val tapGate = kz.astanahub.robot.ui.face.FaceTapGate()
+
+    /**
+     * Тап по лицу (MF4, шумный зал): спит — проснуться и поздороваться; не спит — двойной тап (≤ 350 мс) — уснуть
+     * (говорит — оборвать); одиночный — рефлекс лица. Тап больше не перебивает робота — для этого «Стоп» на странице.
+     */
+    private fun onFaceTap() {
+        val action = tapGate.onTap(SystemClock.uptimeMillis(), viewModel.state.value.asleep)
+        timber.log.Timber.d("face tap: %s", action)
+        when (action) {
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.WAKE -> viewModel.wakeByTap()
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.SLEEP -> {
+                if (viewModel.robotSpeaking) speechCutAt = SystemClock.uptimeMillis()
+                viewModel.sleepByTap()
+            }
+            kz.astanahub.robot.ui.face.FaceTapGate.Action.NONE -> timber.log.Timber.d("face tap: reflex %s", face.engine.reflex())
+        }
     }
 
     private fun openDiagnostics() {
@@ -250,27 +366,245 @@ class MainActivity : AppCompatActivity() {
         when (gate.access) {
             DiagAccess.DISABLED -> Unit
             DiagAccess.OPEN -> startActivity(Intent(this, DiagnosticsActivity::class.java))
-            DiagAccess.PIN -> DiagPinDialog.show(this, gate.guard) {
-                gate.session.unlock()
-                startActivity(Intent(this, DiagnosticsActivity::class.java))
-            }
+            DiagAccess.PIN -> showPin(PinPurpose.DIAGNOSTICS)
         }
     }
 
-    private fun sendTyped(input: android.widget.EditText = binding.inputText) {
-        val text = input.text?.toString().orEmpty()
-        if (text.isBlank()) return
-        viewModel.submit(text)
-        input.text = null
+    // ---------------------------------------------------------------------------------------------
+    // Пароль сотрудника — панель прототипа (цифры и латиница, регистр не важен). Два назначения:
+    // диагностика (наша админка: удержание логотипа / лица) и выход (крестик, функция mynbay). Проверка —
+    // DiagPinGuard, счётчик попыток общий (пароль нельзя подобрать через окно выхода), минута без ввода — закрыть.
+    // ---------------------------------------------------------------------------------------------
+
+    private val pin = PinPadState()
+    private val pinBuffer = PinBuffer()
+    private val pinTimeout = Runnable { closePin() }
+
+    private fun showPin(purpose: PinPurpose) {
+        if (pin.visible) return
+        pin.purpose = purpose
+        val lang = viewModel.state.value.lang
+        pin.texts = when (purpose) {
+            PinPurpose.DIAGNOSTICS -> PinTexts(
+                title = "Диагностика",
+                sub = "Только для сотрудников. Введите пароль.",
+                ok = "Открыть",
+                cancel = "Отмена",
+            )
+            PinPurpose.EXIT -> PinTexts(
+                title = str(R.string.exit_question, lang),
+                sub = str(R.string.exit_pin_sub, lang),
+                ok = str(R.string.exit_yes, lang),
+                cancel = str(R.string.exit_no, lang),
+            )
+        }
+        pinBuffer.clear()
+        pin.length = 0
+        pin.message = ""
+        renderPinLock()
+        pin.visible = true
+        if (purpose == PinPurpose.EXIT) viewModel.stop()
+        handler.removeCallbacks(pinTimeout)
+        handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
     }
 
-    /** «Просто скажите вопрос»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
+    private fun renderPinLock(): Boolean {
+        val lock = container.diagnostics.guard.lockRemainingMillis()
+        pin.locked = lock > 0
+        if (pin.locked) {
+            val minutes = (lock + 59_999) / 60_000
+            pin.message = if (pin.purpose == PinPurpose.EXIT) {
+                str(R.string.exit_pin_locked, viewModel.state.value.lang).format(minutes)
+            } else {
+                "Слишком много попыток. Попробуйте через $minutes мин."
+            }
+        }
+        return pin.locked
+    }
+
+    private fun closePin() {
+        handler.removeCallbacks(pinTimeout)
+        val wasExit = pin.visible && pin.purpose == PinPurpose.EXIT
+        pin.visible = false
+        pinBuffer.clear()
+        pin.length = 0
+        if (wasExit) viewModel.onTouch()
+    }
+
+    private val pinActions = object : PinPadActions {
+        override fun onPinKey(c: Char) {
+            if (pin.locked || !pinBuffer.append(c)) return
+            pin.length = pinBuffer.length
+            pin.message = ""
+            handler.removeCallbacks(pinTimeout)
+            handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
+        }
+
+        override fun onPinErase() {
+            pinBuffer.backspace()
+            pin.length = pinBuffer.length
+            // Прототип: «⌫» тоже перезапускает таймер панели.
+            handler.removeCallbacks(pinTimeout)
+            handler.postDelayed(pinTimeout, PIN_TIMEOUT_MS)
+        }
+
+        override fun onPinSubmit() {
+            if (renderPinLock() || !pinBuffer.isComplete) return
+            val entered = pinBuffer.value
+            pinBuffer.clear()
+            pin.length = 0
+            val gate = container.diagnostics
+            when (val r = gate.guard.check(entered)) {
+                DiagPinGuard.Result.Ok -> {
+                    val purpose = pin.purpose
+                    handler.removeCallbacks(pinTimeout)
+                    pin.visible = false
+                    when (purpose) {
+                        PinPurpose.DIAGNOSTICS -> {
+                            gate.session.unlock()
+                            startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                        }
+                        PinPurpose.EXIT -> exitApp()
+                    }
+                }
+                is DiagPinGuard.Result.Wrong -> pin.message = if (pin.purpose == PinPurpose.EXIT) {
+                    str(R.string.exit_pin_wrong, viewModel.state.value.lang).format(r.attemptsLeft)
+                } else {
+                    "Неверный пароль. Осталось попыток: ${r.attemptsLeft}"
+                }
+                is DiagPinGuard.Result.Locked -> renderPinLock()
+            }
+        }
+
+        override fun onPinCancel() = closePin()
+    }
+
+    /** «Что это?» нажато (uptime, мс) и id последнего ответа робота на тот момент: карточка ожидания до нового ответа. */
+    private var lookRequestedAt = Long.MIN_VALUE / 2
+    private var selectedSawBusy = false
+    private var lookReplyFrom = 0L
+
+    /** Справа — приветствие и плитки, пока после «В начало» в разговоре нет нового (прототип): id последней реплики
+     *  на момент «В начало» (id в чате только растут — и после сброса чата, и когда старые реплики уходят за лимит). */
+    private var homeLastId = 0L
+    private var placeChipTargets: List<kz.astanahub.robot.backend.Place> = emptyList()
+
+    private fun showHomeView() {
+        homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
+        renderScreenTwo(viewModel.state.value)
+    }
+
+    /** Снимок «Что это?» на экране: декодируем уменьшенным в фоне; карточка — первый ответ робота после снимка. */
+    private var photoSrc: kz.astanahub.robot.ui.LookPhoto? = null
+    private var photoFrom = 0L
+
+    private fun bindLookPhoto(p: kz.astanahub.robot.ui.LookPhoto?) {
+        if (p !== photoSrc) {
+            photoSrc = p
+            photoFrom = chatLog.items.lastOrNull()?.id ?: 0L
+            two.photo = null
+            two.photoItemId = -1L
+            if (p != null) {
+                lifecycleScope.launch {
+                    val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { decodeThumb(p.jpeg) }
+                    if (photoSrc === p) two.photo = bmp
+                }
+            }
+        }
+        if (p != null && two.photoItemId < 0) {
+            chatLog.items.firstOrNull { it.id > photoFrom && it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }
+                ?.let { two.photoItemId = it.id }
+        }
+    }
+
+    private fun decodeThumb(jpeg: ByteArray): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= LOOK_THUMB_WIDTH) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)?.asImageBitmap()
+    }.onFailure { timber.log.Timber.w(it, "look photo decode") }.getOrNull()
+
+    /**
+     * Смена костюма (точки, свайп по роботу; прототип `setSkin(k, true)`): робот «собирается» — и при повторном выборе
+     * того же костюма, лицо 1,8 с: обычный — «^ ^», казахский — смущение, айтишник — «смотрит», космонавт — звёзды.
+     */
+    private fun setCostume(c: kz.astanahub.robot.ui.screen.Costume) {
+        container.costume.set(c)
+        two.assemble++
+        face.onCue(
+            when (c) {
+                kz.astanahub.robot.ui.screen.Costume.CLASSIC -> FaceCue.COSTUME_HAPPY
+                kz.astanahub.robot.ui.screen.Costume.KAZAKH -> FaceCue.COSTUME_BLUSH
+                kz.astanahub.robot.ui.screen.Costume.BUSINESS -> FaceCue.COSTUME_WIDE
+                kz.astanahub.robot.ui.screen.Costume.GALAXY -> FaceCue.COSTUME_SPARKLE
+            },
+        )
+    }
+
+    // --- после речи (прототип `say` → `fin`) ---
+
+    private var wasSpeaking = false
+    private var wasOffline = false
+    private var lastPhraseShown: String? = null
+
+    /** Когда посетитель / оператор оборвал речь (Стоп, тап по лицу): такой конец речи — не «договорил». */
+    private var speechCutAt = Long.MIN_VALUE / 2
+    private val clearLinger = Runnable { two.linger = null }
+
+    /**
+     * Договорил (не оборвали): к последнему куску субтитров — эмодзи настроения, пузырь висит ещё max(8 с, 60 мс ×
+     * длина), лицо 2,2 с показывает настроение (🤔 — «не понял», 👋 — смущение, 🎉 — звёзды, 📶 — «смотрит», прочее —
+     * «^ ^»), экран головы кивает.
+     */
+    private fun afterSpeech(state: MainUiState) {
+        val said = state.answer?.takeIf { it.isNotBlank() } ?: lastPhraseShown ?: return
+        val emoji = kz.astanahub.robot.ui.MoodEmoji.forText(said)
+        face.onCue(kz.astanahub.robot.ui.face.FaceDirector.moodFor(emoji))
+        two.nod++
+        val piece = lastPhraseShown?.let { kz.astanahub.robot.ui.screen.SubtitleWindow.lastPiece(it) }
+        if (!piece.isNullOrBlank()) {
+            two.linger = kz.astanahub.robot.ui.screen.Linger(piece, emoji)
+            handler.removeCallbacks(clearLinger)
+            handler.postDelayed(clearLinger, maxOf(LINGER_MIN_MS, LINGER_MS_PER_CHAR * said.length))
+        }
+    }
+
+    private fun trackSpeech(state: MainUiState) {
+        val speaking = state.phase == Phase.SPEAKING
+        if (speaking) {
+            two.phrase?.let { lastPhraseShown = it }
+            if (two.linger != null) {
+                handler.removeCallbacks(clearLinger)
+                two.linger = null
+            }
+        } else if (wasSpeaking) {
+            val natural = (state.phase == Phase.IDLE || state.phase == Phase.LISTENING) &&
+                SystemClock.uptimeMillis() - speechCutAt > SPEECH_CUT_GRACE_MS
+            if (natural) afterSpeech(state)
+            lastPhraseShown = null
+        }
+        wasSpeaking = speaking
+        // Новый вопрос или сон — пузырь с прошлым ответом убираем.
+        if (two.linger != null && (state.processing || !state.partialQuestion.isNullOrBlank() || state.asleep)) {
+            handler.removeCallbacks(clearLinger)
+            two.linger = null
+        }
+        // Пропала связь — «кружится голова» 2,5 с (прототип: `dizzy`).
+        if (state.offline && !wasOffline) face.onCue(FaceCue.OFFLINE)
+        wasOffline = state.offline
+    }
+
+    /** «Спросить голосом»: одна фраза через серверный STT (на эмуляторе — микрофон хоста). */
     private fun listenOnce() {
+        // «Просто скажите вопрос» на странице — явное действие: во сне робот просыпается.
+        viewModel.wake()
         if (hasMicPermission()) {
             container.voice.stopSpeaking()
             container.voice.pushToTalk()
         } else {
-            // Посетителям системный диалог не показываем: бейдж «микрофон выключен» уже на экране.
+            // Посетителям системный диалог не показываем: плашка «микрофон выключен» уже на экране.
             timber.log.Timber.w("mic button: RECORD_AUDIO not granted")
             renderMicBadge()
         }
@@ -279,107 +613,229 @@ class MainActivity : AppCompatActivity() {
     private fun str(id: Int, lang: Lang): String = container.text.get(id, lang)
 
     // ---------------------------------------------------------------------------------------------
-    // Отрисовка
+    // Отрисовка: MainUiState → состояние экранов (Compose перерисовывает только изменившееся)
     // ---------------------------------------------------------------------------------------------
 
     private fun render(state: MainUiState) {
-        val lang = state.lang
-
-        // Верхняя полоса.
-        binding.backButton.isVisible = state.canGoBack
-        binding.backButton.text = str(R.string.action_back, lang)
-        binding.langRu.isSelected = lang == Lang.RU
-        binding.langKk.isSelected = lang == Lang.KK
-        binding.langEn.isSelected = lang == Lang.EN
-        binding.exitButton.contentDescription = str(R.string.exit_label, lang)
-        binding.offlineBar.isVisible = state.offline
-        binding.offlineText.text = str(R.string.offline_badge, lang)
-        binding.micOffBadge.text = str(R.string.mic_off_badge, lang)
-
-        // Слева: лицо, статус, что слышу, субтитры.
-        binding.face.phase = state.phase
-        binding.statusText.text = str(statusRes(state.phase), lang)
-        binding.heardText.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
-        renderSubtitles(state)
-
-        // Справа: один из трёх экранов. Ушли с приветствия — подсветка нажатой плитки снимается.
-        if (state.screen != Screen.HOME && selectedTile != null) {
-            selectedTile = null
-            renderedTiles = null
+        face.onState(state)
+        val screen = face.screen
+        screen.traveling = state.guidingTo != null
+        screen.islandGuide = state.guideTarget != null && state.guidingTo == null
+        screen.asleep = state.asleep
+        // Уснул — страница (если открыта, MF5: остаётся открытой) снова с приветствия.
+        val fellAsleep = state.asleep && !wasAsleep
+        if (fellAsleep) homeLastId = maxOf(homeLastId, chatLog.items.lastOrNull()?.id ?: 0L)
+        wasAsleep = state.asleep
+        // MF4: мини-подсказка сверху экрана лица — на языке экрана.
+        screen.hint = str(if (state.asleep) R.string.face_hint_asleep else R.string.face_hint_awake, state.lang)
+        if (islandTextsFor != state.lang) {
+            islandTextsFor = state.lang
+            screen.islandTexts = islandTexts(state.lang)
         }
-        binding.homePanel.isVisible = state.screen == Screen.HOME
-        binding.answerPanel.isVisible = state.screen == Screen.ANSWER
-        binding.faqPanel.isVisible = state.screen == Screen.FAQ
-        when (state.screen) {
-            Screen.HOME -> renderHome(state)
-            Screen.ANSWER -> renderAnswer(state)
-            Screen.FAQ -> renderFaq(state)
+        // Остров: поездка / итог / «где» (спит — острова нет). Ответ «где» из состояния до пересоздания экрана
+        // (смена масштаба в диагностике) — уже показан, заново не всплывает.
+        val now = SystemClock.uptimeMillis()
+        if (firstRender) {
+            firstRender = false
+            island.markSeen(state.whereIs)
         }
-        binding.inputLayout.hint = str(R.string.input_hint, lang)
-        binding.sendButton.text = str(R.string.action_send, lang)
-        binding.sendButton.isEnabled = !state.processing
-
-        renderBottom(state)
-
-        // Слои.
-        val guiding = state.guidingTo
-        binding.guideOverlay.isVisible = guiding != null
-        if (guiding != null) {
-            binding.guideTitle.text = container.text.get(R.string.guide_title, lang, guiding)
-            binding.guideSub.text = str(R.string.guide_follow, lang)
-            binding.guideStopButton.text = str(R.string.action_stop, lang)
-        }
-        binding.screensaver.isVisible = state.screensaver
-        if (state.screensaver && binding.exitOverlay.isVisible) stayIn(wake = false)
-        renderExitTexts(lang)
-        renderFace(state)
+        val changed = if (state.asleep) island.clear() else island.update(state.guidingTo, state.whereIs, now)
+        if (changed) applyIsland() else refreshMenuOpen()
+        // Удержание по лицу — вход в админку (тот же PIN); без PIN на роботе и в поездке жест выключен.
+        screen.holdEnabled = ScreenTwoMapper.faceHoldEnabled(state, container.diagnostics.access != DiagAccess.DISABLED)
+        // Уснул — диалог выхода закрывается (робот работает дальше); открыт уже во сне — остаётся.
+        if (fellAsleep && two.exitConfirm) stayIn(wake = false)
+        renderScreenTwo(state)
+        trackSpeech(state)
     }
 
-    /** Лицо на весь экран (FACE): статус, что слышу, кнопки частых вопросов или «Стоп». */
-    private fun renderFace(state: MainUiState) {
+    private fun renderScreenTwo(state: MainUiState) {
         val lang = state.lang
-        val faceMode = state.mode == ScreenMode.FACE
-        binding.faceLayer.isVisible = faceMode
-        binding.face.emotion = state.emotion
-        binding.faceButton.isVisible = state.mode == ScreenMode.MENU && container.chatSettings.mode.value == ChatMode.AGENT
-        binding.faceButton.text = str(R.string.action_face, lang)
-        if (!faceMode) return
+        if (textsFor != lang) {
+            textsFor = lang
+            two.texts = texts(lang)
+        }
+        two.lang = lang
+        // Посетитель говорит (есть промежуточный текст) — «Слушаю…», даже если фаза ещё «свободен» (прототип `listen`).
+        val hearingNow = !state.partialQuestion.isNullOrBlank() && (state.phase == Phase.IDLE || state.phase == Phase.LISTENING)
+        two.status = str(if (hearingNow) R.string.status_listening else statusRes(state.phase), lang)
+        if (chatLog.update(state)) two.chat = chatLog.items
+        two.partial = ScreenTwoMapper.partial(state)
+        two.speakingId = ScreenTwoMapper.speakingId(state, chatLog.items)
+        // Локальные ответы («где X», нет связи) звучат целиком без потока фраз — субтитры по всему ответу
+        // (прототип: субтитры у любой речи робота).
+        two.phrase = state.subtitle ?: state.answer?.takeIf { state.phase == Phase.SPEAKING && it.isNotBlank() }
+        two.thinking = state.processing
+        two.busy = ScreenTwoMapper.busy(state)
+        // Прототип: плитки не гаснут, пока робот думает (выбранная подсвечена `.sel`).
+        two.tilesEnabled = true
+        val tilesKey = listOf(lang)
+        if (tilesFor != tilesKey) {
+            tilesFor = tilesKey
+            two.tiles = Tiles.home(
+                kz.astanahub.robot.ui.screen.TileTexts(
+                    where = str(R.string.tile_where, lang),
+                    events = str(R.string.tile_events, lang),
+                    eventsQuestion = str(R.string.tile_events_q, lang),
+                    about = str(R.string.tile_about, lang),
+                    aboutQuestion = str(R.string.tile_about_q, lang),
+                    wifi = str(R.string.tile_wifi, lang),
+                    wifiQuestion = str(R.string.tile_wifi_q, lang),
+                    faq = str(R.string.tile_faq, lang),
+                    look = str(R.string.action_look, lang),
+                ),
+            )
+        }
+        two.faq = ScreenTwoMapper.faq(
+            state,
+            status = { str(statusRes(it), lang) },
+            more = { page, count -> container.text.get(R.string.faq_more, lang, page, count) },
+        )
+        two.guideLabel = ScreenTwoMapper.guideOffer(state)?.let {
+            container.text.get(R.string.action_guide, lang, WayFinder.displayName(it, lang))
+        }
+        two.wayHint = state.wayHint
+        two.offline = state.offline
+        // Прототип: робот-компаньон слушает / думает / говорит; справа — приветствие, ответ или частые вопросы.
+        two.pose = when (state.phase) {
+            Phase.IDLE, Phase.LISTENING -> if (hearingNow) kz.astanahub.robot.ui.screen.CompanionPose.LISTEN else kz.astanahub.robot.ui.screen.CompanionPose.IDLE
+            Phase.THINKING, Phase.LOOKING -> kz.astanahub.robot.ui.screen.CompanionPose.THINK
+            Phase.SPEAKING -> kz.astanahub.robot.ui.screen.CompanionPose.SPEAK
+            else -> kz.astanahub.robot.ui.screen.CompanionPose.IDLE
+        }
+        // Прототип: справа меняется, только когда пошёл ответ — пока посетитель говорит и робот думает, остаётся
+        // приветствие (или прежний ответ); после «В начало» — приветствие до нового ответа.
+        val lastReply = chatLog.items.lastOrNull { it.role == kz.astanahub.robot.ui.screen.ChatRole.ROBOT }?.id ?: 0L
+        val home = state.screen != Screen.FAQ && lastReply <= homeLastId && (state.screen == Screen.HOME || state.answer == null)
+        two.homeView = home
+        two.chatFrom = homeLastId
+        two.speaking = state.phase == Phase.SPEAKING
+        // «Услышанное» (прототип `.heard`): пока посетитель говорит — «…его слова (без закрывающей кавычки); пока робот
+        // думает — «вопрос».
+        val partial = state.partialQuestion?.takeIf { it.isNotBlank() }
+        two.heard = when {
+            partial != null -> "«$partial"
+            (state.phase == Phase.THINKING || state.phase == Phase.LOOKING) && state.screen != Screen.FAQ &&
+                !state.question.isNullOrBlank() -> "«${state.question}»"
+            else -> null
+        }
+        // «Что это?» ждёт ответа — справа карточка со снимком (прототип `look`).
+        val lookAsked = SystemClock.uptimeMillis() - lookRequestedAt < LOOK_PENDING_MS && state.processing
+        two.lookWaiting = lastReply <= lookReplyFrom && (state.phase == Phase.LOOKING || lookAsked || (two.photo != null && two.photoItemId < 0 && state.processing))
+        // Запрос мог ещё не дойти до «думаю» (первая отрисовка после нажатия) — сбрасываем только после паузы.
+        if (!state.processing && state.phase != Phase.LOOKING && SystemClock.uptimeMillis() - lookRequestedAt > LOOK_START_GRACE_MS) {
+            lookRequestedAt = Long.MIN_VALUE / 2
+        }
+        if (lookRequestedAt < 0) lookReplyFrom = lastReply
+        // «Что это?» (прототип `look`): «Смотрю…», глаза «смотрят», строки «услышанное» нет.
+        if (two.lookWaiting) {
+            two.status = str(R.string.status_looking, lang)
+            two.heard = null
+            face.engine.inputs.activity = kz.astanahub.robot.ui.face.FaceActivity.LOOKING
+        }
+        // Плитка подсвечена, пока не пришёл ответ (или робот не освободился без ответа).
+        if (state.processing) selectedSawBusy = true
+        if (!home || (selectedSawBusy && !state.processing && state.phase != Phase.THINKING)) {
+            two.selectedTile = null
+            selectedSawBusy = false
+        }
+        bindLookPhoto(state.lookPhoto)
+        // Прототип: «Назад» есть всегда, кроме покоя на главной (и пока посетитель говорит, и пока робот думает).
+        two.canGoBack = !home || state.screen != Screen.HOME || hearingNow || state.processing || state.phase == Phase.SPEAKING
+        // Чипы мест под ответом «где» (кроме места из ответа).
+        placeChipTargets = when {
+            home -> emptyList()
+            // «Где что находится» (прототип `placeList`): все места карты.
+            state.placeList -> state.mapPlaces.distinctBy { WayFinder.displayName(it, lang) }
+            state.whereIs != null || state.guideTarget != null -> state.mapPlaces
+                .filter { it.id != state.guideTarget?.id }
+                .distinctBy { WayFinder.displayName(it, lang) }
+                .take(MAX_PLACE_CHIPS)
+            else -> emptyList()
+        }
+        two.placeChips = placeChipTargets.map { WayFinder.displayName(it, lang) }
+        two.faceAvailable = container.chatSettings.mode.value.usesAgent
+        two.exitVisible = exitMode() != ExitMode.HIDDEN
+    }
 
-        binding.bigFace.phase = state.phase
-        binding.bigFace.emotion = state.emotion
-        binding.faceStatus.text = str(if (state.phase == Phase.IDLE) R.string.face_hint else statusRes(state.phase), lang)
-        binding.faceLangRu.isSelected = lang == Lang.RU
-        binding.faceLangKk.isSelected = lang == Lang.KK
-        binding.faceLangEn.isSelected = lang == Lang.EN
-        binding.faceOffline.isVisible = state.offline
-        binding.faceOffline.text = str(R.string.offline_badge, lang)
-        binding.faceHeard.text = state.partialQuestion?.let { "«$it»" }.orEmpty()
-        binding.faceMenuButton.text = str(R.string.action_menu, lang)
-        binding.faceInputLayout.hint = str(R.string.input_hint, lang)
-        binding.faceSendButton.text = str(R.string.action_send, lang)
-        binding.faceSendButton.isEnabled = !state.processing
-
-        val busy = state.processing || state.phase == Phase.SPEAKING || state.phase == Phase.NAVIGATING
-        binding.faceStopButton.isVisible = busy
-        binding.faceStopButton.text = str(R.string.action_stop, lang)
-        binding.faceChips.isVisible = !busy
-        val key = listOf(lang, state.quickQuestions)
-        if (renderedFaceChips != key) {
-            renderedFaceChips = key
-            val chips = binding.faceChips
-            chips.removeAllViews()
-            state.quickQuestions.take(FACE_CHIPS).forEachIndexed { i, q ->
-                val chip = TextView(this, null, 0, R.style.Hub_Chip).apply {
-                    text = q.text
-                    maxWidth = resources.getDimensionPixelSize(R.dimen.left_column_width)
-                    setOnClickListener { viewModel.submitButton(q.text) }
-                }
-                chips.addView(chip, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, resources.getDimensionPixelSize(R.dimen.chip_height),
-                ).apply { if (i > 0) marginStart = resources.getDimensionPixelSize(R.dimen.tile_gap) })
-            }
+    /** Экран 2 открыт: режим MENU (MF5: и в поездке — слой поездки лежит поверх, экран не меняется). */
+    private fun refreshMenuOpen() {
+        val c = island.content
+        val menuOpen = ScreenTwoMapper.menuOpen(viewModel.state.value)
+        face.screen.menuOpen = menuOpen
+        // Глаза смотрят в сторону места, пока остров where_is на экране лица (на экране 2 острова нет).
+        val inputs = face.engine.inputs
+        if (c is IslandContent.WhereIs && !menuOpen) {
+            inputs.lookX = IslandGeometry.gazeX(c.hint.visitorAngleRad)
+            inputs.lookY = IslandGeometry.gazeY(c.hint.visitorAngleRad)
+            inputs.looking = true
+        } else {
+            inputs.looking = false
         }
     }
+
+    /** Остров → экран лица: содержимое, взгляд в сторону места (where_is), следующий тик таймера. */
+    private fun applyIsland() {
+        face.screen.island = island.content
+        refreshMenuOpen()
+        scheduleIsland()
+    }
+
+    private fun scheduleIsland() {
+        handler.removeCallbacks(islandTick)
+        val at = island.nextChangeAt() ?: return
+        handler.postAtTime(islandTick, at)
+    }
+
+    private fun islandTexts(lang: Lang) = IslandTexts(
+        tripTitle = str(R.string.guide_title, lang),
+        stopTrip = str(R.string.action_stop, lang), // прототип: «Стоп» и на слое поездки
+        guide = str(R.string.action_guide_short, lang),
+        arrived = str(R.string.island_arrived, lang),
+        arrivedSub = str(R.string.island_arrived_sub, lang),
+        failed = str(R.string.island_failed, lang),
+        stopped = str(R.string.island_stopped, lang),
+        meters = str(R.string.island_meters, lang),
+        near = str(R.string.island_near, lang),
+        follow = str(R.string.guide_follow, lang),
+    )
+
+    private fun texts(lang: Lang) = ScreenTexts(
+        title = getString(R.string.title),
+        greetTitle = str(R.string.greet_title, lang),
+        greetSub = str(R.string.greet_sub, lang),
+        tilesTitle = str(R.string.tiles_title, lang),
+        askVoice = str(R.string.hint_voice, lang), // прототип `hint`: «Просто скажите вопрос, я слушаю»
+        stop = str(R.string.action_stop, lang),
+        inputHint = str(R.string.input_hint, lang),
+        faqTitle = str(R.string.faq_title, lang),
+        showMore = str(R.string.action_show_more, lang),
+        showLess = str(R.string.action_show_less, lang),
+        guideShort = str(R.string.action_guide_short, lang),
+        offline = str(R.string.offline_badge, lang),
+        offlineBar = str(R.string.offline_bar, lang),
+        micOff = str(R.string.mic_off_badge, lang),
+        exitQuestion = str(R.string.exit_question, lang),
+        exitSub = str(R.string.exit_sub, lang),
+        exitYes = str(R.string.exit_yes, lang),
+        exitNo = str(R.string.exit_no, lang),
+        sourceOne = str(R.string.chat_source, lang),
+        sourceMany = str(R.string.chat_sources, lang),
+        back = str(R.string.action_back, lang),
+        closed = str(R.string.app_closed, lang),
+        closedSub = str(R.string.app_closed_sub, lang),
+        reopen = str(R.string.app_reopen, lang),
+        home = str(R.string.action_home, lang),
+        menu = str(R.string.action_menu, lang),
+        look = str(R.string.action_look, lang),
+        snapshot = str(R.string.look_snapshot, lang),
+        costumes = listOf(
+            str(R.string.costume_default, lang),
+            str(R.string.costume_kazakh, lang),
+            str(R.string.costume_business, lang),
+            str(R.string.costume_galaxy, lang),
+        ),
+    )
 
     private fun statusRes(phase: Phase): Int = when (phase) {
         Phase.IDLE -> R.string.status_idle
@@ -390,298 +846,65 @@ class MainActivity : AppCompatActivity() {
         Phase.NAVIGATING -> R.string.status_navigating
     }
 
-    private fun renderBottom(state: MainUiState) {
-        val lang = state.lang
-        val busy = state.processing || state.phase == Phase.SPEAKING
-        val target = state.guideTarget
-        val showGuide = !busy && state.screen == Screen.ANSWER && target != null && state.guidingTo == null
-        val showMore = !busy && state.screen == Screen.FAQ && state.faqPageCount > 1
-
-        binding.homeButton.isVisible = state.screen != Screen.HOME
-        binding.homeButton.text = str(R.string.action_home, lang)
-
-        binding.stopButton.isVisible = busy
-        binding.stopButton.text = str(R.string.action_stop, lang)
-        binding.guideButton.isVisible = showGuide
-        if (showGuide && target != null) {
-            binding.guideButton.text = container.text.get(R.string.action_guide, lang, WayFinder.displayName(target, lang))
-        }
-        binding.faqMoreButton.isVisible = showMore
-        binding.faqMoreButton.text = container.text.get(R.string.faq_more, lang, state.faqPage + 1, state.faqPageCount)
-        binding.hintButton.isVisible = !busy && !showGuide && !showMore
-        binding.hintButton.text = str(R.string.hint_voice, lang)
-
-        // «Что это?» на приветствии — плитка, внизу дублировать не нужно.
-        binding.lookButton.isVisible = state.screen != Screen.HOME
-        binding.lookButton.text = str(R.string.action_look, lang)
-        setEnabled(binding.lookButton, !state.processing)
-    }
-
-    /** Приветствие: до 4 частых вопросов плитками + «Частые вопросы» (весь список) + «Что это?». */
-    private fun renderHome(state: MainUiState) {
-        val lang = state.lang
-        binding.greetTitle.text = str(R.string.greet_title, lang)
-        binding.greetSub.text = str(R.string.greet_sub, lang)
-        val enabled = !state.processing
-        val key = listOf(lang, state.quickQuestions, enabled, selectedTile)
-        if (renderedTiles == key) return
-        renderedTiles = key
-
-        data class Tile(val icon: Int, val label: String, val onClick: () -> Unit)
-        val tiles = state.quickQuestions.take(HOME_QUESTION_TILES).map { q ->
-            Tile(TileIcons.kindFor(q.text).res, q.text) { viewModel.submitButton(q.text) }
-        } + Tile(R.drawable.ic_tile_help, str(R.string.tile_faq, lang)) { viewModel.openFaq() } +
-            Tile(R.drawable.ic_tile_camera, str(R.string.action_look, lang)) { viewModel.lookAround() }
-
-        val rows = listOf(binding.tilesRow1, binding.tilesRow2)
-        rows.forEach { it.removeAllViews() }
-        val inflater = LayoutInflater.from(this)
-        tiles.chunked(TILES_PER_ROW).take(rows.size).forEachIndexed { r, rowTiles ->
-            val row = rows[r]
-            rowTiles.forEachIndexed { i, tile ->
-                val b = ItemTileBinding.inflate(inflater, row, false)
-                b.tileIcon.setImageResource(tile.icon)
-                b.tileLabel.text = tile.label
-                b.root.isSelected = tile.label == selectedTile
-                setEnabled(b.root, enabled)
-                b.root.setOnClickListener {
-                    // Подсвечиваем только нажатую плитку и блокируем все сразу, не дожидаясь нового состояния (двойной тап).
-                    rows.forEach { rr ->
-                        for (c in 0 until rr.childCount) rr.getChildAt(c).apply { isEnabled = false; isSelected = false }
-                    }
-                    b.root.isSelected = true
-                    selectedTile = tile.label
-                    renderedTiles = null
-                    tile.onClick()
-                }
-                (b.root.layoutParams as LinearLayout.LayoutParams).marginEnd =
-                    if (i < TILES_PER_ROW - 1) resources.getDimensionPixelSize(R.dimen.tile_gap) else 0
-                row.addView(b.root)
-            }
-            // Неполный ряд: пустые места, чтобы плитки не растягивались.
-            repeat(TILES_PER_ROW - rowTiles.size) { k ->
-                row.addView(Space(this).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, 0, 1f).apply {
-                        if (rowTiles.size + k < TILES_PER_ROW - 1) marginEnd = resources.getDimensionPixelSize(R.dimen.tile_gap)
-                    }
-                })
-            }
-        }
-    }
-
-    private fun renderAnswer(state: MainUiState) {
-        val lang = state.lang
-        binding.questionText.text = state.question?.let { "«$it»" }.orEmpty()
-        binding.questionText.isVisible = state.question != null
-        val answer = state.answer
-        if (answer != answerExpandedFor) {
-            answerExpandedFor = answer
-            answerExpanded = false
-        }
-        binding.answerText.text = answer ?: str(statusRes(state.phase), lang)
-        binding.answerText.setTextColor(color(if (answer == null) R.color.hub_muted2 else R.color.hub_ink))
-        binding.answerText.maxLines = if (answerExpanded) Int.MAX_VALUE else ANSWER_LINES
-        binding.showMoreButton.text = str(if (answerExpanded) R.string.action_show_less else R.string.action_show_more, lang)
-        binding.answerText.post { binding.showMoreButton.isVisible = answer != null && (answerExpanded || isEllipsized(binding.answerText)) }
-        if (!answerExpanded) binding.answerScroll.scrollTo(0, 0)
-    }
-
-    /** Частые вопросы: аккордеон, раскрыт не больше одного вопроса. */
-    private fun renderFaq(state: MainUiState) {
-        val lang = state.lang
-        binding.faqTitle.text = str(R.string.faq_title, lang)
-        val openItem = state.faqPageItems.firstOrNull { it.id == state.faqOpenId }
-        val answer = state.answer.takeIf { openItem != null && state.question == openItem.text.trim() }
-        if (answer != faqExpandedFor) {
-            faqExpandedFor = answer
-            faqExpanded = false
-        }
-        val key = listOf(lang, state.faqPageItems, state.faqOpenId, answer, state.phase, state.guideTarget, faqExpanded)
-        if (renderedFaq == key) return
-        renderedFaq = key
-
-        val list = binding.faqList
-        list.removeAllViews()
-        val inflater = LayoutInflater.from(this)
-        state.faqPageItems.forEach { item ->
-            val row = ItemFaqRowBinding.inflate(inflater, list, false)
-            val open = item.id == state.faqOpenId
-            row.rowQuestion.text = item.text
-            row.rowHeader.setOnClickListener { viewModel.faqToggle(item) }
-            row.rowHeader.contentDescription = item.text
-            if (open) {
-                row.root.setBackgroundResource(R.drawable.bg_row_open)
-                row.root.elevation = resources.getDimension(R.dimen.elev_card)
-                row.rowQuestion.typeface = ResourcesCompat.getFont(this, R.font.nunito_bold)
-                row.rowChevron.rotation = 180f
-                row.rowChevron.imageTintList = ColorStateList.valueOf(color(R.color.hub_primary))
-                row.rowBody.isVisible = true
-                row.rowAnswer.text = answer ?: str(statusRes(if (state.processing) state.phase else Phase.THINKING), lang)
-                row.rowAnswer.setTextColor(color(if (answer == null) R.color.hub_muted2 else R.color.hub_ink))
-                row.rowAnswer.maxLines = if (faqExpanded) FAQ_EXPANDED_LINES else FAQ_LINES
-                val target = state.guideTarget
-                row.rowGuide.isVisible = answer != null && target != null && state.guidingTo == null
-                row.rowGuide.text = str(R.string.action_guide_short, lang)
-                row.rowGuide.setOnClickListener { viewModel.guideToOffered() }
-                row.rowMore.text = str(if (faqExpanded) R.string.action_show_less else R.string.action_show_more, lang)
-                row.rowMore.setOnClickListener {
-                    faqExpanded = !faqExpanded
-                    render(viewModel.state.value)
-                }
-                row.rowAnswer.post {
-                    row.rowMore.isVisible = answer != null && (faqExpanded || isEllipsized(row.rowAnswer))
-                    row.rowActions.isVisible = row.rowGuide.isVisible || row.rowMore.isVisible
-                }
-            }
-            list.addView(row.root)
-        }
-    }
-
     // ---------------------------------------------------------------------------------------------
-    // Субтитры: облачко под лицом, пока робот говорит. Произнесённые слова тёмные, следующие — бледные.
-    // Договорил — в конце эмодзи настроения, облачко остаётся max(8 с, 60 мс/символ) или до следующего действия.
-    // ---------------------------------------------------------------------------------------------
-
-    private val pacer = SubtitlePacer()
-    private var subtitlePlan: List<SubtitlePacer.Word> = emptyList()
-    private var subtitleFor: String? = null
-    private var subtitleStarted = 0L
-    private var subtitleLingering = false
-    private var subtitleScreen: Screen? = null
-
-    /** Субтитры показаны (облачко под лицом в меню или крупные — в режиме лица). */
-    private var subtitleShown = false
-    private var subtitleFaceMode = false
-
-    private fun subtitleView(): TextView = if (subtitleFaceMode) binding.faceSubtitle else binding.subtitleText
-
-    private val subtitleTick = object : Runnable {
-        override fun run() {
-            val elapsed = SystemClock.uptimeMillis() - subtitleStarted
-            val frame = pacer.frameAt(subtitlePlan, elapsed) ?: return
-            subtitleView().text = subtitleSpan(frame)
-            if (elapsed < pacer.durationMillis(subtitlePlan)) handler.postDelayed(this, SUBTITLE_TICK_MS)
-        }
-    }
-
-    private val subtitleHide = Runnable { showSubtitles(false) }
-
-    private fun renderSubtitles(state: MainUiState) {
-        val text = state.subtitle ?: state.answer
-        val faceMode = state.mode == ScreenMode.FACE
-        if (subtitleShown && faceMode != subtitleFaceMode) showSubtitles(false)
-        if (state.phase == Phase.SPEAKING && !text.isNullOrBlank()) {
-            if (text != subtitleFor || !subtitleShown || subtitleLingering) {
-                subtitleFaceMode = faceMode
-                handler.removeCallbacks(subtitleHide)
-                subtitleFor = text
-                subtitleLingering = false
-                subtitleScreen = state.screen
-                subtitlePlan = pacer.plan(text)
-                subtitleStarted = SystemClock.uptimeMillis()
-                handler.removeCallbacks(subtitleTick)
-                showSubtitles(true)
-                subtitleTick.run()
-            }
-        } else if (subtitleShown) {
-            // Следующее действие (слушает, думает, ведёт, другой экран) — облачко больше не нужно.
-            val interrupted = state.phase != Phase.IDLE || state.screen != subtitleScreen
-            if (interrupted) showSubtitles(false) else if (!subtitleLingering) finishSubtitles()
-        }
-    }
-
-    /** Договорил: вся последняя фраза тёмная, в конце — эмодзи настроения; иногда робот подмигивает. */
-    private fun finishSubtitles() {
-        handler.removeCallbacks(subtitleTick)
-        subtitleLingering = true
-        pacer.frameAt(subtitlePlan, Long.MAX_VALUE)?.let {
-            subtitleView().text = SpannableStringBuilder(subtitleSpan(it)).append(' ').append(MoodEmoji.forText(subtitleFor))
-        }
-        if (Math.random() < SUBTITLE_WINK_CHANCE) (if (subtitleFaceMode) binding.bigFace else binding.face).wink()
-        val linger = maxOf(SUBTITLE_LINGER_MIN_MS, SUBTITLE_LINGER_PER_CHAR_MS * subtitleFor.orEmpty().length)
-        handler.postDelayed(subtitleHide, linger)
-    }
-
-    private fun showSubtitles(show: Boolean) {
-        if (!show) {
-            subtitleFor = null
-            subtitleLingering = false
-            handler.removeCallbacks(subtitleTick)
-            handler.removeCallbacks(subtitleHide)
-        }
-        subtitleShown = show
-        binding.subtitleBox.isVisible = show && !subtitleFaceMode
-        binding.faceSubtitle.isVisible = show && subtitleFaceMode
-        // Пока есть облачко, подпись статуса и «что слышу» не нужны: место под лицом одно.
-        binding.statusText.isVisible = !(show && !subtitleFaceMode)
-        binding.heardText.isVisible = !(show && !subtitleFaceMode)
-    }
-
-    private fun subtitleSpan(frame: SubtitlePacer.Frame): CharSequence {
-        val sb = SpannableStringBuilder()
-        val spoken = color(R.color.hub_ink)
-        val upcoming = color(R.color.hub_sub_upcoming)
-        frame.words.forEachIndexed { i, w ->
-            if (i > 0) sb.append(' ')
-            val start = sb.length
-            sb.append(w)
-            sb.setSpan(ForegroundColorSpan(if (i < frame.spoken) spoken else upcoming), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        return sb
-    }
-
-    // ---------------------------------------------------------------------------------------------
-    // Выход: крестик → подтверждение. Никто не ответил за 15 с — окно закрывается, робот работает дальше.
+    // Выход (крестик). Как у mynbay: на роботе с паролем — только сотрудник (панель пароля); без пароля на роботе
+    // крестика нет; на эмуляторе без пароля — прежнее подтверждение (наше, 15 с без ответа — остаёмся).
+    // Перед закрытием — слой прототипа «Приложение закрыто» с «Открыть снова» (1,5 с — передумать), затем
+    // приложение закрывается (на роботе — экран Android).
     // ---------------------------------------------------------------------------------------------
 
     private val exitTimeout = Runnable { stayIn() }
+    private val closeNow = Runnable { finishAndRemoveTask() }
+
+    private fun exitMode(): ExitMode = ExitMode.of(container.diagnostics.access)
 
     private fun askExit() {
-        viewModel.stop()
-        renderExitTexts(viewModel.state.value.lang)
-        binding.exitOverlay.isVisible = true
-        handler.removeCallbacks(exitTimeout)
-        handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
-    }
-
-    private fun renderExitTexts(lang: Lang) {
-        binding.exitQuestion.text = str(R.string.exit_question, lang)
-        binding.exitSub.text = str(R.string.exit_sub, lang)
-        binding.exitNoButton.text = str(R.string.exit_no, lang)
-        binding.exitYesButton.text = str(R.string.exit_yes, lang)
+        when (exitMode()) {
+            ExitMode.HIDDEN -> return
+            ExitMode.PIN -> showPin(PinPurpose.EXIT)
+            ExitMode.CONFIRM -> {
+                viewModel.stop()
+                two.exitConfirm = true
+                handler.removeCallbacks(exitTimeout)
+                handler.postDelayed(exitTimeout, EXIT_CONFIRM_TIMEOUT_MS)
+            }
+        }
     }
 
     private fun stayIn(wake: Boolean = true) {
         handler.removeCallbacks(exitTimeout)
-        binding.exitOverlay.isVisible = false
-        if (wake) viewModel.wake()
+        two.exitConfirm = false
+        if (wake) viewModel.onTouch()
     }
 
     private fun exitApp() {
         handler.removeCallbacks(exitTimeout)
         timber.log.Timber.i("exit requested from the screen")
+        two.exitConfirm = false
         viewModel.stop()
-        finishAndRemoveTask()
+        two.closed = true
+        handler.removeCallbacks(closeNow)
+        handler.postDelayed(closeNow, CLOSE_DELAY_MS)
+    }
+
+    /**
+     * «Открыть снова» на слое «Приложение закрыто» (прототип `reopen`): передумали — русский язык и приветствие; экран
+     * тот же, где был посетитель (MF5: к лицу — только свайпом).
+     */
+    private fun reopen() {
+        handler.removeCallbacks(closeNow)
+        two.closed = false
+        viewModel.wake()
+        if (viewModel.state.value.lang != Lang.RU) viewModel.selectLanguage(Lang.RU)
+        viewModel.goHome()
+        showHomeView()
     }
 
     // ---------------------------------------------------------------------------------------------
 
-    private fun color(id: Int) = ContextCompat.getColor(this, id)
-
-    private fun setEnabled(view: View, enabled: Boolean) {
-        view.isEnabled = enabled
-        view.alpha = if (enabled) 1f else DISABLED_ALPHA
-    }
-
-    private fun isEllipsized(view: TextView): Boolean {
-        val layout = view.layout ?: return false
-        val lines = layout.lineCount
-        return lines > 0 && (layout.getEllipsisCount(lines - 1) > 0 || lines > view.maxLines)
-    }
-
-    /** Любое касание экрана — активность посетителя (таймер заставки). */
+    /** Любое касание экрана — активность посетителя (таймер сна). Во сне само касание не будит (MF4). */
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (!techPauseRedirected && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.wake()
+        if (!techPauseRedirected && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) viewModel.onTouch()
         return super.dispatchTouchEvent(ev)
     }
 
@@ -698,8 +921,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderMicBadge() {
-        if (!::binding.isInitialized) return
-        binding.micOffBadge.visibility = if (hasMicPermission()) View.GONE else View.VISIBLE
+        two.micOff = !hasMicPermission()
     }
 
     private fun enterKioskMode() {
@@ -711,21 +933,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val DIAG_HOLD_MILLIS = 3_000L
+        /** Начертания Inter экранов 1 и 2. */
+        /** Панель пароля без ввода закрывается (прототип: 15 с, каждая клавиша и «⌫» перезапускают). */
+        const val PIN_TIMEOUT_MS = 15_000L
+        const val MAX_PLACE_CHIPS = 5
+
+        /** «Что это?»: сколько ждём начала ответа с карточкой-снимком. */
+        const val LOOK_PENDING_MS = 30_000L
+
+        /** «Что это?» нажато, а ViewModel ещё не «думает»: столько не сбрасываем ожидание снимка. */
+        const val LOOK_START_GRACE_MS = 1_500L
+
+        /** Пузырь с последней фразой и эмодзи после речи: max(8 с, 60 мс × длина) — прототип `fin`. */
+        const val LINGER_MIN_MS = 8_000L
+        const val LINGER_MS_PER_CHAR = 60L
+
+        /** Речь кончилась вскоре после «Стоп» / тапа — её оборвали, настроения и кивка нет. */
+        const val SPEECH_CUT_GRACE_MS = 400L
+        const val LOOK_THUMB_WIDTH = 480
+        const val CLOSE_DELAY_MS = 1_500L
+        val FONTS = intArrayOf(R.font.nunito_regular, R.font.nunito_medium, R.font.nunito_semibold, R.font.nunito_bold, R.font.nunito_extrabold)
         const val PREFS_UI = "main_ui"
         const val KEY_MIC_ASKED = "mic_permission_asked"
-        const val HOME_QUESTION_TILES = 4
-        const val FACE_CHIPS = 3
-        const val SWIPE_MIN_PX = 120
-        const val TILES_PER_ROW = 3
-        const val ANSWER_LINES = 3
-        const val FAQ_LINES = 2
-        const val FAQ_EXPANDED_LINES = 8
-        const val SUBTITLE_TICK_MS = 60L
-        const val SUBTITLE_LINGER_MIN_MS = 8_000L
-        const val SUBTITLE_LINGER_PER_CHAR_MS = 60L
-        const val SUBTITLE_WINK_CHANCE = 0.5
         const val EXIT_CONFIRM_TIMEOUT_MS = 15_000L
-        const val DISABLED_ALPHA = 0.55f
     }
 }

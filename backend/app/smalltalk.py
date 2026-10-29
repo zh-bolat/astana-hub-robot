@@ -10,30 +10,23 @@ import re
 
 from app.lang import Lang
 
-ABOUT: dict[str, str] = {
-    "ru": "Я робот-помощник Astana Hub. Могу рассказать о хабе, подсказать, где что находится, "
-    "проводить до нужного места или сказать, что передо мной.",
-    "kk": "Мен Astana Hub роботы-көмекшісімін. Хаб туралы айтып, қай жерде не бар екенін көрсетіп, "
-    "керек жерге дейін шығарып салып, алдымда не тұрғанын айта аламын.",
-    "en": "I'm the Astana Hub robot assistant. I can tell you about the hub, show where things are, "
-    "walk you there, or tell you what I see in front of me.",
-}
-
+# Коротко, тепло и энергично, в характере агента (app/agent/prompts.py), о себе — в мужском роде; без перечня
+# умений («что ты умеешь?» отвечает LLM). На приветствие — сразу два-три варианта, чем помочь.
 _REPLIES: dict[str, dict[str, str]] = {
     "greeting": {
-        "ru": "Здравствуйте! " + ABOUT["ru"] + " Чем помочь?",
-        "kk": "Сәлеметсіз бе! " + ABOUT["kk"] + " Қалай көмектесейін?",
-        "en": "Hello! " + ABOUT["en"] + " How can I help?",
+        "ru": "Здравствуйте! Я робот Astana Hub, рад вас видеть. Подсказать дорогу или рассказать о хабе?",
+        "kk": "Сәлеметсіз бе! Мен Astana Hub роботымын. Жол көрсетейін бе, әлде хаб туралы айтайын ба?",
+        "en": "Hello there! I'm the Astana Hub robot. Need directions or something about the hub?",
     },
     "thanks": {
-        "ru": "Пожалуйста! Обращайтесь, если будут ещё вопросы.",
-        "kk": "Оқасы жоқ! Тағы сұрақ болса, хабарласыңыз.",
-        "en": "You're welcome! Ask me anytime.",
+        "ru": "Пожалуйста! Всегда рад помочь.",
+        "kk": "Оқасы жоқ, келіп тұрыңыз!",
+        "en": "You're welcome, happy to help anytime!",
     },
     "bye": {
-        "ru": "До свидания! Хорошего дня в Astana Hub.",
-        "kk": "Сау болыңыз! Astana Hub-та күніңіз сәтті өтсін.",
-        "en": "Goodbye! Have a great day at Astana Hub.",
+        "ru": "До свидания! Отличного вам дня!",
+        "kk": "Сау болыңыз! Күніңіз сәтті өтсін!",
+        "en": "Goodbye! Have an awesome day!",
     },
 }
 

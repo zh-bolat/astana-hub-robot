@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     kb_rate_limit_per_min: int = 60
     # /docs, /redoc, /openapi.json: в проде выключены (схема — backend/openapi.json)
     expose_docs: bool = False
+    # Статистика задержек (GET /v1/admin/metrics, /v1/admin/metrics/page): отдельный токен админа.
+    # Не задан — оба адреса отвечают 404.
+    admin_token: SecretStr | None = None
+    admin_rate_limit_per_min: int = 30
 
     # LLM: auto = gemini (GEMINI_API_KEY) → openrouter (OPENROUTER_API_KEY) → fake
     llm_provider: Literal["auto", "gemini", "openrouter", "deepseek", "fake"] = "auto"
@@ -72,6 +76,24 @@ class Settings(BaseSettings):
     knowledge_snapshot_path: Path = BACKEND_DIR / "data" / "knowledge_snapshot.json"
     # БД без единого факта и таблица не задана → при старте засеять из YAML (разработка)
     kb_seed_yaml_if_empty: bool = True
+
+    # Поиск по базе (RAG, docs/db-schema.md раздел 2): по смыслу (эмбеддинги в kb_chunks) и по словам
+    # (полнотекст), слияние RRF. Эмбеддинги: auto — openrouter при OPENROUTER_API_KEY, иначе off; fake — без
+    # сети (тесты). off — поиска нет, агент работает только с фактами в промпте.
+    embedding_provider: Literal["auto", "openrouter", "fake", "off"] = "auto"
+    embedding_model: str = "google/gemini-embedding-2"
+    # Эмбеддинг вопроса на пути ответа, сек: не успел — поиск только по словам
+    embedding_query_timeout_s: float = 1.0
+    # Индексация: текстов в одном запросе к провайдеру; таймаут одного запроса, сек
+    embedding_batch_size: int = Field(64, ge=1, le=256)
+    embedding_timeout_s: float = 30.0
+    # Как агент получает найденное (только если эмбеддинги доступны, иначе off):
+    # prefetch — сервер сам ищет по реплике до ответа модели и кладёт найденное в сообщение хода («Справка»);
+    # tool — модель сама вызывает инструмент search_kb (hybrid — старое имя tool); off — поиска нет
+    retrieval_mode: Literal["off", "prefetch", "tool", "hybrid"] = "prefetch"
+    # prefetch: потолок поиска на ход, сек (эмбеддинг ≤ EMBEDDING_QUERY_TIMEOUT_S, дальше — только полнотекст);
+    # не успел — ход идёт к модели без справки
+    kb_prefetch_timeout_s: float = 1.2
 
     # PostgreSQL 16 + pgvector — единственная рабочая БД (docs/db-schema.md).
     # Локально: infra/docker-compose.dev.yml (порт 127.0.0.1:5432), пароль — в backend/.env.
@@ -134,12 +156,29 @@ class Settings(BaseSettings):
     # ElevenLabs
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
-    elevenlabs_tts_model_kk: str = "eleven_v3"  # казахский умеет только v3
+    # казахский умеет только v3 (другая модель для kk заменяется на eleven_v3 — flash отвечает unsupported_language)
+    elevenlabs_tts_model_kk: str = "eleven_v3"
     elevenlabs_tts_model_default: str = "eleven_flash_v2_5"  # ru/en, минимальная задержка
-    # Голос по умолчанию — премиальный «George» из стандартной библиотеки (мультиязычные модели)
-    elevenlabs_voice_ru: str = "JBFqnCBsd6RMkjVDRZzb"
-    elevenlabs_voice_kk: str = "JBFqnCBsd6RMkjVDRZzb"
-    elevenlabs_voice_en: str = "JBFqnCBsd6RMkjVDRZzb"
+    # /v1/tts: своя модель для ru / en (пусто — ELEVENLABS_TTS_MODEL_DEFAULT)
+    elevenlabs_tts_model_ru: str | None = None
+    elevenlabs_tts_model_en: str | None = None
+    # Голоса (и /v1/tts, и live), выбраны на прослушивании 2026-10: RU Alina, EN Laura (eleven_flash_v2_5),
+    # KZ Kari (eleven_v3)
+    elevenlabs_voice_ru: str = "dVRDrbP5ULGXB94se4KZ"
+    elevenlabs_voice_kk: str = "Jbte7ht1CqapnZvc4KpK"
+    elevenlabs_voice_en: str = "FGY2WhTYpPnrIDTdsKH5"
+    # voice_settings flash / multilingual (ru и en, общие): энергичная подача — stability 0.35, style 0.45,
+    # speed 1.1 (0.7–1.2). Ровнее и чуть быстрее синтез — stability выше, style 0.
+    elevenlabs_stability: float = Field(0.35, ge=0.0, le=1.0)
+    elevenlabs_similarity: float = Field(0.8, ge=0.0, le=1.0)
+    elevenlabs_style: float = Field(0.45, ge=0.0, le=1.0)
+    elevenlabs_speaker_boost: bool = True
+    elevenlabs_speed: float = Field(1.1, ge=0.7, le=1.2)
+    # Eleven v3 (kk) берёт только stability, округляется до 0.0 Creative / 0.5 Natural / 1.0 Robust
+    elevenlabs_v3_stability: float = Field(0.5, ge=0.0, le=1.0)
+    # Звуковой тег v3 перед каждой фразой, которая уходит в v3 (только в запрос синтеза: не в субтитры,
+    # историю и журнал); пусто — без тега
+    elevenlabs_v3_tag: str = "[cheerfully]"
     elevenlabs_output_format: str = "mp3_44100_128"
     elevenlabs_stt_model: str = "scribe_v2"
     # Live STT (WebSocket /v1/stt/stream): auto — ElevenLabs Scribe Realtime при ELEVENLABS_API_KEY,
@@ -153,6 +192,67 @@ class Settings(BaseSettings):
     stt_stream_no_speech_s: float = 8.0
     # Тишина: пиковая амплитуда ниже порога → пустой текст без вызова провайдера
     stt_silence_peak: int = 500
+    # Живой голосовой режим WS /v1/live (Pipecat, app/live). Пусто — включён, если есть ELEVENLABS_API_KEY
+    # и агент (OPENROUTER_API_KEY); выключен — /v1/live сразу закрывается с error, робот в запасном режиме.
+    live_enabled: bool | None = None
+    live_max_sessions: int = Field(2, ge=1)  # одновременных live-сессий на токен
+    live_idle_timeout_s: float = 120.0  # ни речи, ни ответа, ни команд робота — сессия закрывается
+    # VAD (Silero): подтверждение начала/конца речи, порог уверенности и громкости
+    live_vad_start_s: float = 0.2
+    live_vad_stop_s: float = 0.2
+    live_vad_confidence: float = 0.7
+    live_vad_min_volume: float = 0.6
+    # Конец реплики: smart-turn v3 (локальная ONNX-модель) по паузе VAD; модель сказала «не договорил» —
+    # ждём тишину до live_turn_max_silence_s. Без smart-turn — конец реплики после live_turn_silence_s тишины.
+    live_smart_turn: bool = True
+    live_turn_silence_s: float = 0.5
+    live_turn_max_silence_s: float = 0.8
+    # После конца реплики ждём финальный текст STT не дольше (потом — последний промежуточный)
+    live_stt_final_timeout_s: float = 1.5
+    # Распознавание live: segmented — отрезки речи по VAD целиком в STT_PROVIDER (OpenRouter / Gemini): платим
+    # только за речь, тишина бесплатна, но без промежуточного текста; elevenlabs — потоковый Scribe Realtime
+    # (промежуточный текст, быстрее на ~0,3–0,5 с, но платится каждая секунда открытого микрофона).
+    live_stt_mode: Literal["segmented", "elevenlabs"] = "segmented"
+    # segmented: ждём текст отрезка не дольше (от конца речи), затем отрезок считается пустым
+    live_stt_segment_timeout_s: float = 4.0
+    # Передавать STT язык экрана; false (по умолчанию) — автоопределение: язык реплики — по тексту и языку от STT,
+    # а если STT вернул язык не из ru/kk/en — язык сессии (hello.lang)
+    live_stt_language_hint: bool = False
+    # Перебивание голосом (v1.4, шумный зал): stop_only — только команда остановки («стоп», «хватит», «тоқта»,
+    # «stop»…, app/live/stop.py), любая другая речь во время ответа отбрасывается (не перебивание и не новый
+    # ход); speech — прежнее: любая речь не короче live_barge_in_min_ms с текстом не шум перебивает и
+    # становится новой репликой.
+    live_barge_in: Literal["stop_only", "speech"] = "stop_only"
+    # speech: речь посетителя во время ответа не короче, мс, и текст не шум (app/noise.py)
+    live_barge_in_min_ms: int = 300
+    live_barge_in_require_text: bool = True
+    # Без эхоподавления на роботе (hello.aec=false), пока звучит ответ: тихий звук (RMS PCM16 ниже порога)
+    # считается эхом и глушится, перебивание — от live_echo_min_ms речи; хвост — реверберация зала после звука
+    live_echo_rms: int = 1800
+    live_echo_min_ms: int = 600
+    live_echo_tail_s: float = 0.3
+    # TTS live: ru/en — потоковый WebSocket ElevenLabs (модели v3 он не поддерживает), kk — HTTP-поток eleven_v3.
+    # Голоса — ELEVENLABS_VOICE_RU/KK/EN, voice_settings — ELEVENLABS_STABILITY… / ELEVENLABS_V3_STABILITY.
+    live_tts_model: str = "eleven_flash_v2_5"
+    # Своя модель live для языка (пусто: ru/en — LIVE_TTS_MODEL, kk — ELEVENLABS_TTS_MODEL_KK; kk — только v3)
+    live_tts_model_ru: str | None = None
+    live_tts_model_en: str | None = None
+    live_tts_model_kk: str | None = None
+    # Прогрев голосов: холодный первый запрос к голосу ElevenLabs — 10–19 с, тёплый — 0,5–0,8 с. При открытии
+    # live-сессии — короткий синтез в фоне (звук роботу не уходит), не чаще раза в интервал на голос и модель.
+    # active — только язык сессии; all — сначала он, затем остальные; off — без прогрева.
+    live_tts_warmup: Literal["off", "active", "all"] = "all"
+    live_tts_warmup_interval_s: float = 600.0
+    # Звук шаблонных фраз быстрого пути (места) — из кеша TTS (память + диск TTS_CACHE_DIR), PCM 24 кГц
+    live_tts_phrase_cache: bool = True
+    # Фраза длиннее — режется для синтеза по запятым (субтитр остаётся целым): короче кусок — раньше звук.
+    # kk (eleven_v3 по HTTP) начинает тем позже, чем длиннее текст, поэтому режется мельче, первая — особенно.
+    live_tts_chunk_chars: int = 120
+    live_tts_chunk_chars_kk: int = 70
+    live_tts_first_chunk_chars_kk: int = 40
+    # Быстрый путь live: «где X?» / «проводи до X» с однозначным местом из базы и «да» на «Проводить вас?» —
+    # шаблонный ответ + действие без модели (app/agent/fastpath.py); false — всё через агента
+    live_fast_places: bool = True
     yandex_api_key: SecretStr | None = None
     yandex_folder_id: str | None = (
         None  # нужен только для ключа пользователя, не сервисного аккаунта
@@ -163,7 +263,9 @@ class Settings(BaseSettings):
     yandex_voice_kk: str = "amira"
     yandex_voice_en: str = "john"
     stt_timeout_s: float = 5.0  # робот ждёт /stt 6 с
-    tts_timeout_s: float = 4.0  # робот ждёт /tts 5 с
+    tts_timeout_s: float = 4.0  # робот ждёт /tts 5 с (в потоке — до первых байт)
+    # Потоковый /v1/tts?stream=true: весь поток не дольше, сек (дальше — обрыв, клиент дозапрашивает)
+    tts_stream_total_s: float = 20.0
     max_audio_bytes: int = 600 * 1024
     max_audio_seconds: float = 15.0
     # Отдельный бакет для /stt и /tts: на один вопрос робот делает 1 stt + N tts
@@ -193,8 +295,15 @@ class Settings(BaseSettings):
         "yandex_api_key",
         "gemini_api_key",
         "sentry_dsn",
+        "admin_token",
         "openrouter_api_key",
         "tts_fallback_provider",
+        "live_enabled",
+        "elevenlabs_tts_model_ru",
+        "elevenlabs_tts_model_en",
+        "live_tts_model_ru",
+        "live_tts_model_en",
+        "live_tts_model_kk",
         mode="before",
     )
     @classmethod
@@ -254,10 +363,32 @@ class Settings(BaseSettings):
             return "off"
         return "openrouter" if self.openrouter_api_key else "off"
 
+    def resolved_embedding_provider(self) -> str:
+        if self.embedding_provider != "auto":
+            return self.embedding_provider
+        return "openrouter" if self.openrouter_api_key else "off"
+
+    def retrieval_kind(self) -> str:
+        """off | tool | prefetch по RETRIEVAL_MODE, без учёта эмбеддингов (hybrid — старое имя tool)."""
+        if self.retrieval_mode == "hybrid":
+            return "tool"
+        return self.retrieval_mode
+
+    def resolved_retrieval_mode(self) -> str:
+        """tool / prefetch только при доступных эмбеддингах (поиск без них — не включаем)."""
+        if self.resolved_embedding_provider() == "off":
+            return "off"
+        return self.retrieval_kind()
+
     def resolved_stt_stream_provider(self) -> str:
         if self.stt_stream_provider != "auto":
             return self.stt_stream_provider
         return "elevenlabs" if self.elevenlabs_api_key else "buffered"
+
+    def resolved_live_enabled(self) -> bool:
+        if self.live_enabled is not None:
+            return self.live_enabled
+        return bool(self.elevenlabs_api_key) and self.resolved_chat_provider() == "openrouter"
 
     def resolved_vision_provider(self) -> str:
         if self.vision_provider != "auto":

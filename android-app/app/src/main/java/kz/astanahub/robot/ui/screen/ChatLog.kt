@@ -1,0 +1,187 @@
+package kz.astanahub.robot.ui.screen
+
+import androidx.compose.runtime.Immutable
+import kz.astanahub.robot.backend.Citation
+import kz.astanahub.robot.ui.MainUiState
+
+enum class ChatRole { VISITOR, ROBOT }
+
+/** Реплика в чате экрана 2. [id] — стабильный ключ (LazyColumn), растёт с каждой новой репликой. */
+@Immutable
+data class ChatItem(
+    val id: Long,
+    val role: ChatRole,
+    val text: String,
+    val citations: List<Citation> = emptyList(),
+)
+
+/**
+ * Чат экрана 2 из состояния [MainUiState] (чистый Kotlin, тест): MainViewModel держит только текущий ход
+ * (`question` / `answer`, ответ растёт по фразам), а экран показывает разговор целиком.
+ *
+ * Правила (сверены с путями MainViewModel — новый вопрос, ответ по фразам, «шум» с откатом, «Назад», «Домой»):
+ * - новый `question` (или тот же вопрос заново: ответ сброшен в null) — реплика посетителя;
+ * - `answer` растёт (новый текст продолжает прежний) — обновляется реплика робота этого хода; не продолжает
+ *   (старт поездки, ошибка после части ответа) — новая реплика робота; ответ без вопроса (приветствие) — тоже;
+ * - вопрос отозван (сервер счёл шумом: `question` → null, ответа не было) — реплика посетителя убирается;
+ *   на экран вернули прежний ход (`question`/`answer` прошлого хода) — это откат, не новая реплика;
+ * - `citations` — к реплике робота текущего хода (пустые не стирают уже показанные);
+ * - новый разговор (`conversation`, новый посетитель) — чат с чистого листа; последний ход старого разговора,
+ *   если снимок ещё несёт его (session_id сменился раньше сброса), в новый чат не попадает;
+ * - хранится не больше [maxItems] реплик (старые уходят сверху).
+ */
+class ChatLog(private val maxItems: Int = MAX_ITEMS) {
+
+    private val list = ArrayList<ChatItem>()
+
+    /** Неизменяемый снимок для экрана; новый объект — только когда чат изменился. */
+    var items: List<ChatItem> = emptyList()
+        private set
+
+    private var nextId = 1L
+    private var conversation = Int.MIN_VALUE
+    private var prevQuestion: String? = null
+    private var prevAnswer: String? = null
+
+    /** Реплики текущего хода (id; -1 — нет). */
+    private var visitorId = NONE
+    private var robotId = NONE
+
+    /** Ход вернули на экран («Назад», откат шума): его источники уже показаны, чужие из состояния не цепляем. */
+    private var restoredTurnShown = false
+
+    /** Источники из прошлого снимка: цепляем только что пришедшие (не повторяем их под стартом поездки и т. п.). */
+    private var prevCitations: List<Citation> = emptyList()
+
+    /** true — чат изменился. */
+    fun update(s: MainUiState): Boolean {
+        var changed = false
+        if (s.conversation != conversation) {
+            conversation = s.conversation
+            // ViewModel меняет session_id раньше, чем сбрасывает вопрос и ответ: снимок нового разговора может ещё
+            // нести последний ход старого — он остаётся за чертой (не попадает в новый чат).
+            val oldTurn = lastTurn()
+            if (list.isNotEmpty()) {
+                list.clear()
+                changed = true
+            }
+            visitorId = NONE
+            robotId = NONE
+            val leftover = oldTurn != null && s.question == oldTurn.first && s.answer != null && s.answer == oldTurn.second
+            prevQuestion = if (leftover) s.question else null
+            prevAnswer = if (leftover) s.answer else null
+        }
+        val q = s.question
+        val a = s.answer
+
+        if (q == null && prevQuestion != null) {
+            // Вопрос сняли. Ответа не было — реплику отозвали (шум); был — ход просто закрыт («Домой», свёрнут FAQ).
+            if (robotId == NONE && visitorId != NONE && a == null) changed = remove(visitorId) || changed
+            visitorId = NONE
+        }
+        val newTurn = q != null && (q != prevQuestion || (prevAnswer != null && a == null))
+        if (newTurn) {
+            val restored = restoredTurn(q, a)
+            if (restored != null) {
+                // Экран вернули к прошлому ходу («шум» с откатом, «Назад» из частых вопросов) — новых реплик нет;
+                // висящие в конце вопросы без ответа (отозванный «шум») убираем.
+                var i = list.lastIndex
+                while (i >= 0 && list[i].id != restored.second && list[i].role == ChatRole.VISITOR) {
+                    list.removeAt(i)
+                    changed = true
+                    i--
+                }
+                visitorId = restored.first
+                robotId = restored.second
+                restoredTurnShown = true
+            } else {
+                visitorId = append(ChatRole.VISITOR, q)
+                restoredTurnShown = false
+                robotId = NONE
+                changed = true
+            }
+        }
+        if (a == null) {
+            // Ответа нет — у хода нет реплики робота (откат всегда с ответом, его указатели уже стоят).
+            robotId = NONE
+        } else if (a != prevAnswer) {
+            val current = indexOf(robotId)
+            if (current >= 0 && a.startsWith(list[current].text.trimEnd())) {
+                if (list[current].text != a) {
+                    list[current] = list[current].copy(text = a)
+                    changed = true
+                }
+            } else if (current < 0 || list[current].text != a) {
+                robotId = append(ChatRole.ROBOT, a)
+                changed = true
+            }
+        }
+        if (s.citations.isNotEmpty() && s.citations != prevCitations && !restoredTurnShown) {
+            val i = indexOf(robotId)
+            if (i >= 0 && list[i].citations != s.citations) {
+                list[i] = list[i].copy(citations = s.citations)
+                changed = true
+            }
+        }
+        prevQuestion = q
+        prevAnswer = a
+        prevCitations = s.citations
+        if (list.size > maxItems) {
+            list.subList(0, list.size - maxItems).clear()
+            changed = true
+        }
+        if (changed) items = list.toList()
+        return changed
+    }
+
+    /**
+     * Ход, на который вернули экран: реплика робота с текстом [a], перед ней — посетитель с [q] (ищем с конца: «Назад»
+     * возвращает и более ранний ход). (visitorId, robotId) или null. Новый ход с тем же вопросом и ответом сюда не
+     * попадает: у нового хода сначала нет ответа.
+     */
+    private fun restoredTurn(q: String, a: String?): Pair<Long, Long>? {
+        if (a == null) return null
+        for (i in list.lastIndex downTo 1) {
+            val robot = list[i]
+            if (robot.role != ChatRole.ROBOT || robot.text != a) continue
+            // Вопрос этого хода — ближайшая реплика посетителя выше (у хода может быть несколько реплик робота:
+            // ответ, старт поездки, «Хорошо, стою»).
+            var j = i - 1
+            while (j >= 0 && list[j].role == ChatRole.ROBOT) j--
+            if (j >= 0 && list[j].text == q) return list[j].id to robot.id
+        }
+        return null
+    }
+
+    /** Последний ход: (вопрос, ответ) — посетитель и следующая за ним реплика робота; null — нет такого. */
+    private fun lastTurn(): Pair<String, String>? {
+        val r = list.lastOrNull() ?: return null
+        if (r.role != ChatRole.ROBOT) return null
+        val v = list.getOrNull(list.size - 2)?.takeIf { it.role == ChatRole.VISITOR } ?: return null
+        return v.text to r.text
+    }
+
+    private fun append(role: ChatRole, text: String): Long {
+        val id = nextId++
+        list.add(ChatItem(id, role, text))
+        return id
+    }
+
+    private fun remove(id: Long): Boolean {
+        val i = indexOf(id)
+        if (i < 0) return false
+        list.removeAt(i)
+        return true
+    }
+
+    private fun indexOf(id: Long): Int {
+        if (id == NONE) return -1
+        for (i in list.indices.reversed()) if (list[i].id == id) return i
+        return -1
+    }
+
+    companion object {
+        const val MAX_ITEMS = 120
+        private const val NONE = -1L
+    }
+}
