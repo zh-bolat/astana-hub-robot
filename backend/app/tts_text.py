@@ -252,7 +252,9 @@ def _ru_decimal(m: re.Match[str]) -> str:
         return n % 10 == 1 and n % 100 != 11
 
     whole = {"n": "целая", "g": "целой"}[case] if one(a) else "целых"
-    frac = ("десят" if len(m["b"]) == 1 else "сот") + ({"n": "ая", "g": "ой"}[case] if one(b) else "ых")
+    frac = ("десят" if len(m["b"]) == 1 else "сот") + (
+        {"n": "ая", "g": "ой"}[case] if one(b) else "ых"
+    )
     return f"{_ru_card(a, case, 'f')} {whole} {_ru_card(b, case, 'f')} {frac}"
 
 
@@ -279,6 +281,8 @@ def _numbers_special(text: str, lang: str) -> str:
     text = _GROUPED.sub(lambda m: re.sub(r"\s", "", m.group(0)), text)
     text = _DECIMAL.sub(_kk_decimal if lang == "kk" else _ru_decimal, text)
     return _SLASH.sub(lambda m: _slash(m, lang), text)
+
+
 _PERCENT = re.compile(r"(?<![\w.,])(?P<n>\d{1,4})\s*%")
 _CASE_RU = {
     "n": "nominative",
@@ -395,7 +399,9 @@ def _ru_numbers(text: str) -> str:
 
     text = _RU_ORD_SUFFIX.sub(ord_suffix, text)
 
-    def date(m: re.Match[str]) -> str:  # «2 июля», «до 1 января», «2 и 3 октября» — родительный, ср. род
+    def date(
+        m: re.Match[str],
+    ) -> str:  # «2 июля», «до 1 января», «2 и 3 октября» — родительный, ср. род
         first = f"{_ru_ord(int(m['a']), 'g', 'n')} {m['sep']} " if m["a"] else ""
         return f"{first}{_ru_ord(int(m['n']), 'g', 'n')} {m['m']}"
 
@@ -506,7 +512,9 @@ _KK_TIME = re.compile(
     r"(?<![\d:])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?:-(?P<suf>[^\W\d_]+))?(?![\d:])"
 )
 _KK_NUM = re.compile(
-    r"(?<![\w.,:])(?P<n>\d{1,9})(?:-(?P<suf>[^\W\d_]+)|(?P<ord>(?=\s+(?:қабат|жыл|" + _KK_MONTHS + r"))))?"
+    r"(?<![\w.,:])(?P<n>\d{1,9})(?:-(?P<suf>[^\W\d_]+)|(?P<ord>(?=\s+(?:қабат|жыл|"
+    + _KK_MONTHS
+    + r"))))?"
     r"(?![\w]|[.,:]\d)"
 )
 # Притяжательный суффикс (с падежом) после числа: «айдың 25-іне» → «жиырма бесіне», «20-сына» → «жиырмасына»;
