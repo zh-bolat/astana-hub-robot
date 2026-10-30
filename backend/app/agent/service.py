@@ -731,7 +731,7 @@ class ChatService:
             if _is_narration(phrase, st.lang):
                 logger.warning("agent_narration_dropped", extra={"chars": len(phrase)})
                 continue
-            reason = blocked_reason(" ".join([*st.emitted, *out, phrase]), question, corpus)
+            reason = self._blocked_reason(" ".join([*st.emitted, *out, phrase]), question, corpus)
             if reason:
                 logger.warning("answer_blocked", extra={"endpoint": "chat", "reason": reason})
                 st.category = "blocked"
@@ -1076,6 +1076,10 @@ class ChatService:
     def _quick(self, req: ChatRequest, request_id: str) -> AnswerResponse | None:
         """Локальный быстрый ответ на «привет / спасибо / пока» без модели."""
         return self.answers._quick(req, request_id)
+
+    def _blocked_reason(self, answer: str, question: str, corpus: str) -> str | None:
+        """Выходной фильтр (app/safety.py); профили могут ослабить отдельные проверки."""
+        return blocked_reason(answer, question, corpus)
 
     def _corpus(self, kb: KnowledgeBase) -> str:
         """Корпус выходного фильтра: ссылки, телефоны и цитаты из него не считаются выдумкой модели."""

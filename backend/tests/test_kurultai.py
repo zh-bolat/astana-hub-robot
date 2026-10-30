@@ -766,3 +766,30 @@ def test_kurultai_live_rejects_wrong_token(kurultai_live):
                 pass
 
     asyncio.run(asyncio.wait_for(scenario(), 20))
+
+
+def test_kurultai_allows_question_words_in_answer_but_hub_blocks_them() -> None:
+    """Регресс 2026-10-30: «Кто председатель комитета по финансам…» → ответ блокировался как verbatim."""
+    from app.agent.service import ChatService
+    from app.kurultai.agent import KurultaiChatService
+
+    question = "Кто председатель комитета по финансам и бюджету?"
+    answer = "Председатель Комитета по финансам и бюджету — Перепечина Ольга Валентиновна."
+    corpus = "Комитет по финансам и бюджету (членов: 17): Перепечина Ольга Валентиновна — Председатель Комитета."
+    assert (
+        ChatService._blocked_reason(object.__new__(ChatService), answer, question, corpus)
+        == "verbatim"
+    )
+    assert (
+        KurultaiChatService._blocked_reason(
+            object.__new__(KurultaiChatService), answer, question, corpus
+        )
+        is None
+    )
+    link = answer + " Подробнее на example.com."
+    assert (
+        KurultaiChatService._blocked_reason(
+            object.__new__(KurultaiChatService), link, question, corpus
+        )
+        == "link"
+    )

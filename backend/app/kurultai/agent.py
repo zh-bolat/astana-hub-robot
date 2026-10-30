@@ -124,6 +124,13 @@ class KurultaiChatService(ChatService):
             return max(self.settings.agent_timeout_s, self.settings.kurultai_web_timeout_s)
         return self.settings.agent_timeout_s
 
+    def _blocked_reason(self, answer: str, question: str, corpus: str) -> str | None:
+        """Без проверки verbatim: названия комитетов и законов в ответе неизбежно повторяют вопрос в другом падеже
+        («комитета по финансам»), которого нет в снимке. Ссылки и телефоны вне данных по-прежнему блокируются."""
+        return super()._blocked_reason(
+            answer, "", corpus
+        )  # пустой вопрос — проверка verbatim не срабатывает
+
     def _corpus(self, kb: KnowledgeBase) -> str:
         """Снимок и официальные сайты: их номера, названия и домены в ответе — не выдумка модели."""
         return "\n".join([self.snapshot(), *prompts.OFFICIAL_DOMAINS])
