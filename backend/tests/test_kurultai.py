@@ -793,3 +793,24 @@ def test_kurultai_allows_question_words_in_answer_but_hub_blocks_them() -> None:
         )
         == "link"
     )
+
+
+def test_smalltalk_skips_web_search() -> None:
+    from app.kurultai.websearch import is_smalltalk
+
+    for phrase in [
+        "Привет, ты меня слышишь?",
+        "Ассалаумағалейкүм",
+        "О, мощно, слышишь?",
+        "Спасибо!",
+        "Сәлем",
+        "Кто ты?",
+    ]:
+        assert is_smalltalk(phrase), phrase
+    for phrase in [
+        "Привет, какие законопроекты сейчас в Курултае?",
+        "Какие последние новости Курултая?",
+        "Кто председатель комитета по финансам?",
+        "Пока что расскажи о новостях",
+    ]:
+        assert not is_smalltalk(phrase), phrase

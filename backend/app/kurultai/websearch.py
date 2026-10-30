@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import re
+
 _LATEST_NEWS_KEYS = (
     "вчера",
     "позавчера",
@@ -70,3 +72,24 @@ def needs_web_search(message: str | None) -> bool:
         return True
     text = (message or "").lower()
     return any(key in text for key in _SCHEDULE_KEYS)
+
+
+# Приветствия, «слышишь?», благодарность — без поиска: он добавляет 3–5 с к ответу, а искать тут нечего.
+_GREETING_START = re.compile(
+    r"^(привет|здравств|здраств|добр(ый|ое|ого)|салем|сәлем|сәлеметсіз|ассалау|салам|хай|hello|hi\b|"
+    r"спасибо|рахмет|благодар|пока$|до свидания|сау бол|кто ты|ты кто|сен кімсің|алло|ау\b)",
+    re.IGNORECASE,
+)
+_SMALLTALK_ANY = re.compile(
+    r"(слышишь|слышно|естисің|естіп тұрсың|меня видишь|көріп тұрсың)", re.IGNORECASE
+)
+
+
+def is_smalltalk(message: str | None) -> bool:
+    """Короткая реплика без вопроса по существу: приветствие, «слышишь?», «спасибо», «кто ты» (до 5 слов)."""
+    text = re.sub(r"[^\w\s]", " ", (message or "").lower()).strip()
+    if not text:
+        return True
+    if len(text.split()) > 5:
+        return False
+    return bool(_GREETING_START.match(text) or _SMALLTALK_ANY.search(text))

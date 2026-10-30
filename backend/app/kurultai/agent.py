@@ -25,7 +25,7 @@ from app.agent.tools import ChatContext, no_answer
 from app.knowledge.models import KnowledgeBase
 from app.kurultai import prompts
 from app.kurultai.quryltai import QuryltaiSync
-from app.kurultai.websearch import needs_web_search
+from app.kurultai.websearch import is_smalltalk, needs_web_search
 from app.lang import Lang, resolve_lang
 from app.profiles import KURULTAI
 from app.schemas import AnswerResponse, ChatRequest
@@ -73,7 +73,7 @@ class KurultaiChatService(ChatService):
 
     # ---------- промпт и модель ----------
     def _wants_web(self, question: str) -> bool:
-        if not question or not self.settings.kurultai_web_search:
+        if not question or not self.settings.kurultai_web_search or is_smalltalk(question):
             return False
         return self.settings.kurultai_web_search_always or needs_web_search(question)
 
