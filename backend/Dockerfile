@@ -29,6 +29,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     KNOWLEDGE_SNAPSHOT_PATH=/data/knowledge_snapshot.json \
     TTS_CACHE_DIR=/data/tts_cache \
+    QURYLTAI_SNAPSHOT_PATH=/data/quryltai_snapshot.json \
     KNOWLEDGE_DIR=/app/knowledge \
     TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1
 

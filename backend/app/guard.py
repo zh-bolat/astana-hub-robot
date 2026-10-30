@@ -1,7 +1,8 @@
 """Защита /v1/* до разбора запроса FastAPI (чистый ASGI, docs/api-contract.md «Таймауты и лимиты»).
 
 Порядок для всех /v1/* кроме /v1/health:
-1. Bearer-токен (secrets.compare_digest). Нет/неверный → 401, тело не читается вообще.
+1. Bearer-токен любого профиля робота (secrets.compare_digest, app/profiles.py). Нет/неверный → 401, тело не
+   читается вообще.
 2. Лимит тела по пути. Content-Length больше лимита → 413 сразу, без чтения.
    Без Content-Length (chunked) — байты считаются по мере чтения; превышение → 413, чтение обрывается.
 
@@ -10,13 +11,12 @@ Depends(require_robot) в эндпоинтах остаётся второй л�
 
 from __future__ import annotations
 
-import secrets
-
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import Settings
 from app.errors import error_response
+from app.profiles import bearer, profile_for_token
 
 PUBLIC_PATHS = frozenset({"/v1/health"})
 # Админка (статистика задержек): свой токен ADMIN_TOKEN, его проверяет сам эндпоинт (app/metrics_api.py)
@@ -42,20 +42,6 @@ class BodyTooLarge(HTTPException):
         super().__init__(413, f"Request body exceeds {limit} bytes")
 
 
-def bearer_ok(headers: list[tuple[bytes, bytes]], expected: str) -> bool:
-    if not expected:
-        return False
-    raw = b""
-    for name, value in headers:
-        if name.lower() == b"authorization":
-            raw = value
-            break
-    scheme, _, token = raw.decode("latin-1").partition(" ")
-    if scheme.lower() != "bearer":
-        return False
-    return secrets.compare_digest(token.strip().encode("latin-1"), expected.encode())
-
-
 def _content_length(headers: list[tuple[bytes, bytes]]) -> int | None:
     for name, value in headers:
         if name.lower() == b"content-length":
@@ -66,10 +52,20 @@ def _content_length(headers: list[tuple[bytes, bytes]]) -> int | None:
     return None
 
 
+def bearer_profile_ok(headers: list[tuple[bytes, bytes]], settings: Settings) -> bool:
+    """Токен одного из профилей робота (ROBOT_TOKEN или KURULTAI_ROBOT_TOKEN, app/profiles.py)."""
+    raw = b""
+    for name, value in headers:
+        if name.lower() == b"authorization":
+            raw = value
+            break
+    return profile_for_token(settings, bearer(raw.decode("latin-1"))) is not None
+
+
 class GuardMiddleware:
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
-        self.expected = settings.robot_token.get_secret_value()
+        self.settings = settings
         self.limits = body_limits(settings)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -79,7 +75,7 @@ class GuardMiddleware:
             return
 
         headers = scope.get("headers", [])
-        if not bearer_ok(headers, self.expected):
+        if not bearer_profile_ok(headers, self.settings):
             response = error_response(401, "unauthorized", "Missing or invalid bearer token")
             await response(scope, receive, send)
             return

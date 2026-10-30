@@ -16,8 +16,10 @@ class Settings(BaseSettings):
         env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # Авторизация робота
+    # Авторизация робота. ROBOT_TOKEN — профиль astana_hub (робот Astana Hub), KURULTAI_ROBOT_TOKEN — профиль
+    # kurultai (робот Курултая, app/kurultai); пустой KURULTAI_ROBOT_TOKEN — профиль выключен (app/profiles.py)
     robot_token: SecretStr = Field(default=SecretStr(""))
+    kurultai_robot_token: SecretStr = Field(default=SecretStr(""))
     rate_limit_per_min: int = 30  # /ask и /look
     # Отдельный бакет для /places и /quick-questions: их опрос не съедает лимит вопросов
     kb_rate_limit_per_min: int = 60
@@ -253,6 +255,25 @@ class Settings(BaseSettings):
     # Быстрый путь live: «где X?» / «проводи до X» с однозначным местом из базы и «да» на «Проводить вас?» —
     # шаблонный ответ + действие без модели (app/agent/fastpath.py); false — всё через агента
     live_fast_places: bool = True
+    # Профиль kurultai (KURULTAI_ROBOT_TOKEN): агент — своя модель (пусто — AGENT_MODEL), снимок quryltai.kz в
+    # промпте, веб-поиск OpenRouter (плагин web) только на вопросы о новостях, прошедших событиях и расписании
+    kurultai_agent_model: str | None = None
+    kurultai_web_search: bool = True
+    # true — веб-поиск на каждый вопрос (кроме приветствия); false — только новости, события, расписание
+    kurultai_web_search_always: bool = True
+    kurultai_web_max_results: int = Field(3, ge=1, le=10)
+    # Движок плагина web OpenRouter: пусто — по умолчанию OpenRouter (native у Anthropic/OpenAI, иначе exa)
+    kurultai_web_engine: str | None = None
+    # С веб-поиском первая фраза приходит позже (поиск 2–5 с): потолок до первой фразы, сек
+    kurultai_web_timeout_s: float = 10.0
+    # Снимок quryltai.kz (app/kurultai/quryltai.py): при старте и раз в QURYLTAI_REFRESH_S, после ошибки —
+    # не раньше QURYLTAI_RETRY_S; без сети — последний снимок (файл QURYLTAI_SNAPSHOT_PATH)
+    quryltai_sync: bool = True
+    quryltai_base_url: str = "https://quryltai.kz/api"
+    quryltai_refresh_s: float = 3600.0
+    quryltai_retry_s: float = 300.0
+    quryltai_timeout_s: float = 20.0
+    quryltai_snapshot_path: Path | None = BACKEND_DIR / "data" / "quryltai_snapshot.json"
     yandex_api_key: SecretStr | None = None
     yandex_folder_id: str | None = (
         None  # нужен только для ключа пользователя, не сервисного аккаунта
@@ -304,17 +325,26 @@ class Settings(BaseSettings):
         "live_tts_model_ru",
         "live_tts_model_en",
         "live_tts_model_kk",
+        "kurultai_agent_model",
+        "kurultai_web_engine",
+        "quryltai_snapshot_path",
         mode="before",
     )
     @classmethod
     def _empty_to_none(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
 
-    @field_validator("agent_model", mode="before")
+    @field_validator("agent_model", "kurultai_agent_model", mode="before")
     @classmethod
     def _agent_model_openrouter_id(cls, v):
         # Совместимость со строками LiteLLM: openrouter/anthropic/… → anthropic/… (id OpenRouter)
         return v.strip().removeprefix("openrouter/") if isinstance(v, str) else v
+
+    def kurultai_enabled(self) -> bool:
+        return bool(secret_text(self.kurultai_robot_token))
+
+    def resolved_kurultai_model(self) -> str:
+        return self.kurultai_agent_model or self.agent_model
 
     def gemini_fallback_list(self) -> list[str]:
         return _split(self.gemini_fallback_models)
@@ -394,6 +424,13 @@ class Settings(BaseSettings):
         if self.vision_provider != "auto":
             return self.vision_provider
         return self._auto_llm()
+
+
+def secret_text(value: SecretStr | str | None) -> str:
+    """Значение секрета (model_copy(update=…) кладёт строку как есть, без SecretStr)."""
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    return value or ""
 
 
 def _split(value: str) -> list[str]:

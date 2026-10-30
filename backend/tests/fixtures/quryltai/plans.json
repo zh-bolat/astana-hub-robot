@@ -1,0 +1,37 @@
+{
+ "main_plans": [
+  {
+   "id": 12,
+   "title": "ПЛАН основных мероприятий Курултая на первую сессию",
+   "plan_type": 1,
+   "document_url": "https://quryltai.kz/media/main.docx"
+  }
+ ],
+ "weekly_plans": [
+  {
+   "id": 13,
+   "title": "ПЛАН МЕРОПРИЯТИЙ КУРУЛТАЯ\r\n26 октября 2026 года",
+   "plan_type": 2,
+   "document_url": "https://quryltai.kz/media/week0.pdf"
+  },
+  {
+   "id": 12,
+   "title": "ПЛАН МЕРОПРИЯТИЙ КУРУЛТАЯ\r\n19 октября 2026 года",
+   "plan_type": 2,
+   "document_url": "https://quryltai.kz/media/week1.pdf"
+  },
+  {
+   "id": 11,
+   "title": "ПЛАН МЕРОПРИЯТИЙ КУРУЛТАЯ\r\n12 октября 2026 года",
+   "plan_type": 2,
+   "document_url": "https://quryltai.kz/media/week2.pdf"
+  },
+  {
+   "id": 10,
+   "title": "ПЛАН МЕРОПРИЯТИЙ КУРУЛТАЯ\r\n5 октября 2026 года",
+   "plan_type": 2,
+   "document_url": "https://quryltai.kz/media/week3.pdf"
+  }
+ ],
+ "draft_law_plans": []
+}

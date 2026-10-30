@@ -975,6 +975,8 @@ class LiveConversation(FrameProcessor):
                 "ignored": ignored is not None,
                 "ignored_reason": ignored,
                 "error": error,
+                # Курултай: profile=kurultai (хаб — без пометки)
+                **(self.chat._profile_extra() if self.chat is not None else {}),
             },
             keep_null=("live_error",),
         )

@@ -1,0 +1,117 @@
+{
+ "next": null,
+ "previous": null,
+ "count": 10,
+ "result": [
+  {
+   "id": 100,
+   "title": "О законопроекте номер 1",
+   "status": 5,
+   "main_committee": null,
+   "timestamp": 1792454400,
+   "publish_date": 1792454400,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 101,
+   "title": "О внесении изменений\nв Кодекс об административных правонарушениях",
+   "status": 5,
+   "main_committee": null,
+   "timestamp": 1792368000,
+   "publish_date": 1792368000,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 102,
+   "title": "О законопроекте номер 3",
+   "status": 5,
+   "main_committee": null,
+   "timestamp": 1792281600,
+   "publish_date": 1792281600,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 103,
+   "title": "О законопроекте номер 4",
+   "status": 5,
+   "main_committee": null,
+   "timestamp": 1792195200,
+   "publish_date": null,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 104,
+   "title": "О законопроекте номер 5",
+   "status": 9,
+   "main_committee": null,
+   "timestamp": 1792108800,
+   "publish_date": 1792108800,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 105,
+   "title": "О законопроекте номер 6",
+   "status": 9,
+   "main_committee": null,
+   "timestamp": 1792022400,
+   "publish_date": 1792022400,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 106,
+   "title": "О законопроекте номер 7",
+   "status": 10,
+   "main_committee": null,
+   "timestamp": 1791936000,
+   "publish_date": 1791936000,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 107,
+   "title": "О законопроекте номер 8",
+   "status": 7,
+   "main_committee": null,
+   "timestamp": 1791849600,
+   "publish_date": 1791849600,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 108,
+   "title": "О законопроекте номер 9",
+   "status": null,
+   "main_committee": null,
+   "timestamp": 1791763200,
+   "publish_date": 1791763200,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  },
+  {
+   "id": 109,
+   "title": "О законопроекте номер 10",
+   "status": 6,
+   "main_committee": null,
+   "timestamp": 1791676800,
+   "publish_date": 1791676800,
+   "initiators": [],
+   "rg_heads": [],
+   "rg_members": []
+  }
+ ]
+}

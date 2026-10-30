@@ -130,6 +130,7 @@ def test_openapi_matches_contract_paths(client):
     spec = client.app.openapi()  # схема генерируется и при выключенном /openapi.json
     assert set(spec["paths"]) == {
         "/v1/health",
+        "/v1/profile",
         "/v1/ask",
         "/v1/chat",
         "/v1/look",

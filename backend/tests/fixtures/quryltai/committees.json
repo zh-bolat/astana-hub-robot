@@ -1,0 +1,258 @@
+[
+ {
+  "id": 1,
+  "name": "Комитет по аграрным вопросам",
+  "deputies": [
+   {
+    "id": 1,
+    "last_name": "Председателев0",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 2,
+    "last_name": "Заместителев0",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 3,
+    "last_name": "Членов0",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   },
+   {
+    "id": 9,
+    "last_name": "Выбывший",
+    "first_name": "Пётр",
+    "patronymic": "Ильич",
+    "position": "Член Комитета",
+    "is_active": false
+   }
+  ]
+ },
+ {
+  "id": 2,
+  "name": "Комитет по бюджету",
+  "deputies": [
+   {
+    "id": 11,
+    "last_name": "Председателев1",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 12,
+    "last_name": "Заместителев1",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 13,
+    "last_name": "Членов1",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 3,
+  "name": "Комитет по законодательству",
+  "deputies": [
+   {
+    "id": 21,
+    "last_name": "Председателев2",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 22,
+    "last_name": "Заместителев2",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 23,
+    "last_name": "Членов2",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 4,
+  "name": "Комитет по международным делам",
+  "deputies": [
+   {
+    "id": 31,
+    "last_name": "Председателев3",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 32,
+    "last_name": "Заместителев3",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 33,
+    "last_name": "Членов3",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 5,
+  "name": "Комитет по обороне",
+  "deputies": [
+   {
+    "id": 41,
+    "last_name": "Председателев4",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 42,
+    "last_name": "Заместителев4",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 43,
+    "last_name": "Членов4",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 6,
+  "name": "Комитет по социальной политике",
+  "deputies": [
+   {
+    "id": 51,
+    "last_name": "Председателев5",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 52,
+    "last_name": "Заместителев5",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 53,
+    "last_name": "Членов5",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 7,
+  "name": "Комитет по цифровизации",
+  "deputies": [
+   {
+    "id": 61,
+    "last_name": "Председателев6",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 62,
+    "last_name": "Заместителев6",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 63,
+    "last_name": "Членов6",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ },
+ {
+  "id": 8,
+  "name": "Комитет по экономике",
+  "deputies": [
+   {
+    "id": 71,
+    "last_name": "Председателев7",
+    "first_name": "Серік",
+    "patronymic": "Рахметоллаұлы",
+    "position": "Председатель Комитета",
+    "is_active": true,
+    "email": null
+   },
+   {
+    "id": 72,
+    "last_name": "Заместителев7",
+    "first_name": "Айжан",
+    "patronymic": null,
+    "position": "Заместитель председателя Комитета",
+    "is_active": true
+   },
+   {
+    "id": 73,
+    "last_name": "Членов7",
+    "first_name": "Ерлан",
+    "patronymic": "Маратович",
+    "position": null,
+    "is_active": true
+   }
+  ]
+ }
+]

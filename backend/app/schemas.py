@@ -21,6 +21,12 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class ProfileResponse(BaseModel):
+    """GET /v1/profile: профиль робота по токену (app/profiles.py)."""
+
+    profile: Literal["astana_hub", "kurultai"]
+
+
 class AskRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={

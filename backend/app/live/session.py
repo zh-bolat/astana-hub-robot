@@ -41,7 +41,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPI
 from pipecat.workers.runner import WorkerRunner
 from starlette.websockets import WebSocketState
 
-from app.api import check_token
+from app.api import chat_for, check_token, robot_profile
 from app.errors import ApiError
 from app.lang import LANGS, Lang, normalize_lang
 from app.live.conversation import LiveConversation
@@ -104,6 +104,8 @@ class LiveSession:
         self.lang: Lang = lang
         self.app = ws.app
         self.settings = ws.app.state.settings
+        self.profile = robot_profile(ws)  # профиль по токену (check_token): свой агент у Курултая
+        self.chat = chat_for(ws)
         self.ended_by: str | None = None
         self.conversation: LiveConversation | None = None
         self.worker: PipelineWorker | None = None
@@ -157,7 +159,7 @@ class LiveSession:
             ),
         )
         conv = LiveConversation(
-            chat=self.app.state.chat,
+            chat=self.chat,
             settings=s,
             session_id=self.session_id,
             lang=self.lang,
@@ -251,7 +253,10 @@ class LiveSession:
                     provider=services.provider,
                     session_id=self.session_id,
                     ok=False,
-                    extra={"processor": type(source).__name__ if source else None},
+                    extra={
+                        "processor": type(source).__name__ if source else None,
+                        **self._profile_extra(),
+                    },
                     keep_null=("live_error",),
                 )
                 await self.stop(
@@ -298,6 +303,7 @@ class LiveSession:
                     "echo_muted_frames": gate.muted_frames,
                     "bad_frames": serializer.dropped,
                     "aec": gate.aec,
+                    **self._profile_extra(),
                 },
             )
             self.app.state.metrics.record(
@@ -311,8 +317,13 @@ class LiveSession:
                     "turns": conv.stats.turns,
                     "interrupts": conv.stats.interrupts,
                     "aec": gate.aec,
+                    **self._profile_extra(),
                 },
             )
+
+    def _profile_extra(self) -> dict:
+        """Метрики и логи Курултая помечены профилем (хаб — без пометки, как раньше)."""
+        return self.chat._profile_extra()
 
     async def _close_ws(self) -> None:
         if self.ws.client_state == WebSocketState.CONNECTED:
@@ -377,7 +388,12 @@ async def live(
         await ws.accept()
         logger.info(
             "live_session_opened",
-            extra={"session_id": session_id, "lang": session.lang, "active": len(registry)},
+            extra={
+                "session_id": session_id,
+                "lang": session.lang,
+                "active": len(registry),
+                **session._profile_extra(),
+            },
         )
         await session.run(services)
     except WebSocketDisconnect:

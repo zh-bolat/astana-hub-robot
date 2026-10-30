@@ -17,7 +17,7 @@ from app.agent import ensure_tracing_disabled
 from app.agent.service import ChatService, build_chat_client
 from app.api import router
 from app.client_ip import Network, client_ip, parse_networks
-from app.config import Settings
+from app.config import Settings, secret_text
 from app.db import LatencyRepo, MessageRepo, QuestionLogRepo, SessionRepo, make_engine
 from app.db.migrate import upgrade_head
 from app.errors import error_response, install_error_handlers
@@ -28,6 +28,8 @@ from app.knowledge.search import KbSearch
 from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
+from app.kurultai.agent import KurultaiChatService
+from app.kurultai.quryltai import QuryltaiSync
 from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
 from app.live.session import router as live_router
@@ -44,6 +46,7 @@ from app.logging_setup import (
 )
 from app.metrics import NULL_RECORDER, LatencyRecorder
 from app.metrics_api import router as metrics_router
+from app.profiles import ASTANA_HUB, KURULTAI
 from app.ratelimit import RateLimiter
 from app.sentry_setup import init_sentry
 from app.service import AnswerService
@@ -184,13 +187,17 @@ def create_app(
     chat_client: AsyncOpenAI | None = None,
     live_services: LiveServicesFactory | None = None,
     embedder: Embedder | None = None,
+    kurultai_chat_client: AsyncOpenAI | None = None,
+    quryltai: QuryltaiSync | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
     knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi); с подменённой базой
     поиска по базе нет (он работает по kb_chunks в Postgres).
     chat_client — OpenAI-совместимый клиент агента /v1/chat (тесты: фейковый транспорт).
     live_services — фабрика сервисов Pipecat для WS /v1/live (тесты: фейковые VAD/STT/TTS).
-    embedder — эмбеддинги поиска (тесты: FakeEmbeddings); иначе по EMBEDDING_PROVIDER."""
+    embedder — эмбеддинги поиска (тесты: FakeEmbeddings); иначе по EMBEDDING_PROVIDER.
+    kurultai_chat_client / quryltai — клиент агента и снимок quryltai.kz профиля kurultai (тесты: фейковые);
+    профиль включён, только если задан KURULTAI_ROBOT_TOKEN."""
     settings = settings or Settings()
     configure_logging(settings.log_level)
     route_pipecat_logs()
@@ -198,6 +205,10 @@ def create_app(
     ensure_tracing_disabled()
     if not settings.robot_token.get_secret_value():
         raise RuntimeError("ROBOT_TOKEN is not set (see backend/.env.example)")
+    if secret_text(settings.kurultai_robot_token) == secret_text(settings.robot_token):
+        raise RuntimeError(
+            "KURULTAI_ROBOT_TOKEN must differ from ROBOT_TOKEN (token selects the profile)"
+        )
     init_sentry(settings)
 
     engine = make_engine(settings.database_url, settings.db_timeout_s)
@@ -252,12 +263,37 @@ def create_app(
         metrics=metrics,
         search=kb_search,
     )
+    # Профиль kurultai (KURULTAI_ROBOT_TOKEN): свой агент, снимок quryltai.kz, память разговоров — отдельно от хаба
+    kurultai_chat: KurultaiChatService | None = None
+    if settings.kurultai_enabled():
+        if quryltai is None:
+            quryltai = QuryltaiSync(
+                settings.quryltai_base_url,
+                settings.quryltai_timeout_s,
+                settings.quryltai_snapshot_path,
+            )
+            quryltai.load_cache()  # последний снимок — сразу, сеть — фоном в lifespan
+        kurultai_chat = KurultaiChatService(
+            settings,
+            store,
+            service,
+            log_writer,
+            kurultai_chat_client or build_chat_client(settings),
+            messages=MessageRepo(engine) if log_repo is None else None,
+            sessions=SessionRepo(engine) if log_repo is None else None,
+            metrics=metrics,
+            model_name=settings.resolved_kurultai_model(),
+            quryltai=quryltai,
+        )
+    else:
+        quryltai = None
+    chats = {ASTANA_HUB: chat} | ({KURULTAI: kurultai_chat} if kurultai_chat is not None else {})
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        sync_task = refresh_task = retention_task = index_task = None
+        sync_task = refresh_task = retention_task = index_task = quryltai_task = None
         sheet_client = None
         if syncer is not None:
             refresh_task = asyncio.create_task(
@@ -273,6 +309,11 @@ def create_app(
             index_task = asyncio.create_task(
                 indexer.run_periodic(settings.knowledge_reload_interval_s)
             )
+        if quryltai is not None and settings.quryltai_sync:
+            # при старте (снимка нет или он старше часа) и раз в QURYLTAI_REFRESH_S; без сети — прежний снимок
+            quryltai_task = asyncio.create_task(
+                quryltai.run_periodic(settings.quryltai_refresh_s, settings.quryltai_retry_s)
+            )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(
                 _retention_loop(log_writer, repo, settings.question_log_retention_days)
@@ -284,8 +325,17 @@ def create_app(
             await _cancel(refresh_task)
             await _cancel(retention_task)
             await _cancel(index_task)
+            await _cancel(quryltai_task)
             await close_resources(
-                sheet_client, text_llm, vision_llm, stt, tts_provider, chat, embedder
+                sheet_client,
+                text_llm,
+                vision_llm,
+                stt,
+                tts_provider,
+                chat,
+                kurultai_chat,
+                quryltai,
+                embedder,
             )
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
@@ -306,7 +356,9 @@ def create_app(
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service
-    app.state.chat = chat
+    app.state.chat = chat  # агент Astana Hub (профиль astana_hub)
+    app.state.chats = chats  # профиль → агент (app.api.chat_for)
+    app.state.quryltai = quryltai
     app.state.kb_search = kb_search
     app.state.indexer = indexer
     app.state.log_repo = repo
@@ -346,6 +398,7 @@ def create_app(
             "text_llm": f"{text_llm.name}:{text_llm.model}",
             "vision_llm": f"{vision_llm.name}:{vision_llm.model}",
             "chat": chat.name,
+            "kurultai": kurultai_chat.name if kurultai_chat is not None else "off",
             "retrieval": (
                 f"{chat.retrieval}:{embedder.name}:{embedder.model}" if embedder else "off"
             ),

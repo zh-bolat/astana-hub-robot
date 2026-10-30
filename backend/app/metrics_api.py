@@ -21,8 +21,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 
+from app.api import robot_profile
 from app.errors import ApiError, rate_limited, unauthorized
 from app.metrics import LatencyRecorder
+from app.profiles import ASTANA_HUB
 from app.schemas import ErrorResponse, LangField
 from app.speech_api import require_robot_speech
 
@@ -82,7 +84,12 @@ async def metrics_turn(body: TurnMetrics, request: Request) -> Response:
         provider=body.mode,
         request_id=body.request_id or "",
         session_id=body.session_id,
-        extra={"mode": body.mode, "fallback": body.fallback, "interrupted": body.interrupted},
+        extra={
+            "mode": body.mode,
+            "fallback": body.fallback,
+            "interrupted": body.interrupted,
+            **({"profile": profile} if (profile := robot_profile(request)) != ASTANA_HUB else {}),
+        },
         keep_null=("turn",),
     )
     return Response(status_code=204)

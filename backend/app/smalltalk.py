@@ -88,10 +88,16 @@ def normalize(text: str) -> str:
     return " ".join(_NORM.sub(" ", text.lower()).split())
 
 
-def quick_reply(text: str, lang: Lang) -> str | None:
-    """Готовый ответ для точной короткой реплики или None (тогда решает LLM)."""
+def quick_kind(text: str) -> str | None:
+    """greeting / thanks / bye для точной короткой реплики, иначе None."""
     norm = normalize(text)
     for kind, phrases in _PHRASES.items():
         if norm in phrases:
-            return _REPLIES[kind][lang]
+            return kind
     return None
+
+
+def quick_reply(text: str, lang: Lang) -> str | None:
+    """Готовый ответ для точной короткой реплики или None (тогда решает LLM)."""
+    kind = quick_kind(text)
+    return _REPLIES[kind][lang] if kind is not None else None

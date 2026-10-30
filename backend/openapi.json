@@ -24,6 +24,55 @@
         }
       }
     },
+    "/v1/profile": {
+      "get": {
+        "summary": "Profile",
+        "description": "Профиль робота по его токену: astana_hub или kurultai (проверка настройки робота).",
+        "operationId": "profile_v1_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ask": {
       "post": {
         "summary": "Ask",
@@ -121,7 +170,7 @@
     "/v1/chat": {
       "post": {
         "summary": "Chat",
-        "description": "Агентский чат: модель помнит разговор и сама выбирает действие робота.",
+        "description": "Агентский чат: модель помнит разговор и сама выбирает действие робота (агент — по профилю токена).",
         "operationId": "chat_v1_chat_post",
         "requestBody": {
           "content": {
@@ -1834,6 +1883,24 @@
           "places"
         ],
         "title": "PlacesResponse"
+      },
+      "ProfileResponse": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "enum": [
+              "astana_hub",
+              "kurultai"
+            ],
+            "title": "Profile"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "title": "ProfileResponse",
+        "description": "GET /v1/profile: профиль робота по токену (app/profiles.py)."
       },
       "ProviderStats": {
         "properties": {

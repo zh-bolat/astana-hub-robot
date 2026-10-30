@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated
@@ -16,11 +15,13 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.requests import HTTPConnection
 from starlette.types import Send
 
 from app import __version__
 from app.agent.service import ChatService
 from app.errors import (
+    ApiError,
     bad_request,
     payload_too_large,
     rate_limited,
@@ -28,6 +29,7 @@ from app.errors import (
 )
 from app.lang import Lang
 from app.logging_setup import get_request_id
+from app.profiles import ASTANA_HUB, Profile, bearer, profile_for_token
 from app.schemas import (
     AnswerResponse,
     AskRequest,
@@ -41,6 +43,7 @@ from app.schemas import (
     LookMeta,
     PlaceOut,
     PlacesResponse,
+    ProfileResponse,
     QuickQuestionOut,
     QuickQuestionsResponse,
     SessionMessagesResponse,
@@ -57,19 +60,28 @@ _ERRORS = {
 _LLM_ERRORS = {**_ERRORS, 503: {"model": ErrorResponse}, 504: {"model": ErrorResponse}}
 
 
-def check_token(request: Request) -> str:
-    """Проверяет Bearer-токен, возвращает ключ для rate limit (хеш токена)."""
+def check_token(request: HTTPConnection) -> str:
+    """Проверяет Bearer-токен, возвращает ключ для rate limit (хеш токена).
+
+    Токен определяет профиль робота (app/profiles.py): он кладётся в `request.state.profile`
+    (HTTP и WebSocket), читать — `robot_profile(request)`."""
     settings = request.app.state.settings
-    expected = settings.robot_token.get_secret_value()
-    header = request.headers.get("authorization", "")
-    scheme, _, token = header.partition(" ")
-    if (
-        not expected
-        or scheme.lower() != "bearer"
-        or not secrets.compare_digest(token.strip().encode(), expected.encode())
-    ):
+    token = bearer(request.headers.get("authorization", ""))
+    profile = profile_for_token(settings, token)
+    if profile is None or token is None:
         raise unauthorized()
-    return hashlib.sha256(token.strip().encode()).hexdigest()[:16]
+    request.state.profile = profile
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def robot_profile(request: HTTPConnection) -> Profile:
+    """Профиль робота текущего запроса (после check_token); до проверки — astana_hub."""
+    return getattr(request.state, "profile", ASTANA_HUB)
+
+
+def chat_for(request: HTTPConnection) -> ChatService:
+    """Агент профиля: у Курултая свой промпт, данные и память разговоров."""
+    return request.app.state.chats[robot_profile(request)]
 
 
 def require_robot(request: Request) -> str:
@@ -89,6 +101,24 @@ def require_robot_kb(request: Request) -> str:
     return key
 
 
+def _hub_only(request: Request) -> None:
+    """Эндпоинты базы знаний Astana Hub (/ask, /look, /places, /quick-questions): у Курултая их нет — 404."""
+    if robot_profile(request) != ASTANA_HUB:
+        raise ApiError(404, "not_found", "Not available for this robot profile")
+
+
+def require_hub_robot(request: Request) -> str:
+    key = require_robot(request)
+    _hub_only(request)
+    return key
+
+
+def require_hub_robot_kb(request: Request) -> str:
+    key = require_robot_kb(request)
+    _hub_only(request)
+    return key
+
+
 def _service(request: Request) -> AnswerService:
     return request.app.state.service
 
@@ -100,6 +130,17 @@ def _request_id() -> str:
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(version=__version__)
+
+
+@router.get(
+    "/profile",
+    response_model=ProfileResponse,
+    responses=_ERRORS,
+    dependencies=[Depends(require_robot_kb)],
+)
+async def profile(request: Request) -> ProfileResponse:
+    """Профиль робота по его токену: astana_hub или kurultai (проверка настройки робота)."""
+    return ProfileResponse(profile=robot_profile(request))
 
 
 class ClosingStreamingResponse(StreamingResponse):
@@ -141,7 +182,7 @@ def _sse(event: str, data: dict) -> bytes:
             }
         },
     },
-    dependencies=[Depends(require_robot)],
+    dependencies=[Depends(require_hub_robot)],
 )
 async def ask(body: AskRequest, request: Request):
     service = _service(request)
@@ -184,8 +225,8 @@ async def ask(body: AskRequest, request: Request):
     dependencies=[Depends(require_robot)],
 )
 async def chat(body: ChatRequest, request: Request):
-    """Агентский чат: модель помнит разговор и сама выбирает действие робота."""
-    service: ChatService = request.app.state.chat
+    """Агентский чат: модель помнит разговор и сама выбирает действие робота (агент — по профилю токена)."""
+    service = chat_for(request)
     request_id = _request_id()
     if "text/event-stream" not in request.headers.get("accept", ""):
         return await service.chat(body, request_id)
@@ -252,7 +293,7 @@ async def _read_body_limited(request: Request, limit: int) -> bytes:
     "/look",
     response_model=AnswerResponse,
     responses={**_LLM_ERRORS, 413: {"model": ErrorResponse}},
-    dependencies=[Depends(require_robot)],
+    dependencies=[Depends(require_hub_robot)],
     openapi_extra=_LOOK_OPENAPI,
 )
 async def look(request: Request) -> AnswerResponse:
@@ -343,7 +384,7 @@ def _etag_matches(header: str | None, etag: str) -> bool:
     "/places",
     response_model=PlacesResponse,
     responses={**_ERRORS, 304: {"description": "Not modified (If-None-Match)"}},
-    dependencies=[Depends(require_robot_kb)],
+    dependencies=[Depends(require_hub_robot_kb)],
 )
 async def places(request: Request, response: Response):
     payload, etag = _places_payload(request)
@@ -358,7 +399,7 @@ async def places(request: Request, response: Response):
     "/quick-questions",
     response_model=QuickQuestionsResponse,
     responses=_ERRORS,
-    dependencies=[Depends(require_robot_kb)],
+    dependencies=[Depends(require_hub_robot_kb)],
 )
 async def quick_questions(
     request: Request, lang: Annotated[Lang, Query()] = "ru"
@@ -442,5 +483,5 @@ async def add_local_message(
         interrupted=body.interrupted,
     )
     # и в память агента: «проводи туда» после локального «где кафе?»
-    request.app.state.chat.remember(session_id, body.lang, body.question, body.answer)
+    chat_for(request).remember(session_id, body.lang, body.question, body.answer)
     return LocalMessageResponse(request_id=request_id)

@@ -164,6 +164,8 @@ class AnswerService:
         started: float,
         interrupted: bool = False,
         event: str | None = None,  # имя события в логе вместо answered/interrupted (not_addressed)
+        profile: str
+        | None = None,  # профиль робота (app/profiles.py); None — Astana Hub, без пометки
     ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
         if event is None:
@@ -181,6 +183,7 @@ class AnswerService:
                 "provider": provider_id,
                 "latency_ms": latency_ms,
                 "interrupted": interrupted,
+                **({"profile": profile} if profile else {}),
             },
         )
         # Фоном: ответ роботу не ждёт БД (зависшая/упавшая БД на /ask не влияет)
