@@ -85,9 +85,15 @@ _SMALLTALK_ANY = re.compile(
 )
 
 
+# Имя робота в начале или в конце реплики («Акылтай, привет») — обращение, а не вопрос по существу
+NAME_RE = re.compile(r"\b(?:а[кқх]ыл\s?тай\w*|акилтай\w*|aqyltai\w*|akyltai\w*)\b", re.IGNORECASE)
+
+
 def is_smalltalk(message: str | None) -> bool:
-    """Короткая реплика без вопроса по существу: приветствие, «слышишь?», «спасибо», «кто ты» (до 5 слов)."""
-    text = re.sub(r"[^\w\s]", " ", (message or "").lower()).strip()
+    """Короткая реплика без вопроса по существу: приветствие, «слышишь?», «спасибо», «кто ты» (до 5 слов).
+    Имя робота не считается: «Акылтай!» и «Акылтай, привет» — тоже без поиска."""
+    text = re.sub(r"[^\w\s]", " ", (message or "").lower())
+    text = " ".join(NAME_RE.sub(" ", text).split())
     if not text:
         return True
     if len(text.split()) > 5:
