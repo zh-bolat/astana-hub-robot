@@ -119,6 +119,9 @@ class SegmentedProviderSTT(SegmentedSTTService):
         self._silence_peak = silence_peak
         self._min_bytes = int(min_speech_s * sample_rate) * 2
         self.skipped = 0  # отрезков-тишины, не ушедших в STT
+        # Подсказка разговора для STT (профиль kurultai задаёт её в сессии); None — без контекста,
+        # и запрос провайдеру тот же, что раньше. Провайдер без supports_context контекст не получает.
+        self.context: Callable[[], str | None] | None = None
 
     def _is_silence(self, audio: bytes) -> bool:
         if len(audio) < self._min_bytes:
@@ -135,15 +138,28 @@ class SegmentedProviderSTT(SegmentedSTTService):
     def can_generate_metrics(self) -> bool:
         return False
 
+    def _context_text(self) -> str | None:
+        if self.context is None or not getattr(self._provider, "supports_context", False):
+            return None
+        try:
+            return (self.context() or "").strip() or None
+        except Exception as exc:  # подсказка не должна ломать распознавание
+            logger.warning("live_stt_context_failed", extra={"error": type(exc).__name__})
+            return None
+
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
         text, lang = "", None
         if self._is_silence(audio):  # тишина или щелчок: провайдер не вызываем, отрезок — пустой
             self.skipped += 1
         else:
             try:
-                res = await asyncio.wait_for(
-                    self._provider.stt(audio, self.sample_rate, self.lang), self._timeout_s
+                context = self._context_text()
+                call = (
+                    self._provider.stt(audio, self.sample_rate, self.lang, context=context)
+                    if context
+                    else self._provider.stt(audio, self.sample_rate, self.lang)
                 )
+                res = await asyncio.wait_for(call, self._timeout_s)
                 text, lang = res.text.strip(), res.lang
                 detected = getattr(res, "detected", None)
                 if detected is not None and stt_lang_code(detected) is None:

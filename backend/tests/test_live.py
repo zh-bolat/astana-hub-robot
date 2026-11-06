@@ -46,6 +46,7 @@ from websockets.frames import Close
 from app.agent import fastpath
 from app.agent.service import LiveTurn
 from app.config import Settings
+from app.kurultai.stt_context import SETTING as KURULTAI_STT_SETTING
 from app.live.conversation import (
     DIRECTIONS_TTL_S,
     LiveConversation,
@@ -161,9 +162,11 @@ class ScriptSttProvider:
         self.script = script
         self.delay = delay
         self.calls: list[tuple[int, str | None]] = []  # (байт PCM, язык)
+        self.contexts: list[str | None] = []  # подсказка разговора (supports_context у экземпляра)
 
-    async def stt(self, pcm: bytes, sample_rate: int, lang):
+    async def stt(self, pcm: bytes, sample_rate: int, lang, context: str | None = None):
         self.calls.append((len(pcm), lang))
+        self.contexts.append(context)
         await asyncio.sleep(self.delay)
         text = self.script.pop(0) if self.script else ""
         return SttResult(text=text, lang=lang or "ru", confidence=None)
@@ -230,6 +233,7 @@ def live_server(settings):
         model: FakeModel | None = None,
         script: list[str] | None = None,
         segmented_delay: float | None = None,
+        kurultai_model: FakeModel | None = None,
         **overrides,
     ):
         fakes = Fakes(script if script is not None else [], segmented_delay)
@@ -247,6 +251,7 @@ def live_server(settings):
             FakeProvider(),
             FakeProvider(),
             chat_client=(model or FakeModel()).client(),
+            kurultai_chat_client=kurultai_model.client() if kurultai_model is not None else None,
             live_services=fakes,
         )
         port = _free_port()
@@ -353,10 +358,16 @@ class LiveClient:
 
 
 @contextlib.asynccontextmanager
-async def session(url: str, session_id: str = SESSION, lang: str = "ru", hello: dict | None = None):
+async def session(
+    url: str,
+    session_id: str = SESSION,
+    lang: str = "ru",
+    hello: dict | None = None,
+    token: str = TOKEN,
+):
     async with connect(
         f"{url}/v1/live?session_id={session_id}&lang={lang}",
-        additional_headers={"Authorization": f"Bearer {TOKEN}"},
+        additional_headers={"Authorization": f"Bearer {token}"},
         open_timeout=5,
     ) as ws:
         client = LiveClient(ws)
@@ -1573,3 +1584,51 @@ def test_real_services_build_without_network(settings):
         await services.aclose()
 
     asyncio.run(check())
+
+
+# ---------- Курултай: STT с подсказкой разговора, Astana Hub — без неё ----------
+KURULTAI_LIVE_TOKEN = "kurultai-live-token"
+
+
+@pytest.fixture
+def context_provider(monkeypatch):
+    """STT-сценарий live с supports_context — как у OpenRouter."""
+    monkeypatch.setattr(ScriptSttProvider, "supports_context", True, raising=False)
+
+
+async def _two_turns(url: str, token: str) -> None:
+    async with session(url, token=token) as c:
+        for n in (1, 2):
+            c.speak(0.6)
+            end = await c.wait("turn_end", count=n)
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=n + 1)
+
+
+def test_live_kurultai_stt_gets_setting_and_previous_answer(live_server, context_provider):
+    model = FakeModel(say("Закон подписан в октябре."), say("С первого января."))
+    url, _, fakes = live_server(
+        kurultai_model=model,
+        script=["Что с законом о цифровых активах?", "А когда он вступит?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+    run(_two_turns(url, KURULTAI_LIVE_TOKEN))
+    first, second = fakes.stt_provider.contexts[:2]
+    assert first == KURULTAI_STT_SETTING
+    assert second is not None and second.startswith(KURULTAI_STT_SETTING)
+    assert "Закон подписан в октябре." in second
+
+
+def test_live_hub_stt_has_no_context(live_server, context_provider):
+    model = FakeModel(say("Лифт справа."), say("Кафе на первом этаже."))
+    url, _, fakes = live_server(
+        model,
+        script=["Где лифт?", "А кафе?"],
+        segmented_delay=0.2,
+        live_fast_places=False,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+    )
+    run(_two_turns(url, TOKEN))
+    assert fakes.stt_provider.contexts[:2] == [None, None]
