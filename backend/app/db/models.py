@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Computed,
+    Date,
     DateTime,
     ForeignKey,
     Identity,
@@ -29,7 +30,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, CHAR, JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, CHAR, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Размерность эмбеддингов (docs/db-schema.md, kb_chunks.embedding); смена — новой миграцией
@@ -353,6 +354,62 @@ class LatencyEvent(Base):
     session_id: Mapped[str | None] = mapped_column(String(64))
     ok: Mapped[bool] = _active()
     extra: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
+# ---------------------------------------------------------------- 5. Материалы Курултая (админка /app/admin)
+
+
+class KurultaiMaterialRow(Base):
+    """Материал аппарата Курултая: файл/текст → source_text → brief (структурированная справка, правит сотрудник).
+    Опубликованные и не истёкшие (valid_until) идут в промпт робота Курултая (app/kurultai/materials/)."""
+
+    __tablename__ = "kurultai_materials"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('meeting', 'agenda', 'bill', 'reference', 'contacts', 'other')", name="kind"
+        ),
+        CheckConstraint("status IN ('processing', 'draft', 'published', 'error')", name="status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'other'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'processing'"), index=True
+    )
+    filename: Mapped[str | None] = mapped_column(Text)
+    mime: Mapped[str | None] = mapped_column(Text)
+    file_sha256: Mapped[str | None] = mapped_column(Text)
+    file_bytes: Mapped[bytes | None] = mapped_column(BYTEA)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    brief: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    warnings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    event_date: Mapped[date | None] = mapped_column(Date)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
+
+
+class KurultaiMaterialEventRow(Base):
+    """Журнал админки материалов: загрузка, правка, публикация, снятие, удаление (с IP)."""
+
+    __tablename__ = "kurultai_material_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    material_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("kurultai_materials.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    client_ip: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
 
 # Таблицы, которые очищаются в тестах (порядок не важен — TRUNCATE ... CASCADE)

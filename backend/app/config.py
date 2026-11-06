@@ -269,6 +269,16 @@ class Settings(BaseSettings):
     # Скачивание APK робота Курултая из браузера робота (GET /app, app/kurultai/download.py): пароль страницы
     # (пусто — выключено, 404), каталог с APK (в compose Курултая — смонтированный ~/kurultai-apk), срок ссылки, с
     kurultai_app_password: SecretStr = Field(default=SecretStr(""))
+    # Админка материалов Курултая (/app/admin, app/kurultai/admin.py): пароль сотрудников аппарата (пусто — выключена),
+    # срок входа, cookie только по HTTPS (тесты — false); модель справок и OCR сканов, её таймаут; бюджет промпта
+    # (знаков: опубликованные справки сверх него не попадают — админка предупреждает); размер файла, МБ
+    kurultai_admin_password: SecretStr = Field(default=SecretStr(""))
+    kurultai_admin_session_s: int = Field(12 * 3600, ge=300, le=7 * 86_400)
+    kurultai_admin_cookie_secure: bool = True
+    kurultai_materials_model: str = "google/gemini-3.5-flash"
+    kurultai_materials_timeout_s: float = 240.0
+    kurultai_materials_max_chars: int = Field(60_000, ge=1_000, le=400_000)
+    kurultai_materials_upload_mb: int = Field(20, ge=1, le=50)
     kurultai_app_dir: Path = Path("/apk")
     kurultai_app_link_ttl_s: int = Field(1800, ge=60, le=86_400)
     # Снимок quryltai.kz (app/kurultai/quryltai.py): при старте и раз в QURYLTAI_REFRESH_S, после ошибки —

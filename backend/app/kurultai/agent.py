@@ -25,6 +25,7 @@ from app.agent.tools import ChatContext, no_answer
 from app.knowledge.models import KnowledgeBase
 from app.kurultai import prompts
 from app.kurultai.lang import answer_lang
+from app.kurultai.materials.store import MaterialsStore
 from app.kurultai.quryltai import QuryltaiSync
 from app.kurultai.websearch import is_smalltalk, needs_web_search
 from app.lang import Lang
@@ -60,11 +61,21 @@ class KurultaiChatService(ChatService):
     profile = KURULTAI
     agent_name = "kurultai"
 
-    def __init__(self, *args, quryltai: QuryltaiSync | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        quryltai: QuryltaiSync | None = None,
+        materials: MaterialsStore | None = None,
+        **kwargs,
+    ) -> None:
         kwargs["search"] = None  # базы знаний хаба (поиска по ней) у Курултая нет
         super().__init__(*args, **kwargs)
         self.quryltai = quryltai
+        self.materials = materials  # материалы аппарата из админки (/app/admin) — в промпт
         self.retrieval = "off"
+
+    def materials_block(self) -> str:
+        return self.materials.prompt_block() if self.materials is not None else ""
 
     def _log_profile(self) -> str | None:
         return KURULTAI
@@ -96,7 +107,7 @@ class KurultaiChatService(ChatService):
     def _agent(self, kb: KnowledgeBase, question: str = "") -> Agent[ChatContext]:
         return Agent[ChatContext](
             name=self.agent_name,
-            instructions=prompts.kurultai_instructions(self.snapshot()),
+            instructions=prompts.kurultai_instructions(self.snapshot(), self.materials_block()),
             model=self.model,
             tools=list(KURULTAI_TOOLS),
             tool_use_behavior=StopAtTools(stop_at_tool_names=KURULTAI_STOP_TOOLS),
@@ -142,7 +153,7 @@ class KurultaiChatService(ChatService):
 
     def _corpus(self, kb: KnowledgeBase) -> str:
         """Снимок и официальные сайты: их номера, названия и домены в ответе — не выдумка модели."""
-        return "\n".join([self.snapshot(), *prompts.OFFICIAL_DOMAINS])
+        return "\n".join([self.materials_block(), self.snapshot(), *prompts.OFFICIAL_DOMAINS])
 
     def _preclean(self, text: str) -> str:
         return strip_citations(text)
