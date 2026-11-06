@@ -13,11 +13,11 @@
 from __future__ import annotations
 
 import random
-import re
 from datetime import datetime
 
 from app.agent.prompts import NOT_ADDRESSED_TAG
-from app.lang import KAZAKH_LETTERS, Lang
+from app.kurultai.lang import answer_lang
+from app.lang import Lang
 from app.prompts import wrap_visitor
 
 # Персона из приложения Курултая. Отличия от исходника: язык ответа — из строки «Язык ответа» сообщения;
@@ -262,12 +262,8 @@ def _now_line(now: datetime) -> str:
 
 
 def question_lang(question: str, fallback: Lang | None) -> Lang:
-    """Язык ответа по тексту вопроса: есть казахские буквы — kk, иначе ru (распознаватель и экран иногда ошибаются)."""
-    if any(ch in KAZAKH_LETTERS for ch in question or ""):
-        return "kk"
-    if re.search(r"[А-Яа-яЁё]", question or ""):
-        return "ru"
-    return fallback or "ru"
+    """Язык ответа: язык экрана, другой — только если вопрос явно на нём (app/kurultai/lang.py)."""
+    return answer_lang(question, fallback)
 
 
 def kurultai_turn(question: str, lang: Lang | None, now: datetime, web: bool) -> str:

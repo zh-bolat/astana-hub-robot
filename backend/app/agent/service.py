@@ -569,6 +569,10 @@ class ChatService:
                     )
         raise ApiError(500, "internal_error", "Internal server error")
 
+    def _request_lang(self, req: ChatRequest) -> Lang:
+        """Язык хода по запросу: письменность и приметы текста, затем язык робота (профиль может переопределить)."""
+        return resolve_lang(req.lang, None, req.question)
+
     async def chat_stream(
         self, req: ChatRequest, request_id: str, live: LiveTurn | None = None
     ) -> AsyncIterator[tuple[str, dict]]:
@@ -578,7 +582,7 @@ class ChatService:
         live — ход WS /v1/live (см. LiveTurn): фразы по мере генерации, журнал и память — по live.commit."""
         started = time.perf_counter()
         st = _ChatState(
-            lang=resolve_lang(req.lang, None, req.question),
+            lang=self._request_lang(req),
             greeting=req.event == "visitor_arrived",
             started=started,
             live=live,

@@ -1632,3 +1632,72 @@ def test_live_hub_stt_has_no_context(live_server, context_provider):
     )
     run(_two_turns(url, TOKEN))
     assert fakes.stt_provider.contexts[:2] == [None, None]
+
+
+# ---------- Курултай: язык ответа — язык экрана, голосом только явная смена ----------
+def test_live_kurultai_lang_screen_then_clear_switch(live_server):
+    model = FakeModel(say("Законы — вот такие."), say("Иә, бар."), say("Тыңдап тұрмын."))
+    url, _, _ = live_server(
+        kurultai_model=model,
+        script=["Ақылтай, расскажи про законы", "Құрылтайда заң бар ма?", "Ақылтай"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, lang="kk", token=KURULTAI_LIVE_TOKEN) as c:
+            langs = []
+            for n in (1, 2, 3):
+                c.speak(0.6)
+                final = await c.wait("user_final", count=n)
+                langs.append(final["lang"])
+                end = await c.wait("turn_end", count=n)
+                await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+                await c.wait("listening", count=n + 1)
+            # экран kk, но фраза явно русская → ru; явно казахская → kk; одно имя → язык сессии (kk)
+            assert langs == ["ru", "kk", "kk"]
+
+    run(scenario())
+
+
+def test_live_kurultai_screen_language_change_by_hello(live_server):
+    model = FakeModel(say("Тыңдап тұрмын."), say("Слушаю."))
+    url, _, _ = live_server(
+        kurultai_model=model,
+        script=["Ақылтай", "Ақылтай"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, lang="kk", token=KURULTAI_LIVE_TOKEN) as c:
+            c.speak(0.6)
+            assert (await c.wait("user_final"))["lang"] == "kk"
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            await c.send(
+                {"type": "hello", "lang": "ru", "place_id": None, "aec": True}
+            )  # РУС на экране
+            c.speak(0.6)
+            assert (await c.wait("user_final", count=2))["lang"] == "ru"
+
+    run(scenario())
+
+
+def test_live_hub_lang_rule_unchanged(live_server):
+    url, _, _ = live_server(
+        FakeModel(say("Сәлем.")),
+        script=["Ақылтай, расскажи про законы"],
+        segmented_delay=0.2,
+        live_fast_places=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, lang="ru") as c:
+            c.speak(0.6)
+            assert (await c.wait("user_final"))["lang"] == "kk"  # у хаба — прежнее правило
+
+    run(scenario())
