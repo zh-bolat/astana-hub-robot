@@ -637,7 +637,13 @@ class LiveConversation(FrameProcessor):
     ) -> None:
         text = text[:MAX_QUESTION_CHARS]
         # язык реплики: по тексту и языку от STT; STT вернул не ru/kk/en или ничего — язык сессии
-        lang = utterance_lang(text, stt_lang, self.lang)
+        pick = getattr(self.chat, "utterance_lang", None)
+        if (
+            pick is not None
+        ):  # профиль со своим выбором (Курултай): язык экрана, явная смена запоминается
+            lang = self.lang = pick(text, stt_lang, self.lang)
+        else:
+            lang = utterance_lang(text, stt_lang, self.lang)
         await self.send_now(event("user_final", text=text, lang=lang))
         if not is_noise(text):
             await self.send_now(event("thinking"))

@@ -24,9 +24,10 @@ from app.agent.service import ASTANA_TZ, ChatService, _ChatState, _Offer, _phras
 from app.agent.tools import ChatContext, no_answer
 from app.knowledge.models import KnowledgeBase
 from app.kurultai import prompts
+from app.kurultai.lang import answer_lang
 from app.kurultai.quryltai import QuryltaiSync
 from app.kurultai.websearch import is_smalltalk, needs_web_search
-from app.lang import Lang, resolve_lang
+from app.lang import Lang
 from app.profiles import KURULTAI
 from app.schemas import AnswerResponse, ChatRequest
 from app.smalltalk import quick_kind, quick_reply
@@ -102,6 +103,14 @@ class KurultaiChatService(ChatService):
             model_settings=self._model_settings(question),
         )
 
+    def _request_lang(self, req: ChatRequest) -> Lang:
+        """Язык экрана (req.lang), голосом — только явная смена (app/kurultai/lang.py)."""
+        return answer_lang(req.question, req.lang)
+
+    def utterance_lang(self, text: str, stt_lang: Lang | None, session_lang: Lang) -> Lang:
+        """Язык реплики live: язык сессии (= экран), другой — только если фраза явно на нём."""
+        return answer_lang(text, session_lang)
+
     def _turn_text(
         self,
         req: ChatRequest,
@@ -140,7 +149,7 @@ class KurultaiChatService(ChatService):
 
     # ---------- части ответа без модели ----------
     def _quick(self, req: ChatRequest, request_id: str) -> AnswerResponse | None:
-        lang = resolve_lang(req.lang, None, req.question)
+        lang = answer_lang(req.question, req.lang)
         kind = quick_kind(req.question)
         if kind is None:
             return None
