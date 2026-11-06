@@ -250,11 +250,12 @@ def ready_greeting(lang: Lang, rng: random.Random | None = None) -> str:
     return (rng or random).choice(GREETINGS[lang])
 
 
-def kurultai_instructions(snapshot: str) -> str:
-    """Системный промпт: персона + голосовой формат + снимок quryltai.kz (пусто — без снимка)."""
+def kurultai_instructions(snapshot: str, materials: str = "") -> str:
+    """Системный промпт: персона + голосовой формат + материалы аппарата (админка; пусто — нет) + снимок quryltai.kz."""
     rules = VOICE_RULES.format(not_addressed_tag=NOT_ADDRESSED_TAG)
     tail = SNAPSHOT_NOTE + snapshot if snapshot else NO_SNAPSHOT_NOTE
-    return f"{PERSONA}\n\n{rules}\n\n{tail}"
+    block = f"{materials}\n\n" if materials else ""
+    return f"{PERSONA}\n\n{rules}\n\n{block}{tail}"
 
 
 def _now_line(now: datetime) -> str:

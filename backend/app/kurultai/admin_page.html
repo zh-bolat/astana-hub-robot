@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ақылтай · материалы</title>
+<style>
+:root{--bg:#f3f6fa;--card:#fff;--ink:#182642;--muted:#68748a;--line:#dce4ee;--accent:#268fc8;--accent-ink:#fff;
+  --ok:#1f8a5b;--ok-bg:#e3f5ec;--warn:#9a6a00;--warn-bg:#fff4d6;--err:#b8404b;--err-bg:#fde8ea;--draft:#5b6b85;--draft-bg:#eef2f7;
+  --proc:#1d6f9e;--proc-bg:#e3f1fa;--radius:14px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 14px}
+button:hover{border-color:#b9c7d8}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+button.primary:hover{filter:brightness(1.05)}
+button.danger{color:var(--err);border-color:#efc4c9}
+button:disabled{opacity:.5;cursor:default}
+input,select,textarea{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fff;width:100%}
+textarea{resize:vertical}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid #9fd0ee;outline-offset:1px}
+header{position:sticky;top:0;z-index:5;background:var(--ink);color:#fff}
+.bar{max-width:1280px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.bar h1{font-size:18px;margin:0;font-weight:700;margin-right:auto}
+.bar h1 small{font-weight:400;opacity:.7;margin-left:8px}
+.bar button{background:transparent;color:#fff;border-color:rgba(255,255,255,.3)}
+.meter{display:flex;align-items:center;gap:8px;font-size:13px;opacity:.95}
+.meter .track{width:140px;height:8px;border-radius:9px;background:rgba(255,255,255,.2);overflow:hidden}
+.meter .fill{height:100%;background:#7cc6f7}
+.meter.over .fill{background:#ffb4b4}
+main{max-width:1280px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.upload{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-bottom:20px}
+.drop{border:2px dashed #b9cde0;border-radius:var(--radius);padding:26px;text-align:center;background:#f9fbfd;cursor:pointer;
+  display:flex;flex-direction:column;justify-content:center;min-height:170px}
+.drop.on{border-color:var(--accent);background:#eef7fd}
+.drop b{font-size:17px}
+.drop p{margin:6px 0 0;color:var(--muted);font-size:13px}
+.files{margin-top:10px;font-size:13px;color:var(--ink);text-align:left}
+.paste textarea{min-height:110px}
+.row{display:flex;gap:10px;align-items:center;margin-top:10px}
+.hint{color:var(--muted);font-size:13px}
+h2{font-size:16px;margin:0 0 12px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+tr.item{cursor:pointer}
+tr.item:hover td{background:#f7fafd}
+tr.item.sel td{background:#eef7fd}
+.t{font-weight:600}
+.sub{color:var(--muted);font-size:12px}
+.badge{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;white-space:nowrap}
+.b-published{background:var(--ok-bg);color:var(--ok)}
+.b-draft{background:var(--draft-bg);color:var(--draft)}
+.b-processing{background:var(--proc-bg);color:var(--proc)}
+.b-error{background:var(--err-bg);color:var(--err)}
+.b-expired{background:var(--warn-bg);color:var(--warn)}
+.b-over{background:var(--warn-bg);color:var(--warn)}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:20px;align-items:start}
+.editor{position:sticky;top:70px}
+.editor .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.editor label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+.tabs{display:flex;gap:4px;margin-top:14px;border-bottom:1px solid var(--line)}
+.tabs button{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted)}
+.tabs button.on{border-bottom-color:var(--accent);color:var(--ink);font-weight:600}
+.brief{min-height:46vh;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin-top:10px}
+.source{white-space:pre-wrap;max-height:52vh;overflow:auto;background:#f9fbfd;border:1px solid var(--line);border-radius:10px;padding:12px;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin-top:10px}
+.note{border-radius:10px;padding:10px 12px;font-size:13px;margin-top:10px}
+.note.warn{background:var(--warn-bg);color:#6b4b00}
+.note.err{background:var(--err-bg);color:var(--err)}
+.note.info{background:var(--proc-bg);color:var(--proc)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.actions .spacer{flex:1}
+dialog{border:none;border-radius:var(--radius);padding:0;width:min(1000px,94vw);max-height:90vh;box-shadow:0 30px 80px rgba(10,20,40,.35)}
+dialog::backdrop{background:rgba(10,20,40,.45)}
+.dlg{padding:20px;display:flex;flex-direction:column;gap:12px;max-height:90vh}
+.dlg header{position:static;background:none;color:inherit;display:flex;align-items:center;gap:10px}
+.dlg header h2{margin:0;margin-right:auto}
+.dlg pre{white-space:pre-wrap;overflow:auto;background:#f9fbfd;border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:40vh}
+.answer{background:#f4f9ff;border:1px solid #cfe3f3;border-radius:10px;padding:12px;min-height:48px;white-space:pre-wrap}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:12px;
+  opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+.toast.on{opacity:1}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
+  animation:spin .8s linear infinite;vertical-align:-1px;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+@media (max-width:980px){.upload,.layout{grid-template-columns:1fr}.editor{position:static}}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <h1>Материалы для робота<small>Ақылтай · аппарат Курултая</small></h1>
+  <div class="meter" id="meter" title="Сколько опубликованных материалов попадает в память робота"><span id="meterText">—</span><div class="track"><div class="fill" id="meterFill" style="width:0"></div></div></div>
+  <button type="button" id="btnPreview">Что знает робот</button>
+  <button type="button" id="btnEvents">Журнал</button>
+  <form method="post" action="/app/admin/logout" style="margin:0"><button type="submit">Выйти</button></form>
+</div></header>
+
+<main>
+  <section class="upload">
+    <div class="card">
+      <h2>Загрузить файлы</h2>
+      <label class="drop" id="drop" for="fileInput">
+        <b>Перетащите файлы сюда или нажмите, чтобы выбрать</b>
+        <p id="formats">PDF, DOCX, TXT, MD, HTML, RTF, CSV, JSON · до 20 МБ · можно несколько</p>
+        <div class="files" id="fileList"></div>
+      </label>
+      <input type="file" id="fileInput" multiple hidden>
+    </div>
+    <div class="card paste">
+      <h2>Или вставить текст</h2>
+      <textarea id="pasteText" placeholder="Например: повестка заседания, порядок работы, справка…"></textarea>
+      <div class="row"><input id="pasteTitle" placeholder="Название (необязательно — робот предложит сам)" maxlength="200"></div>
+      <div class="row"><button type="button" class="primary" id="btnUpload">Загрузить и подготовить справки</button>
+        <span class="hint" id="uploadHint"></span></div>
+    </div>
+  </section>
+
+  <section class="layout">
+    <div class="card">
+      <h2>Материалы</h2>
+      <p class="hint" style="margin:-6px 0 10px">Справку готовит модель, вы проверяете и публикуете. Робот знает только <b>опубликованное</b> и только до даты «актуально до».</p>
+      <table>
+        <thead><tr><th>Материал</th><th>Состояние</th><th>Дата</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="3" class="empty">Загрузка…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card editor" id="editor" hidden>
+      <div class="row" style="margin-top:0"><span class="badge" id="edStatus"></span><span class="sub" id="edMeta"></span></div>
+      <label for="edTitle">Название</label>
+      <input id="edTitle" maxlength="200">
+      <div class="grid">
+        <div><label for="edKind">Тип</label><select id="edKind">
+          <option value="meeting">Заседание / мероприятие</option><option value="agenda">Повестка / план</option>
+          <option value="bill">Законопроект</option><option value="reference">Справка</option>
+          <option value="contacts">Контакты / организационное</option><option value="other">Другое</option></select></div>
+        <div><label for="edEvent">Дата события</label><input type="date" id="edEvent"></div>
+        <div><label for="edValid">Актуально до (включительно)</label><input type="date" id="edValid"></div>
+        <div><label>&nbsp;</label><span class="sub">После этой даты робот перестанет использовать материал.</span></div>
+      </div>
+      <div id="edNotes"></div>
+      <div class="tabs" role="tablist">
+        <button type="button" class="on" data-tab="brief">Справка для робота</button>
+        <button type="button" data-tab="source">Исходный текст</button>
+      </div>
+      <div data-pane="brief">
+        <textarea class="brief" id="edBrief" spellcheck="true"></textarea>
+        <div class="sub" id="edCount"></div>
+      </div>
+      <div data-pane="source" hidden><div class="source" id="edSource"></div></div>
+      <div class="actions">
+        <button type="button" class="primary" id="btnSave">Сохранить</button>
+        <button type="button" id="btnPublish">Опубликовать</button>
+        <span class="spacer"></span>
+        <button type="button" id="btnReprocess" title="Заново прочитать файл и подготовить справку (правки справки пропадут)">Переобработать</button>
+        <button type="button" id="btnFile">Оригинал</button>
+        <button type="button" class="danger" id="btnDelete">Удалить</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlgPreview"><div class="dlg">
+  <header><h2>Что знает робот</h2><button type="button" data-close>Закрыть</button></header>
+  <div class="sub" id="pvStats"></div>
+  <pre id="pvBlock"></pre>
+  <h2 style="margin:6px 0 0">Проверить вопросом</h2>
+  <div class="row" style="margin-top:0">
+    <input id="askQ" placeholder="Например: Во сколько начинается заседание в среду?" maxlength="500">
+    <select id="askLang" style="width:110px"><option value="ru">РУС</option><option value="kk">ҚАЗ</option></select>
+    <button type="button" class="primary" id="btnAsk">Спросить</button>
+  </div>
+  <div class="answer" id="askA">Ответ робота появится здесь (тот же ответ, что он скажет голосом).</div>
+</div></dialog>
+
+<dialog id="dlgEvents"><div class="dlg">
+  <header><h2>Журнал действий</h2><button type="button" data-close>Закрыть</button></header>
+  <div style="overflow:auto;max-height:70vh"><table><thead><tr><th>Когда</th><th>Действие</th><th>Материал</th><th>IP</th></tr></thead><tbody id="evRows"></tbody></table></div>
+</div></dialog>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var STATUS = { processing: 'Готовится справка', draft: 'Черновик', published: 'Опубликовано', error: 'Ошибка' };
+  var ACTIONS = { upload: 'Загружен', processed: 'Справка готова', edit: 'Изменён', publish: 'Опубликован', unpublish: 'Снят с публикации',
+    reprocess: 'Переобработка', delete: 'Удалён', error: 'Ошибка обработки' };
+  var state = { items: [], sel: null, cur: null, dirty: false, files: [], timer: null };
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.credentials = 'same-origin';
+    opts.headers = Object.assign({ 'X-Kurultai-Admin': '1' }, opts.headers || {});
+    return fetch('/app/admin/api' + path, opts).then(function (r) {
+      if (r.status === 401) { location.reload(); throw new Error('Войдите заново'); }
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) throw new Error(data.error || ('Ошибка ' + r.status));
+        return data;
+      });
+    });
+  }
+  function jsonOpts(method, body) { return { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }; }
+  function toast(text) { var t = $('toast'); t.textContent = text; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove('on'); }, 3200); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmtDate(iso) { if (!iso) return ''; var p = iso.slice(0, 10).split('-'); return p[2] + '.' + p[1] + '.' + p[0]; }
+  function fmtTime(iso) { if (!iso) return ''; var d = new Date(iso); return d.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+  function num(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+  function badge(it) {
+    if (it.status === 'published' && it.expired) return '<span class="badge b-expired">Срок истёк</span>';
+    if (it.status === 'published' && it.over_budget) return '<span class="badge b-over">Не поместилось</span>';
+    var spin = it.status === 'processing' ? '<span class="spin"></span>' : '';
+    return '<span class="badge b-' + it.status + '">' + spin + STATUS[it.status] + '</span>';
+  }
+
+  // ---------- список ----------
+  function load() {
+    return api('/materials').then(function (d) {
+      state.items = d.items;
+      $('formats').textContent = d.formats.map(function (f) { return f.slice(1).toUpperCase(); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(', ') + ' · до ' + d.upload_mb + ' МБ · можно несколько';
+      var s = d.stats, pct = Math.min(100, Math.round(100 * s.chars / Math.max(1, s.budget)));
+      $('meterText').textContent = 'В памяти робота материалов: ' + s.included + ' · ' + num(s.chars) + ' из ' + num(s.budget) + ' знаков';
+      $('meterFill').style.width = pct + '%';
+      $('meter').classList.toggle('over', s.skipped > 0);
+      renderRows();
+      if (state.sel != null && !state.dirty) {
+        var cur = state.items.filter(function (i) { return i.id === state.sel; })[0];
+        if (cur && state.cur && (cur.status !== state.cur.status || cur.updated_at !== state.cur.updated_at)) open(state.sel, true);
+      }
+      schedule();
+    }).catch(function (e) { toast(e.message); schedule(); });
+  }
+  function schedule() {
+    clearTimeout(state.timer);
+    var busy = state.items.some(function (i) { return i.status === 'processing'; });
+    state.timer = setTimeout(load, busy ? 3000 : 20000);
+  }
+  function renderRows() {
+    var rows = $('rows');
+    if (!state.items.length) { rows.innerHTML = '<tr><td colspan="3" class="empty">Пока пусто. Загрузите повестку, справку или любой текстовый документ.</td></tr>'; return; }
+    rows.innerHTML = state.items.map(function (it) {
+      var warn = it.warnings && it.warnings.length ? ' · ⚠ проверить' : '';
+      return '<tr class="item' + (it.id === state.sel ? ' sel' : '') + '" data-id="' + it.id + '"><td><div class="t">' + esc(it.title) + '</div><div class="sub">' +
+        esc(it.kind_name) + (it.filename ? ' · ' + esc(it.filename) : '') + warn + '</div></td><td>' + badge(it) +
+        (it.status === 'error' ? '<div class="sub" style="color:var(--err)">' + esc(it.error || '') + '</div>' : '') + '</td><td><div>' +
+        (it.event_date ? fmtDate(it.event_date) : '—') + '</div><div class="sub">' + (it.valid_until ? 'до ' + fmtDate(it.valid_until) : 'без срока') + '</div></td></tr>';
+    }).join('');
+  }
+  $('rows').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    var id = Number(tr.getAttribute('data-id'));
+    if (id === state.sel) return;
+    if (state.dirty && !confirm('Есть несохранённые правки. Перейти без сохранения?')) return;
+    open(id);
+  });
+
+  // ---------- редактор ----------
+  function open(id, keepTab) {
+    return api('/materials/' + id).then(function (it) {
+      state.sel = id; state.cur = it; state.dirty = false;
+      $('editor').hidden = false;
+      $('edStatus').className = 'badge b-' + (it.status === 'published' && it.expired ? 'expired' : it.status);
+      $('edStatus').innerHTML = (it.status === 'processing' ? '<span class="spin"></span>' : '') + (it.status === 'published' && it.expired ? 'Срок истёк' : STATUS[it.status]);
+      $('edMeta').textContent = (it.filename ? it.filename + ' · ' : '') + 'обновлено ' + fmtTime(it.updated_at) + (it.published_at ? ' · опубликовано ' + fmtTime(it.published_at) : '');
+      $('edTitle').value = it.title; $('edKind').value = it.kind;
+      $('edEvent').value = it.event_date || ''; $('edValid').value = it.valid_until || '';
+      $('edBrief').value = it.brief; $('edSource').textContent = it.source_text || '(текст ещё не извлечён)';
+      var notes = '';
+      if (it.status === 'processing') notes += '<div class="note info"><span class="spin"></span>Модель читает документ и готовит справку. Обычно это 10–60 секунд.</div>';
+      if (it.status === 'error') notes += '<div class="note err">' + esc(it.error) + '</div>';
+      (it.warnings || []).forEach(function (w) { notes += '<div class="note warn">⚠ ' + esc(w) + '</div>'; });
+      if (it.status === 'published' && it.expired) notes += '<div class="note warn">Срок «актуально до» прошёл — робот этот материал больше не использует. Продлите дату, если он ещё нужен.</div>';
+      if (it.status === 'draft') notes += '<div class="note info">Это черновик: робот его не знает, пока вы не нажмёте «Опубликовать». Проверьте справку по исходному тексту.</div>';
+      $('edNotes').innerHTML = notes;
+      var busy = it.status === 'processing';
+      ['edTitle', 'edKind', 'edEvent', 'edValid', 'edBrief', 'btnSave', 'btnPublish', 'btnReprocess'].forEach(function (k) { $(k).disabled = busy; });
+      $('btnPublish').textContent = it.status === 'published' ? 'Снять с публикации' : 'Опубликовать';
+      $('btnPublish').className = it.status === 'published' ? '' : 'primary';
+      $('btnSave').className = it.status === 'published' ? 'primary' : '';
+      $('btnPublish').disabled = busy || it.status === 'error' || !it.brief;
+      $('btnFile').hidden = !it.has_file;
+      count();
+      if (!keepTab) tab('brief');
+      renderRows();
+    }).catch(function (e) { toast(e.message); });
+  }
+  function count() { $('edCount').textContent = num($('edBrief').value.length) + ' знаков'; }
+  function tab(name) {
+    document.querySelectorAll('.tabs button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === name); });
+    document.querySelectorAll('[data-pane]').forEach(function (p) { p.hidden = p.getAttribute('data-pane') !== name; });
+  }
+  document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('button[data-tab]'); if (b) tab(b.getAttribute('data-tab')); });
+  ['edTitle', 'edKind', 'edEvent', 'edValid', 'edBrief'].forEach(function (k) { $(k).addEventListener('input', function () { state.dirty = true; if (k === 'edBrief') count(); }); });
+
+  function save() {
+    var body = { title: $('edTitle').value, kind: $('edKind').value, brief: $('edBrief').value };
+    if ($('edEvent').value) body.event_date = $('edEvent').value; else body.clear_event_date = true;
+    if ($('edValid').value) body.valid_until = $('edValid').value; else body.clear_valid_until = true;
+    return api('/materials/' + state.sel, jsonOpts('PATCH', body)).then(function () { state.dirty = false; return open(state.sel, true); }).then(load);
+  }
+  $('btnSave').addEventListener('click', function () { save().then(function () { toast(state.cur && state.cur.status === 'published' ? 'Сохранено — робот уже знает новую версию' : 'Сохранено'); }).catch(function (e) { toast(e.message); }); });
+  $('btnPublish').addEventListener('click', function () {
+    var pub = state.cur.status !== 'published';
+    var go = state.dirty ? save() : Promise.resolve();
+    go.then(function () { return api('/materials/' + state.sel + (pub ? '/publish' : '/unpublish'), { method: 'POST' }); })
+      .then(function () { toast(pub ? 'Опубликовано — робот отвечает с учётом этого материала' : 'Снято с публикации'); return open(state.sel, true); })
+      .then(load).catch(function (e) { toast(e.message); });
+  });
+  $('btnReprocess').addEventListener('click', function () {
+    if (!confirm('Заново прочитать файл и подготовить справку? Ваши правки справки будут заменены.')) return;
+    api('/materials/' + state.sel + '/reprocess', { method: 'POST' }).then(function () { state.dirty = false; return open(state.sel); }).then(load).catch(function (e) { toast(e.message); });
+  });
+  $('btnDelete').addEventListener('click', function () {
+    if (!confirm('Удалить «' + state.cur.title + '»? Робот перестанет его знать.')) return;
+    api('/materials/' + state.sel, { method: 'DELETE' }).then(function () { state.sel = null; state.cur = null; state.dirty = false; $('editor').hidden = true; toast('Удалено'); return load(); }).catch(function (e) { toast(e.message); });
+  });
+  $('btnFile').addEventListener('click', function () { location.href = '/app/admin/api/materials/' + state.sel + '/file'; });
+  window.addEventListener('beforeunload', function (e) { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ---------- загрузка ----------
+  var drop = $('drop');
+  function setFiles(list) {
+    state.files = Array.prototype.slice.call(list || []);
+    $('fileList').innerHTML = state.files.map(function (f) { return '• ' + esc(f.name) + ' <span class="sub">(' + Math.max(1, Math.round(f.size / 1024)) + ' КБ)</span>'; }).join('<br>');
+  }
+  $('fileInput').addEventListener('change', function () { setFiles(this.files); });
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('on'); }); });
+  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('on'); }); });
+  drop.addEventListener('drop', function (e) { setFiles(e.dataTransfer.files); });
+  $('btnUpload').addEventListener('click', function () {
+    var fd = new FormData();
+    state.files.forEach(function (f) { fd.append('files', f, f.name); });
+    fd.append('text', $('pasteText').value);
+    fd.append('title', $('pasteTitle').value);
+    if (!state.files.length && !$('pasteText').value.trim()) { toast('Выберите файлы или вставьте текст'); return; }
+    $('btnUpload').disabled = true; $('uploadHint').textContent = 'Загружаю…';
+    api('/materials', { method: 'POST', body: fd }).then(function (d) {
+      var msg = 'Принято: ' + d.created.length + '. Справки готовятся.';
+      if (d.rejected.length) msg += ' Не принято: ' + d.rejected.map(function (r) { return r.file + ' — ' + r.error; }).join('; ');
+      toast(msg); $('uploadHint').textContent = d.rejected.length ? msg : '';
+      setFiles([]); $('fileInput').value = ''; $('pasteText').value = ''; $('pasteTitle').value = '';
+      return load().then(function () { if (d.created.length === 1) open(d.created[0]); });
+    }).catch(function (e) { toast(e.message); $('uploadHint').textContent = e.message; })
+      .then(function () { $('btnUpload').disabled = false; if ($('uploadHint').textContent === 'Загружаю…') $('uploadHint').textContent = ''; });
+  });
+
+  // ---------- что знает робот ----------
+  function dialog(id) { var d = $(id); d.showModal(); return d; }
+  document.querySelectorAll('dialog [data-close]').forEach(function (b) { b.addEventListener('click', function () { b.closest('dialog').close(); }); });
+  $('btnPreview').addEventListener('click', function () {
+    $('pvBlock').textContent = 'Загрузка…'; dialog('dlgPreview');
+    api('/preview').then(function (d) {
+      $('pvBlock').textContent = d.block || 'Пока ничего не опубликовано — робот отвечает только по сайту quryltai.kz и интернету.';
+      var s = num(d.chars) + ' из ' + num(d.budget) + ' знаков · материалов: ' + d.included.length;
+      if (d.skipped.length) s += ' · не поместились: ' + d.skipped.length + ' (снимите старые материалы с публикации или сократите справки)';
+      if (d.expired.length) s += ' · истёк срок: ' + d.expired.length;
+      $('pvStats').textContent = s;
+    }).catch(function (e) { $('pvBlock').textContent = e.message; });
+  });
+  function ask() {
+    var q = $('askQ').value.trim(); if (!q) return;
+    $('btnAsk').disabled = true; $('askA').innerHTML = '<span class="spin"></span>Робот думает…';
+    api('/ask', jsonOpts('POST', { question: q, lang: $('askLang').value }))
+      .then(function (d) { $('askA').textContent = (d.answer || '(пустой ответ)') + '\n\n— ' + (d.ms / 1000).toFixed(1) + ' с'; })
+      .catch(function (e) { $('askA').textContent = e.message; })
+      .then(function () { $('btnAsk').disabled = false; });
+  }
+  $('btnAsk').addEventListener('click', ask);
+  $('askQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') ask(); });
+
+  // ---------- журнал ----------
+  $('btnEvents').addEventListener('click', function () {
+    $('evRows').innerHTML = '<tr><td colspan="4" class="empty">Загрузка…</td></tr>'; dialog('dlgEvents');
+    api('/events').then(function (d) {
+      $('evRows').innerHTML = d.events.length ? d.events.map(function (e) {
+        return '<tr><td>' + fmtTime(e.ts) + '</td><td>' + esc(ACTIONS[e.action] || e.action) + '</td><td>' + esc(e.title || '') + '</td><td class="sub">' + esc(e.client_ip || '') + '</td></tr>';
+      }).join('') : '<tr><td colspan="4" class="empty">Пусто</td></tr>';
+    }).catch(function (e) { toast(e.message); });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -28,8 +28,11 @@ from app.knowledge.search import KbSearch
 from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
+from app.kurultai.admin import router as kurultai_admin_router
 from app.kurultai.agent import KurultaiChatService
 from app.kurultai.download import router as kurultai_app_router
+from app.kurultai.materials.store import MaterialsStore, openrouter_complete
+from app.kurultai.materials.structure import Complete
 from app.kurultai.quryltai import QuryltaiSync
 from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
@@ -190,6 +193,7 @@ def create_app(
     embedder: Embedder | None = None,
     kurultai_chat_client: AsyncOpenAI | None = None,
     quryltai: QuryltaiSync | None = None,
+    kurultai_materials_complete: Complete | None = None,
 ) -> FastAPI:
     """speech — подменить и STT, и TTS одним провайдером (тесты); tts — только TTS.
     knowledge_source / log_repo — подменить базу знаний и лог вопросов (eval, openapi); с подменённой базой
@@ -274,6 +278,14 @@ def create_app(
                 settings.quryltai_snapshot_path,
             )
             quryltai.load_cache()  # последний снимок — сразу, сеть — фоном в lifespan
+        # материалы аппарата (админка /app/admin): справки моделью справок, опубликованные — в промпт
+        kurultai_materials = MaterialsStore(
+            engine, settings, kurultai_materials_complete or openrouter_complete(settings)
+        )
+        try:
+            kurultai_materials.recover_interrupted()
+        except Exception:
+            logger.exception("kurultai_materials_recover_failed")
         kurultai_chat = KurultaiChatService(
             settings,
             store,
@@ -285,9 +297,11 @@ def create_app(
             metrics=metrics,
             model_name=settings.resolved_kurultai_model(),
             quryltai=quryltai,
+            materials=kurultai_materials,
         )
     else:
         quryltai = None
+        kurultai_materials = None
     chats = {ASTANA_HUB: chat} | ({KURULTAI: kurultai_chat} if kurultai_chat is not None else {})
     stt = speech or build_stt_provider(settings)
     tts_provider = tts or speech or build_tts_provider(settings)
@@ -354,6 +368,7 @@ def create_app(
     app.state.store = store
     app.state.knowledge = syncer
     app.state.engine = engine
+    app.state.kurultai_materials = kurultai_materials  # None — профиль kurultai выключен
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service
@@ -387,6 +402,7 @@ def create_app(
     app.include_router(live_router)
     app.include_router(metrics_router)
     app.include_router(kurultai_app_router)  # /app — только при KURULTAI_APP_PASSWORD, иначе 404
+    app.include_router(kurultai_admin_router)  # /app/admin — только при KURULTAI_ADMIN_PASSWORD
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(
