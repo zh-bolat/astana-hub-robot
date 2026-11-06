@@ -832,6 +832,12 @@ def test_kurultai_name_in_persona_rules_and_greetings():
 def test_kurultai_name_alone_or_with_greeting_is_smalltalk():
     from app.kurultai.websearch import is_smalltalk
 
-    for text in ("Акылтай!", "Ақылтай", "Акыл тай, привет", "Ақылтай, сәлем", "Акылтай, ты меня слышишь?"):
-        assert is_smalltalk(text), text
+    for phrase in (
+        "Акылтай!",
+        "Ақылтай",
+        "Акыл тай, привет",
+        "Ақылтай, сәлем",
+        "Акылтай, ты меня слышишь?",
+    ):
+        assert is_smalltalk(phrase), phrase
     assert not is_smalltalk("Акылтай, какие законопроекты сейчас рассматриваются в Курултае?")
