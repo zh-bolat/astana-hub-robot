@@ -814,3 +814,24 @@ def test_smalltalk_skips_web_search() -> None:
         "Пока что расскажи о новостях",
     ]:
         assert not is_smalltalk(phrase), phrase
+
+
+# ---------- имя робота: Ақылтай ----------
+def test_kurultai_name_in_persona_rules_and_greetings():
+    out = prompts.kurultai_instructions("")
+    assert "Тебя зовут Ақылтай" in out and "«Я Акылтай, ИИ-помощник Курултая" in out
+    assert "обращаются по имени" in out  # обращение по имени — всегда к роботу, не «не мне»
+    assert all("Акылтай" in g for g in prompts.GREETINGS["ru"])
+    assert all("Ақылтай" in g for g in prompts.GREETINGS["kk"])
+    assert all("Aqyltai" in g for g in prompts.GREETINGS["en"])
+    assert "Акылтай" in prompts.QUICK_GREETINGS["ru"] and "Ақылтай" in prompts.QUICK_GREETINGS["kk"]
+    turn = prompts.kurultai_greeting_turn("ru", datetime(2026, 11, 6, 12, 0, tzinfo=UTC))
+    assert "Акылтая" in turn and "назови своё имя" in turn
+
+
+def test_kurultai_name_alone_or_with_greeting_is_smalltalk():
+    from app.kurultai.websearch import is_smalltalk
+
+    for text in ("Акылтай!", "Ақылтай", "Акыл тай, привет", "Ақылтай, сәлем", "Акылтай, ты меня слышишь?"):
+        assert is_smalltalk(text), text
+    assert not is_smalltalk("Акылтай, какие законопроекты сейчас рассматриваются в Курултае?")
