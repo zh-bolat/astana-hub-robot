@@ -266,6 +266,11 @@ class Settings(BaseSettings):
     kurultai_web_engine: str | None = None
     # С веб-поиском первая фраза приходит позже (поиск 2–5 с): потолок до первой фразы, сек
     kurultai_web_timeout_s: float = 10.0
+    # Скачивание APK робота Курултая из браузера робота (GET /app, app/kurultai/download.py): пароль страницы
+    # (пусто — выключено, 404), каталог с APK (в compose Курултая — смонтированный ~/kurultai-apk), срок ссылки, с
+    kurultai_app_password: SecretStr = Field(default=SecretStr(""))
+    kurultai_app_dir: Path = Path("/apk")
+    kurultai_app_link_ttl_s: int = Field(1800, ge=60, le=86_400)
     # Снимок quryltai.kz (app/kurultai/quryltai.py): при старте и раз в QURYLTAI_REFRESH_S, после ошибки —
     # не раньше QURYLTAI_RETRY_S; без сети — последний снимок (файл QURYLTAI_SNAPSHOT_PATH)
     quryltai_sync: bool = True
