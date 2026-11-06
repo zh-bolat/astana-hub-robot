@@ -29,6 +29,7 @@ from app.knowledge.sheets import SheetFetcher
 from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeSource
 from app.knowledge.sync import KnowledgeSyncer
 from app.kurultai.agent import KurultaiChatService
+from app.kurultai.download import router as kurultai_app_router
 from app.kurultai.quryltai import QuryltaiSync
 from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
@@ -385,6 +386,7 @@ def create_app(
     app.include_router(speech_router)
     app.include_router(live_router)
     app.include_router(metrics_router)
+    app.include_router(kurultai_app_router)  # /app — только при KURULTAI_APP_PASSWORD, иначе 404
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(
