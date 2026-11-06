@@ -775,6 +775,11 @@ class LiveConversation(FrameProcessor):
             )
         )
 
+    def last_answer(self) -> str:
+        """Текст последнего ответа робота (фразы хода) — подсказка распознаванию следующей реплики."""
+        turn = self._last_turn
+        return " ".join(turn.phrases).strip() if turn is not None else ""
+
     async def speak_text(self, text: str, lang: Lang | None = None) -> bool:
         """Ход без агента (описание кадра от /v1/look): озвучить готовый ответ, если робот свободен."""
         if self._user_open or self._closed:

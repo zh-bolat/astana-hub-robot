@@ -56,6 +56,7 @@ class _SttJson(BaseModel):
 
 class OpenRouterSpeechProvider:
     name = "openrouter"
+    supports_context = True  # stt(..., context=) — подсказка разговора в промпте
 
     def __init__(
         self,
@@ -107,7 +108,9 @@ class OpenRouterSpeechProvider:
         return r.content
 
     # ---------- STT ----------
-    async def _attempt(self, model: str, wav_b64: str, lang: Lang | None) -> _SttJson:
+    async def _attempt(
+        self, model: str, wav_b64: str, lang: Lang | None, context: str | None = None
+    ) -> _SttJson:
         body = {
             "model": model,
             "temperature": 0,
@@ -119,7 +122,7 @@ class OpenRouterSpeechProvider:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": stt_prompt(lang)},
+                        {"type": "text", "text": stt_prompt(lang, context)},
                         {"type": "input_audio", "input_audio": {"data": wav_b64, "format": "wav"}},
                     ],
                 },
@@ -140,12 +143,14 @@ class OpenRouterSpeechProvider:
         except Exception as exc:
             raise SpeechError(f"openrouter stt {model}: invalid response") from exc
 
-    async def stt(self, pcm: bytes, sample_rate: int, lang: Lang | None) -> SttResult:
+    async def stt(
+        self, pcm: bytes, sample_rate: int, lang: Lang | None, context: str | None = None
+    ) -> SttResult:
         wav_b64 = base64.b64encode(make_wav(pcm, sample_rate)).decode()
         try:
             parsed, _model = await run_with_fallback(
                 self.models,
-                lambda m: self._attempt(m, wav_b64, lang),
+                lambda m: self._attempt(m, wav_b64, lang, context),
                 deadline_s=self.deadline_s,
                 hedge_after_s=self.hedge_after_s,
                 retry_min_s=2.0,

@@ -43,15 +43,17 @@ from starlette.websockets import WebSocketState
 
 from app.api import chat_for, check_token, robot_profile
 from app.errors import ApiError
+from app.kurultai.stt_context import stt_context as kurultai_stt_context
 from app.lang import LANGS, Lang, normalize_lang
 from app.live.conversation import LiveConversation
 from app.live.playout import EchoGate, Playout, PlayoutTracker
 from app.live.protocol import AUDIO_FORMAT, AUDIO_IN_RATE, AUDIO_OUT_RATE, LiveSerializer
 from app.live.protocol import error_event as _error_event
 from app.live.protocol import event as _event
-from app.live.services import LiveServices
+from app.live.services import LiveServices, SegmentedProviderSTT
 from app.live.tts_cache import PhraseAudioCache
 from app.logging_setup import logger, new_request_id, reset_request_id, set_request_id
+from app.profiles import KURULTAI
 
 router = APIRouter(prefix="/v1")
 
@@ -177,6 +179,9 @@ class LiveSession:
             tts_text=services.tts_text,
         )
         self.conversation = conv
+        if self.profile == KURULTAI and isinstance(services.stt, SegmentedProviderSTT):
+            # Курултай: распознавание с подсказкой разговора (ситуация + последний ответ робота)
+            services.stt.context = lambda: kurultai_stt_context(conv.last_answer())
         warm_task: asyncio.Task | None = None
 
         async def warm_voices() -> None:

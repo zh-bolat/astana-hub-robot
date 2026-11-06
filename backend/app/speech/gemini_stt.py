@@ -38,7 +38,7 @@ _LANG_NAMES = {"ru": "Russian", "kk": "Kazakh", "en": "English"}
 _RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}
 
 
-def stt_prompt(lang: Lang | None) -> str:
+def stt_prompt(lang: Lang | None, context: str | None = None) -> str:
     lang_line = (
         f"The speech is in {_LANG_NAMES[lang]}."
         if lang
@@ -51,6 +51,19 @@ def stt_prompt(lang: Lang | None) -> str:
         'Return JSON {"lang": "ru"|"kk"|"en", "text": transcript}. '
         'If there is no intelligible speech (silence, noise, music), return "text": "". '
         "Output only the transcript: no translation, no comments, no timestamps."
+    ) + _context_block(context)
+
+
+def _context_block(context: str | None) -> str:
+    """Контекст разговора (профиль kurultai) — подсказка для неразборчивых слов; без контекста — пусто,
+    промпт побайтно прежний (Astana Hub)."""
+    context = (context or "").strip()
+    if not context:
+        return ""
+    return (
+        " Context of the conversation (use it ONLY to resolve unclear or ambiguous words, names and terms; "
+        "never add, complete or correct words that were not actually spoken; if the speech is unrelated to "
+        f"the context, transcribe it as is): {context}"
     )
 
 
@@ -61,6 +74,7 @@ class _SttJson(BaseModel):
 
 class GeminiSttProvider:
     name = "gemini"
+    supports_context = True  # stt(..., context=) — подсказка разговора в промпте
 
     def __init__(
         self,
@@ -83,7 +97,9 @@ class GeminiSttProvider:
         with contextlib.suppress(Exception):
             self.client.close()
 
-    async def _attempt(self, model: str, wav: bytes, lang: Lang | None) -> _SttJson:
+    async def _attempt(
+        self, model: str, wav: bytes, lang: Lang | None, context: str | None = None
+    ) -> _SttJson:
         config = types.GenerateContentConfig(
             temperature=0,
             max_output_tokens=512,
@@ -94,7 +110,7 @@ class GeminiSttProvider:
         audio = types.Part.from_bytes(data=wav, mime_type="audio/wav")
         try:
             resp = await self.client.aio.models.generate_content(
-                model=model, contents=[audio, stt_prompt(lang)], config=config
+                model=model, contents=[audio, stt_prompt(lang, context)], config=config
             )
         except genai_errors.APIError as exc:
             msg = f"gemini stt {model}: {exc.code} {exc.status or ''}".strip()
@@ -109,12 +125,14 @@ class GeminiSttProvider:
         except Exception as exc:
             raise SpeechError(f"gemini stt {model}: invalid JSON") from exc
 
-    async def stt(self, pcm: bytes, sample_rate: int, lang: Lang | None) -> SttResult:
+    async def stt(
+        self, pcm: bytes, sample_rate: int, lang: Lang | None, context: str | None = None
+    ) -> SttResult:
         wav = make_wav(pcm, sample_rate)
         try:
             parsed, _model = await run_with_fallback(
                 self.models,
-                lambda m: self._attempt(m, wav, lang),
+                lambda m: self._attempt(m, wav, lang, context),
                 deadline_s=self.deadline_s,
                 hedge_after_s=self.hedge_after_s,
                 retry_min_s=2.0,
