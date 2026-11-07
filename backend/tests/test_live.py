@@ -1609,7 +1609,7 @@ def test_live_kurultai_stt_gets_setting_and_previous_answer(live_server, context
     model = FakeModel(say("Закон подписан в октябре."), say("С первого января."))
     url, _, fakes = live_server(
         kurultai_model=model,
-        script=["Что с законом о цифровых активах?", "А когда он вступит?"],
+        script=["Акылтай, что с законом о цифровых активах?", "А когда он вступит?"],
         segmented_delay=0.2,
         kurultai_robot_token=KURULTAI_LIVE_TOKEN,
         kurultai_web_search_always=False,
@@ -1699,5 +1699,120 @@ def test_live_hub_lang_rule_unchanged(live_server):
         async with session(url, lang="ru") as c:
             c.speak(0.6)
             assert (await c.wait("user_final"))["lang"] == "kk"  # у хаба — прежнее правило
+
+    run(scenario())
+
+
+# ---------- Курултай: отвечает только на обращение (имя / «робот»), потом — разговор без имени ----------
+async def _say(c, n: int, answered: bool) -> None:
+    """n-я реплика: answered — робот ответил (ход доигран), иначе ignored not_addressed без хода."""
+    c.speak(0.6)
+    await c.wait("user_final", count=n)
+    if answered:
+        end = await c.wait("turn_end")
+        await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+    else:
+        ignored = await c.wait("ignored")
+        assert ignored["reason"] == "not_addressed"
+    await c.wait("listening", count=n + 1)
+
+
+def test_live_kurultai_answers_only_when_addressed(live_server):
+    model = FakeModel(say("Зал заседаний на втором этаже."), say("С девяти утра."))
+    url, _, fakes = live_server(
+        kurultai_model=model,
+        script=["Пойдём кофе попьём", "Робот, где зал заседаний?", "А во сколько начало?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await _say(c, 1, answered=False)  # чужой разговор — молчит, модель не зовёт
+            assert len(model.requests) == 0
+            assert "turn_start" not in c.kinds()
+            await _say(c, 2, answered=True)  # позвали «робот»
+            await _say(c, 3, answered=True)  # продолжение без имени — в окне разговора
+            assert len(model.requests) == 2
+
+    run(scenario())
+    assert fakes.tts[0].texts == ["Зал заседаний на втором этаже.", "С девяти утра."]
+
+
+def test_live_kurultai_window_expires(live_server):
+    model = FakeModel(say("Слушаю вас."))
+    url, _, _ = live_server(
+        kurultai_model=model,
+        script=["Ақылтай", "Где тут столовая?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+        kurultai_wake_window_s=0.3,  # model_copy без проверки — короткое окно для теста
+    )
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await _say(c, 1, answered=True)
+            await asyncio.sleep(0.8)  # окно кончилось — снова нужно обращение
+            await _say(c, 2, answered=False)
+            assert len(model.requests) == 1
+
+    run(scenario())
+
+
+def test_live_kurultai_tap_greeting_opens_dialog(live_server):
+    model = FakeModel(say("Здравствуйте! Я Акылтай."), say("Законопроектов сорок."))
+    url, _, _ = live_server(
+        kurultai_model=model,
+        script=["Сколько законопроектов на рассмотрении?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await c.send({"type": "visitor_arrived"})  # тап по лицу
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            c.speak(0.6)
+            await c.wait("user_final")
+            await c.wait("turn_end", count=2)  # без имени — ответил: разговор начат тапом
+
+    run(scenario())
+
+
+def test_live_kurultai_wake_word_off_answers_everything(live_server):
+    model = FakeModel(say("Кофе — в буфете на первом этаже."))
+    url, _, _ = live_server(
+        kurultai_model=model,
+        script=["Пойдём кофе попьём"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+        kurultai_wake_word=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await _say(c, 1, answered=True)
+
+    run(scenario())
+
+
+def test_live_hub_answers_without_name(live_server):
+    url, _, _ = live_server(
+        FakeModel(say("Лифт справа.")),
+        script=["Где лифт?"],
+        segmented_delay=0.2,
+        live_fast_places=False,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+    )
+
+    async def scenario() -> None:
+        async with session(url) as c:  # токен Astana Hub — без обращения, как раньше
+            await _say(c, 1, answered=True)
 
     run(scenario())

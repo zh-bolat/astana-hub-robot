@@ -27,6 +27,7 @@ from app.kurultai import prompts
 from app.kurultai.lang import answer_lang
 from app.kurultai.materials.store import MaterialsStore
 from app.kurultai.quryltai import QuryltaiSync
+from app.kurultai.wake import is_addressed
 from app.kurultai.websearch import is_smalltalk, needs_web_search
 from app.lang import Lang
 from app.profiles import KURULTAI
@@ -117,6 +118,15 @@ class KurultaiChatService(ChatService):
     def _request_lang(self, req: ChatRequest) -> Lang:
         """Язык экрана (req.lang), голосом — только явная смена (app/kurultai/lang.py)."""
         return answer_lang(req.question, req.lang)
+
+    @property
+    def wake_window_s(self) -> float | None:
+        """Окно разговора после обращения, с; None — отвечать на всё (KURULTAI_WAKE_WORD=false)."""
+        return self.settings.kurultai_wake_window_s if self.settings.kurultai_wake_word else None
+
+    def addressed(self, text: str) -> bool:
+        """Реплика обращена к роботу: имя «Ақылтай» или слово «робот» (app/kurultai/wake.py)."""
+        return is_addressed(text)
 
     def utterance_lang(self, text: str, stt_lang: Lang | None, session_lang: Lang) -> Lang:
         """Язык реплики live: язык сессии (= экран), другой — только если фраза явно на нём."""
