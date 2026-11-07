@@ -839,7 +839,9 @@ class LiveConversation(FrameProcessor):
     async def greet(self) -> None:
         if self.bot_active() or self._user_open:
             return
-        self._engage()  # тап по лицу — начало разговора
+        if getattr(self.chat, "live_greeting", True) is False:
+            return  # Курултай: тап будит молча, разговор открывает только обращение по имени
+        self._engage()  # приветствие включено (KURULTAI_LIVE_GREETING) — после него разговор без имени
         req = ChatRequest(
             question="",
             lang=self.lang,

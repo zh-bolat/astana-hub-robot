@@ -26,6 +26,7 @@ from app.knowledge.models import KnowledgeBase
 from app.kurultai import prompts
 from app.kurultai.lang import answer_lang
 from app.kurultai.materials.store import MaterialsStore
+from app.kurultai.openers import strip_opener
 from app.kurultai.quryltai import QuryltaiSync
 from app.kurultai.wake import is_addressed
 from app.kurultai.websearch import is_smalltalk, needs_web_search
@@ -167,6 +168,14 @@ class KurultaiChatService(ChatService):
 
     def _preclean(self, text: str) -> str:
         return strip_citations(text)
+
+    def _first_phrase(self, phrase: str) -> str:
+        return strip_opener(phrase)  # без «Здравствуйте», «Хороший вопрос» в начале ответа
+
+    @property
+    def live_greeting(self) -> bool:
+        """Тап по лицу (visitor_arrived): здороваться голосом (KURULTAI_LIVE_GREETING) или молча слушать."""
+        return self.settings.kurultai_live_greeting
 
     # ---------- части ответа без модели ----------
     def _quick(self, req: ChatRequest, request_id: str) -> AnswerResponse | None:

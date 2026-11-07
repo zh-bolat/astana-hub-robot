@@ -555,7 +555,7 @@ def test_kurultai_greeting_by_model(make_kclient, tmp_path):
         json={"question": "", "session_id": SESSION, "lang": "kk", "event": "visitor_arrived"},
         headers=K_AUTH,
     ).json()
-    assert body["phrases"][0] == "Здравствуйте!"
+    assert body["phrases"][0] == "Я ИИ-помощник Курултая."  # без «Здравствуйте» (2026-11-07)
     turn = model.requests[0]["messages"][-1]["content"]
     assert "ИИ-помощника Курултая" in turn and "kk (казахский)" in turn
     assert "Текущее место робота" not in turn  # мест хаба нет
@@ -661,7 +661,7 @@ def test_hub_ready_greeting_unchanged(client):
 def kurultai_live(settings, tmp_path):
     servers = []
 
-    def _start(model: FakeModel, script: list[str] | None = None):
+    def _start(model: FakeModel, script: list[str] | None = None, **overrides):
         fakes = Fakes(script or [])
         s = settings.model_copy(
             update={
@@ -669,6 +669,7 @@ def kurultai_live(settings, tmp_path):
                 "live_turn_silence_s": 0.15,
                 "live_stt_final_timeout_s": 0.6,
                 "kurultai_robot_token": KURULTAI_TOKEN,
+                **overrides,
             }
         )
         app = create_app(
@@ -724,7 +725,10 @@ def test_kurultai_live_turn_and_greeting(kurultai_live):
         say("[happy] Здравствуйте! Я ИИ-помощник Курултая."),
         say("[neutral] В Курултае восемь комитетов."),
     )
-    url, app = kurultai_live(model, script=["Сколько комитетов в Курултае?"])
+    # приветствие на тап — по настройке (по умолчанию выключено, 2026-11-07); после него разговор без имени
+    url, app = kurultai_live(
+        model, script=["Сколько комитетов в Курултае?"], kurultai_live_greeting=True
+    )
 
     async def scenario() -> None:
         async with ksession(url) as c:
@@ -736,8 +740,7 @@ def test_kurultai_live_turn_and_greeting(kurultai_live):
             await c.wait("user_final")
             await c.wait("turn_end", count=2)
             assert [p["text"] for p in c.events("phrase")] == [
-                "Здравствуйте!",
-                "Я ИИ-помощник Курултая.",
+                "Я ИИ-помощник Курултая.",  # «Здравствуйте!» вырезано (2026-11-07)
                 "В Курултае восемь комитетов.",
             ]
 
