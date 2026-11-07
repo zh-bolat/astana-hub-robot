@@ -263,6 +263,8 @@ class Settings(BaseSettings):
     # разговор без имени KURULTAI_WAKE_WINDOW_S с от конца ответа робота; false — отвечает на всё (как раньше)
     kurultai_wake_word: bool = True
     kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)
+    # Тап по лицу: false — робот просыпается молча и ждёт обращения (без приветствия и без окна разговора)
+    kurultai_live_greeting: bool = False
     # true — веб-поиск на каждый вопрос (кроме приветствия); false — только новости, события, расписание
     kurultai_web_search_always: bool = True
     kurultai_web_max_results: int = Field(3, ge=1, le=10)

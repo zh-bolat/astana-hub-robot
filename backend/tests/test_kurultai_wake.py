@@ -21,6 +21,8 @@ from app.kurultai.wake import is_addressed
         "Роботқа сұрақ қойайын",
         "Скажи, роботик, ты слышишь?",
         "Hey robot",
+        "Ақыл",  # имя, обрезанное распознаванием
+        "Акыл!",
     ],
 )
 def test_addressed(text):
@@ -38,6 +40,7 @@ def test_addressed(text):
         "Роботизация производства",
         "Работа депутатов",
         "Құрылтайда заң бар ма?",
+        "Ақыл айтшы",  # «дай совет» — не имя
     ],
 )
 def test_not_addressed(text):

@@ -16,8 +16,12 @@ from app.kurultai.websearch import NAME_RE
 ROBOT_RE = re.compile(r"\b(?:робот[а-яёәғқңөұүһі]{0,3}|robot)\b", re.IGNORECASE)
 
 
+# Обрезанное распознаванием имя одним словом («Ақыл», «Акыл») — тоже зов; внутри фразы «ақыл» — обычное слово
+_SHORT_NAME_ALONE = re.compile(r"^\W*а[кқ]ыл\W*$", re.IGNORECASE)
+
+
 def is_addressed(text: str | None) -> bool:
     """В реплике есть обращение к роботу: имя (как его записывает распознавание) или слово «робот»."""
     if not text:
         return False
-    return bool(NAME_RE.search(text) or ROBOT_RE.search(text))
+    return bool(NAME_RE.search(text) or ROBOT_RE.search(text) or _SHORT_NAME_ALONE.match(text))

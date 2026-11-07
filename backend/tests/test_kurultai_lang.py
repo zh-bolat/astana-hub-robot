@@ -4,48 +4,57 @@ from __future__ import annotations
 
 import pytest
 
-from app.kurultai.lang import answer_lang
+from app.kurultai.lang import answer_lang, wrong_language
 from app.kurultai.prompts import kurultai_turn
 from app.lang import utterance_lang
 
 
 @pytest.mark.parametrize(
-    ("text", "screen", "expected"),
+    "text",
     [
-        # русская речь с казахским написанием имён и названий — не казахский
-        ("Ақылтай, расскажи про законы", "kk", "ru"),
-        ("Ақылтай, какие законопроекты сейчас рассматриваются в Құрылтае?", "kk", "ru"),
-        ("Как дела у Әшімбаева?", "kk", "ru"),
-        ("Расскажи про цифровизацию и искусственный интеллект в Казахстане", "kk", "ru"),
-        ("Сәлем, расскажи про Курултай", "kk", "ru"),
-        # явный казахский
-        ("Сәлем", "ru", "kk"),
-        ("Ақылтай, сәлем", "ru", "kk"),
-        ("Құрылтайда цифровизация туралы заң бар ма?", "ru", "kk"),
-        ("Заң жобалары туралы айтып берші", "ru", "kk"),
-        ("Сен кімсің?", "ru", "kk"),
-        # неясно — язык экрана
-        ("Ақылтай", "ru", "ru"),
-        ("Ақылтай", "kk", "kk"),
-        ("Құрылтай", "ru", "ru"),
-        ("Законопроекты", "kk", "kk"),
-        ("Законопроекты", "ru", "ru"),
-        ("Он екі депутат", "ru", "ru"),
-        ("hello", "kk", "kk"),
-        ("", None, "ru"),
+        "Ақылтай, расскажи про законы",
+        "Сәлем",
+        "Құрылтайда цифровизация туралы заң бар ма?",
+        "Депутаты Курултая",
+        "Сколько депутатов в Мәжілісе?",
+        "hello",
+        "",
     ],
 )
-def test_answer_lang(text, screen, expected):
-    got = answer_lang(text, screen)
-    assert got == expected
-    assert answer_lang(text, got) == got  # повторный выбор (live → агент) не меняет язык
+@pytest.mark.parametrize("screen", ["ru", "kk"])
+def test_answer_lang_is_screen_only(text, screen):
+    """Язык ответа — только кнопка ҚАЗ|РУС (2026-11-07): текст реплики язык не меняет."""
+    assert answer_lang(text, screen) == screen
 
 
-def test_turn_language_line_uses_screen_rule():
+def test_answer_lang_default_ru():
+    assert answer_lang("Сәлем", None) == "ru"
+    assert answer_lang("Сәлем", "en") == "ru"
+
+
+def test_turn_language_line_uses_screen():
     from datetime import datetime
 
     turn = kurultai_turn("Ақылтай, расскажи про законы", "kk", datetime(2026, 11, 6, 12), False)
+    assert "Язык ответа: kk (казахский)" in turn
+    turn = kurultai_turn("Құрылтайда заң бар ма?", "ru", datetime(2026, 11, 6, 12), False)
     assert "Язык ответа: ru (русский)" in turn
+
+
+@pytest.mark.parametrize(
+    ("phrase", "lang", "wrong"),
+    [
+        ("Құрылтайда сегіз комитет жұмыс істейді.", "ru", True),
+        ("В Құрылтае восемь комитетов.", "ru", False),  # название по-казахски — не смена языка
+        ("Рахмет, всего доброго!", "ru", False),
+        ("Рахмет!", "ru", False),  # короткое — не режем
+        ("В Курултае сейчас работает восемь комитетов.", "kk", True),
+        ("Құрылтайда сегіз комитет бар.", "kk", False),
+        ("Курултай Казахстана.", "kk", False),  # короткое
+    ],
+)
+def test_wrong_language(phrase, lang, wrong):
+    assert wrong_language(phrase, lang) is wrong
 
 
 def test_hub_rule_unchanged():

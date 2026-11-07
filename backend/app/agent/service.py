@@ -727,7 +727,12 @@ class ChatService:
         out: list[str] = []
         for phrase in split_phrases(clean_for_tts(self._preclean(text))):
             phrase = _META_PREFIX.sub("", phrase)
+            if not st.emitted and not out:  # первая фраза ответа (Курултай режет вступления)
+                phrase = self._first_phrase(phrase, question)
             if not _WORD.search(phrase):  # пусто или одни знаки
+                continue
+            # профиль: фраза не годится (Курултай — не на языке экрана после начала ответа)
+            if not self._phrase_ok(phrase, st.lang, first=not st.emitted and not out):
                 continue
             if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
                 logger.info("agent_filler_dropped", extra={"chars": len(phrase)})
@@ -746,6 +751,14 @@ class ChatService:
                 break
             out.append(phrase)
         return out
+
+    def _phrase_ok(self, phrase: str, lang: Lang, first: bool = False) -> bool:
+        """Фраза ответа годится для профиля (по умолчанию — любая)."""
+        return True
+
+    def _first_phrase(self, phrase: str, question: str = "") -> str:
+        """Первая фраза ответа до фильтров; профиль может её править (Курултай — без «Здравствуйте»)."""
+        return phrase
 
     def _preclean(self, text: str) -> str:
         """Текст модели до clean_for_tts и фильтров (Курултай вырезает ссылки-цитаты веб-поиска)."""

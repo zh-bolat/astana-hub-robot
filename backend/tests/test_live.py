@@ -1635,9 +1635,10 @@ def test_live_hub_stt_has_no_context(live_server, context_provider):
 
 
 # ---------- Курултай: язык ответа — язык экрана, голосом только явная смена ----------
-def test_live_kurultai_lang_screen_then_clear_switch(live_server):
-    model = FakeModel(say("Законы — вот такие."), say("Иә, бар."), say("Тыңдап тұрмын."))
-    url, _, _ = live_server(
+def test_live_kurultai_lang_is_screen_only(live_server):
+    """Экран ҚАЗ: русская, казахская фраза и одно имя — все kk; голос — kk на каждую фразу (2026-11-07)."""
+    model = FakeModel(say("Заңдар туралы."), say("Иә, бар."), say("Тыңдап тұрмын."))
+    url, _, fakes = live_server(
         kurultai_model=model,
         script=["Ақылтай, расскажи про законы", "Құрылтайда заң бар ма?", "Ақылтай"],
         segmented_delay=0.2,
@@ -1655,10 +1656,35 @@ def test_live_kurultai_lang_screen_then_clear_switch(live_server):
                 end = await c.wait("turn_end", count=n)
                 await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
                 await c.wait("listening", count=n + 1)
-            # экран kk, но фраза явно русская → ru; явно казахская → kk; одно имя → язык сессии (kk)
-            assert langs == ["ru", "kk", "kk"]
+            assert langs == ["kk", "kk", "kk"]
 
     run(scenario())
+    assert set(fakes.voices) <= {"kk"}
+
+
+def test_live_kurultai_voice_and_text_stay_in_screen_language(live_server):
+    """Экран РУС: русская фраза с казахским названием — русский голос; хвост ответа по-казахски не звучит."""
+    model = FakeModel(
+        say(
+            "[neutral] В Құрылтае восемь комитетов. Құрылтайда сегіз комитет жұмыс істейді. "
+            "Подробнее — на сайте."
+        )
+    )
+    url, _, fakes = live_server(
+        kurultai_model=model,
+        script=["Акылтай, сколько комитетов?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, lang="ru", token=KURULTAI_LIVE_TOKEN) as c:
+            await _say(c, 1, answered=True)
+
+    run(scenario())
+    assert fakes.tts[0].texts == ["В Құрылтае восемь комитетов.", "Подробнее — на сайте."]
+    assert set(fakes.voices) <= {"ru"}
 
 
 def test_live_kurultai_screen_language_change_by_hello(live_server):
@@ -1761,11 +1787,12 @@ def test_live_kurultai_window_expires(live_server):
     run(scenario())
 
 
-def test_live_kurultai_tap_greeting_opens_dialog(live_server):
-    model = FakeModel(say("Здравствуйте! Я Акылтай."), say("Законопроектов сорок."))
+def test_live_kurultai_tap_wakes_silently_without_dialog(live_server):
+    """Тап по лицу (visitor_arrived): без приветствия и без окна разговора — нужно обращение по имени."""
+    model = FakeModel(say("Законопроектов сорок."))
     url, _, _ = live_server(
         kurultai_model=model,
-        script=["Сколько законопроектов на рассмотрении?"],
+        script=["Сколько законопроектов на рассмотрении?", "Акылтай, сколько законопроектов?"],
         segmented_delay=0.2,
         kurultai_robot_token=KURULTAI_LIVE_TOKEN,
         kurultai_web_search_always=False,
@@ -1774,12 +1801,11 @@ def test_live_kurultai_tap_greeting_opens_dialog(live_server):
     async def scenario() -> None:
         async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
             await c.send({"type": "visitor_arrived"})  # тап по лицу
-            end = await c.wait("turn_end")
-            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
-            await c.wait("listening", count=2)
-            c.speak(0.6)
-            await c.wait("user_final")
-            await c.wait("turn_end", count=2)  # без имени — ответил: разговор начат тапом
+            await asyncio.sleep(0.5)
+            assert "turn_start" not in c.kinds() and len(model.requests) == 0  # молча
+            await _say(c, 1, answered=False)  # без имени — не отвечает
+            await _say(c, 2, answered=True)  # по имени — отвечает
+            assert len(model.requests) == 1
 
     run(scenario())
 
@@ -1816,3 +1842,22 @@ def test_live_hub_answers_without_name(live_server):
             await _say(c, 1, answered=True)
 
     run(scenario())
+
+
+def test_live_kurultai_answer_without_greeting_opener(live_server):
+    """Не поздоровались — робот не здоровается; «Хороший вопрос» — никогда."""
+    model = FakeModel(say("[happy] Здравствуйте! Хороший вопрос! Комитетов восемь."))
+    url, _, fakes = live_server(
+        kurultai_model=model,
+        script=["Акылтай, сколько комитетов?"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+    )
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await _say(c, 1, answered=True)
+
+    run(scenario())
+    assert fakes.tts[0].texts == ["Комитетов восемь."]
