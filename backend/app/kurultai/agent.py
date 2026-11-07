@@ -169,8 +169,9 @@ class KurultaiChatService(ChatService):
     def _preclean(self, text: str) -> str:
         return strip_citations(text)
 
-    def _first_phrase(self, phrase: str) -> str:
-        return strip_opener(phrase)  # без «Здравствуйте», «Хороший вопрос» в начале ответа
+    def _first_phrase(self, phrase: str, question: str = "") -> str:
+        # приветствие — только в ответ на приветствие; «Хороший вопрос», «Конечно» — никогда
+        return strip_opener(phrase, question)
 
     @property
     def live_greeting(self) -> bool:

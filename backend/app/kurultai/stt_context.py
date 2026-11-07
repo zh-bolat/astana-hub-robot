@@ -18,7 +18,8 @@ SETTING = (
     "sometimes with English words. Typical topics: the Kurultai and its work, deputies, committees, sessions, "
     "draft laws (законопроект / заң жобасы), the Constitution, government bodies, deputy requests, "
     "news of Kazakhstan, Astana, also everyday small talk and questions to the robot itself. "
-    "The robot's name is Ақылтай (in Russian: Акылтай); people call it by name or just «робот»."
+    "The robot's name is Ақылтай (in Russian: Акылтай); people call it by name or just «робот». "
+    "Never translate: Russian speech is written in Russian, Kazakh speech in Kazakh, exactly as spoken."
 )
 
 # Последний ответ робота: хватает конца ответа — с ним связан следующий вопрос; длиннее — дороже и медленнее.

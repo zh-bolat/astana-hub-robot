@@ -1819,10 +1819,11 @@ def test_live_hub_answers_without_name(live_server):
 
 
 def test_live_kurultai_answer_without_greeting_opener(live_server):
+    """Не поздоровались — робот не здоровается; «Хороший вопрос» — никогда."""
     model = FakeModel(say("[happy] Здравствуйте! Хороший вопрос! Комитетов восемь."))
     url, _, fakes = live_server(
         kurultai_model=model,
-        script=["Акылтай, привет, сколько комитетов?"],
+        script=["Акылтай, сколько комитетов?"],
         segmented_delay=0.2,
         kurultai_robot_token=KURULTAI_LIVE_TOKEN,
         kurultai_web_search_always=False,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.kurultai.openers import strip_opener
+from app.kurultai.openers import strip_opener, visitor_greeted
 
 
 @pytest.mark.parametrize(
@@ -38,3 +38,28 @@ def test_opener_removed(phrase, expected):
 )
 def test_meaningful_start_kept(phrase):
     assert strip_opener(phrase) == phrase
+
+
+@pytest.mark.parametrize(
+    ("question", "phrase", "expected"),
+    [
+        ("Акылтай, привет", "Здравствуйте! Я Акылтай.", "Здравствуйте! Я Акылтай."),
+        ("Сәлем, Ақылтай", "Сәлеметсіз бе! Тыңдап тұрмын.", "Сәлеметсіз бе! Тыңдап тұрмын."),
+        (
+            "Добрый день, робот, сколько комитетов?",
+            "Добрый день! Комитетов восемь.",
+            "Добрый день! Комитетов восемь.",
+        ),
+        ("Привет, Акылтай", "Хороший вопрос! Восемь.", "Восемь."),  # реакции — никогда
+        ("Акылтай, сколько комитетов?", "Здравствуйте! Комитетов восемь.", "Комитетов восемь."),
+    ],
+)
+def test_greeting_only_in_reply_to_greeting(question, phrase, expected):
+    assert strip_opener(phrase, question) == expected
+
+
+def test_visitor_greeted():
+    assert visitor_greeted("Акылтай, привет")
+    assert visitor_greeted("Ассалаумағалейкум")
+    assert not visitor_greeted("Акылтай, расскажи про приветственное слово")
+    assert not visitor_greeted("")
