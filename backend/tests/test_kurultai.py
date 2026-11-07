@@ -530,8 +530,11 @@ def test_kurultai_noise_is_ignored_without_model(make_kclient, tmp_path):
 def test_kurultai_quick_greeting_and_thanks(make_kclient, tmp_path):
     model = FakeModel()
     c = make_kclient(tmp_path, model=model)
-    hello = c.post("/v1/chat", json=ask_body("Сәлеметсіз бе"), headers=K_AUTH).json()
+    # язык ответа — язык экрана (lang запроса), не язык реплики (2026-11-07)
+    hello = c.post("/v1/chat", json=ask_body("Сәлеметсіз бе", lang="kk"), headers=K_AUTH).json()
     assert hello["answer"] == prompts.QUICK_GREETINGS["kk"]
+    hello_ru = c.post("/v1/chat", json=ask_body("Сәлеметсіз бе", lang="ru"), headers=K_AUTH).json()
+    assert hello_ru["answer"] == prompts.QUICK_GREETINGS["ru"]
     thanks = c.post("/v1/chat", json=ask_body("Спасибо"), headers=K_AUTH).json()
     assert thanks["answer"] == "Пожалуйста! Всегда рад помочь."
     assert not model.requests

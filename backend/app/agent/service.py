@@ -731,6 +731,9 @@ class ChatService:
                 phrase = self._first_phrase(phrase, question)
             if not _WORD.search(phrase):  # пусто или одни знаки
                 continue
+            # профиль: фраза не годится (Курултай — не на языке экрана после начала ответа)
+            if not self._phrase_ok(phrase, st.lang, first=not st.emitted and not out):
+                continue
             if is_filler_only(phrase):  # «Хм…», «Ммм.» — звук-заполнитель, не ответ
                 logger.info("agent_filler_dropped", extra={"chars": len(phrase)})
                 continue
@@ -748,6 +751,10 @@ class ChatService:
                 break
             out.append(phrase)
         return out
+
+    def _phrase_ok(self, phrase: str, lang: Lang, first: bool = False) -> bool:
+        """Фраза ответа годится для профиля (по умолчанию — любая)."""
+        return True
 
     def _first_phrase(self, phrase: str, question: str = "") -> str:
         """Первая фраза ответа до фильтров; профиль может её править (Курултай — без «Здравствуйте»)."""

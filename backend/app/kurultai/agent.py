@@ -24,13 +24,14 @@ from app.agent.service import ASTANA_TZ, ChatService, _ChatState, _Offer, _phras
 from app.agent.tools import ChatContext, no_answer
 from app.knowledge.models import KnowledgeBase
 from app.kurultai import prompts
-from app.kurultai.lang import answer_lang
+from app.kurultai.lang import answer_lang, wrong_language
 from app.kurultai.materials.store import MaterialsStore
 from app.kurultai.openers import strip_opener
 from app.kurultai.quryltai import QuryltaiSync
 from app.kurultai.wake import is_addressed
 from app.kurultai.websearch import is_smalltalk, needs_web_search
 from app.lang import Lang
+from app.logging_setup import logger
 from app.profiles import KURULTAI
 from app.schemas import AnswerResponse, ChatRequest
 from app.smalltalk import quick_kind, quick_reply
@@ -117,7 +118,7 @@ class KurultaiChatService(ChatService):
         )
 
     def _request_lang(self, req: ChatRequest) -> Lang:
-        """Язык экрана (req.lang), голосом — только явная смена (app/kurultai/lang.py)."""
+        """Язык экрана (req.lang) — текст вопроса язык не меняет (app/kurultai/lang.py)."""
         return answer_lang(req.question, req.lang)
 
     @property
@@ -130,7 +131,7 @@ class KurultaiChatService(ChatService):
         return is_addressed(text)
 
     def utterance_lang(self, text: str, stt_lang: Lang | None, session_lang: Lang) -> Lang:
-        """Язык реплики live: язык сессии (= экран), другой — только если фраза явно на нём."""
+        """Язык реплики live — язык сессии (= экран ҚАЗ|РУС)."""
         return answer_lang(text, session_lang)
 
     def _turn_text(
@@ -168,6 +169,18 @@ class KurultaiChatService(ChatService):
 
     def _preclean(self, text: str) -> str:
         return strip_citations(text)
+
+    voice_lang_fixed = True  # live: голос — язык экрана, не по буквам фразы
+
+    def _phrase_ok(self, phrase: str, lang: Lang, first: bool = False) -> bool:
+        # ответ начался на языке экрана, а модель перешла на другой — хвост не озвучиваем; первую фразу не режем,
+        # чтобы робот не промолчал совсем
+        if not first and wrong_language(phrase, lang):
+            logger.warning(
+                "kurultai_wrong_language_dropped", extra={"lang": lang, "chars": len(phrase)}
+            )
+            return False
+        return True
 
     def _first_phrase(self, phrase: str, question: str = "") -> str:
         # приветствие — только в ответ на приветствие; «Хороший вопрос», «Конечно» — никогда

@@ -30,6 +30,7 @@ eleven_v3. Текст для синтеза нормализуется (app/tts_
 Звук шаблонных фраз — из кеша (app/live/tts_cache.py).
 
 Язык реплики — по тексту и языку от STT (app/lang.py utterance_lang); язык не из ru/kk/en — язык сессии.
+Курултай — всегда язык сессии (экран ҚАЗ|РУС), и голос ответа тоже (voice_lang_fixed).
 
 Перебивание. Речь посетителя, пока ход робота не закончен (модель думает или звук ещё играет), — кандидат.
 LIVE_BARGE_IN=stop_only (по умолчанию, v1.4 «шумный зал»): перебиванием он становится, только если текст
@@ -705,7 +706,12 @@ class LiveConversation(FrameProcessor):
             return
         first = not turn.phrases
         turn.phrases.append(phrase)
-        lang = tts_lang(phrase, turn.lang)
+        # голос — по фразе; Курултай — всегда язык ответа (экрана), без переключения посреди ответа
+        lang = (
+            turn.lang
+            if getattr(self.chat, "voice_lang_fixed", False)
+            else tts_lang(phrase, turn.lang)
+        )
         spoken = normalize_for_tts(phrase, lang, self.pronunciations)
         await self._use_voice(lang)
         await self._send_queued(event("phrase", text=phrase))
