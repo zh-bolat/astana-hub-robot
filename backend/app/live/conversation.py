@@ -288,6 +288,8 @@ class LiveConversation(FrameProcessor):
         # ход робота
         self._turn: _BotTurn | None = None
         self._last_turn: _BotTurn | None = None  # для playback_done после конца хода
+        # Курултай: робот отвечает на обращение (имя / «робот») и до этого момента — разговор без имени
+        self._engaged_until = 0.0
         self._tasks: set[asyncio.Task] = set()
         self._closed = False
 
@@ -645,6 +647,14 @@ class LiveConversation(FrameProcessor):
         else:
             lang = utterance_lang(text, stt_lang, self.lang)
         await self.send_now(event("user_final", text=text, lang=lang))
+        if not self._addressed(text):
+            # Курултай: к роботу не обращались и разговора нет — модель не зовём, робот слушает дальше
+            self.stats.ignored += 1
+            self.stats.not_addressed += 1
+            logger.info("live_not_addressed", extra={"chars": len(text)})
+            await self.send_now(event("ignored", reason="not_addressed"))
+            await self.send_now(event("listening"))
+            return
         if not is_noise(text):
             await self.send_now(event("thinking"))
             if lang != self._tts_lang:
@@ -781,6 +791,25 @@ class LiveConversation(FrameProcessor):
             )
         )
 
+    # ---------- обращение (Курултай) ----------
+    def _wake_window(self) -> float | None:
+        return getattr(self.chat, "wake_window_s", None)
+
+    def _engage(self) -> None:
+        window = self._wake_window()
+        if window is not None:
+            self._engaged_until = time.monotonic() + window
+
+    def _addressed(self, text: str) -> bool:
+        """Отвечать ли на реплику: профиль без обращения (Astana Hub) — всегда; Курултай — в окне разговора или
+        если позвали по имени / «робот» (тогда окно открывается)."""
+        if self._wake_window() is None:
+            return True
+        if time.monotonic() < self._engaged_until or self.chat.addressed(text):
+            self._engage()
+            return True
+        return False
+
     def last_answer(self) -> str:
         """Текст последнего ответа робота (фразы хода) — подсказка распознаванию следующей реплики."""
         turn = self._last_turn
@@ -810,6 +839,7 @@ class LiveConversation(FrameProcessor):
     async def greet(self) -> None:
         if self.bot_active() or self._user_open:
             return
+        self._engage()  # тап по лицу — начало разговора
         req = ChatRequest(
             question="",
             lang=self.lang,
@@ -845,6 +875,7 @@ class LiveConversation(FrameProcessor):
             return
         turn.finished = True
         turn.interrupted = interrupted
+        self._engage()  # окно разговора — от конца ответа робота
         if self._turn is turn:
             self._turn = None
             if self._barge_start is not None:

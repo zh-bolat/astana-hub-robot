@@ -17,7 +17,8 @@ SETTING = (
     "Republic of Kazakhstan, Astana. Visitors, deputies and staff speak Russian or Kazakh, often mixing them, "
     "sometimes with English words. Typical topics: the Kurultai and its work, deputies, committees, sessions, "
     "draft laws (законопроект / заң жобасы), the Constitution, government bodies, deputy requests, "
-    "news of Kazakhstan, Astana, also everyday small talk and questions to the robot itself."
+    "news of Kazakhstan, Astana, also everyday small talk and questions to the robot itself. "
+    "The robot's name is Ақылтай (in Russian: Акылтай); people call it by name or just «робот»."
 )
 
 # Последний ответ робота: хватает конца ответа — с ним связан следующий вопрос; длиннее — дороже и медленнее.

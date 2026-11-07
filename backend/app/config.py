@@ -259,6 +259,10 @@ class Settings(BaseSettings):
     # промпте, веб-поиск OpenRouter (плагин web) только на вопросы о новостях, прошедших событиях и расписании
     kurultai_agent_model: str | None = None
     kurultai_web_search: bool = True
+    # Обращение (app/kurultai/wake.py): live отвечает только на имя «Ақылтай» или слово «робот»; после обращения —
+    # разговор без имени KURULTAI_WAKE_WINDOW_S с от конца ответа робота; false — отвечает на всё (как раньше)
+    kurultai_wake_word: bool = True
+    kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)
     # true — веб-поиск на каждый вопрос (кроме приветствия); false — только новости, события, расписание
     kurultai_web_search_always: bool = True
     kurultai_web_max_results: int = Field(3, ge=1, le=10)
