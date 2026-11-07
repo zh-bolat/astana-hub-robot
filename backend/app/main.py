@@ -30,6 +30,7 @@ from app.knowledge.source import KnowledgeSource, KnowledgeStore, YamlKnowledgeS
 from app.knowledge.sync import KnowledgeSyncer
 from app.kurultai.admin import router as kurultai_admin_router
 from app.kurultai.agent import KurultaiChatService
+from app.kurultai.diag import router as kurultai_diag_router
 from app.kurultai.download import router as kurultai_app_router
 from app.kurultai.materials.store import MaterialsStore, openrouter_complete
 from app.kurultai.materials.structure import Complete
@@ -403,6 +404,9 @@ def create_app(
     app.include_router(metrics_router)
     app.include_router(kurultai_app_router)  # /app — только при KURULTAI_APP_PASSWORD, иначе 404
     app.include_router(kurultai_admin_router)  # /app/admin — только при KURULTAI_ADMIN_PASSWORD
+    app.include_router(
+        kurultai_diag_router
+    )  # /v1/robot/diag — диагностика робота Курултая в журнал
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(

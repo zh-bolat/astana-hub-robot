@@ -32,6 +32,7 @@ def body_limits(settings: Settings) -> dict[str, int]:
         "/v1/stt": settings.max_audio_bytes + 64 * 1024,
         "/v1/tts": 4 * 1024,
         "/v1/metrics/turn": 4 * 1024,
+        "/v1/robot/diag": 4 * 1024,
     }
 
 

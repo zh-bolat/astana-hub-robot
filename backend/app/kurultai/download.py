@@ -156,6 +156,7 @@ font-size:26px;font-weight:700;padding:16px 30px;text-decoration:none}
 .err{color:#b8404b;font-size:20px;margin:0 0 12px}
 .name{font-size:24px;font-weight:700;margin:0 0 6px;word-break:break-all}
 .meta{color:#68748a;font-size:18px;margin:0;word-break:break-all}
+.when{font-size:21px;margin:0 0 6px;color:#182642}.when b{color:#1d6f9e}
 .tag{display:inline-block;background:#e3f1fa;color:#1d6f9e;border-radius:8px;padding:2px 10px;font-size:17px;
 margin-left:8px;vertical-align:middle}
 ol{font-size:20px;line-height:1.5;padding-left:26px;margin:0}
@@ -213,7 +214,8 @@ def _list_page(settings: Settings, apks: list[ApkFile]) -> HTMLResponse:
         rows.append(
             '<div class="card">'
             f'<p class="name">{html.escape(version or a.name)}{tags}</p>'
-            f'<p class="meta">{html.escape(a.name)} · {a.size / 1_048_576:.1f} МБ · {_when(a.mtime)}</p>'
+            f'<p class="when">Выложена · Жүктелді: <b>{_when(a.mtime)}</b> (Астана)</p>'
+            f'<p class="meta">{html.escape(a.name)} · {a.size / 1_048_576:.1f} МБ</p>'
             f'<p class="meta">sha256 {a.sha256}</p>'
             f'<a class="btn" href="{html.escape(link(settings, a.name, now))}" download>'
             "Скачать · Жүктеу</a></div>"

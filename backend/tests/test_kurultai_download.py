@@ -84,6 +84,7 @@ def test_list_newest_first_and_download(app_client, apk_dir):
     assert r.text.index(APK_NEW) < r.text.index(APK_STABLE)
     assert "notes.txt" not in r.text and "secret.apk" not in r.text
     assert "5.50-1cca2d5-20261106" in r.text
+    assert "Выложена" in r.text and r.text.count("(Астана)") == 2  # время выкладки у каждой сборки
     assert hashlib.sha256(b"PK-new-build").hexdigest() in r.text
     links = _links(r.text)
     assert len(links) == 2 and links[0].endswith(APK_NEW)
