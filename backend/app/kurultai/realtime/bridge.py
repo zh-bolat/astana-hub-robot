@@ -201,7 +201,7 @@ class RealtimeBridge:
                             "conversation": "none",
                             "input": [],
                             "output_modalities": ["text"],
-                            "max_output_tokens": 1,
+                            "max_output_tokens": 16,
                             "metadata": {"purpose": "warmup"},
                         },
                     }

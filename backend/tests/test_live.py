@@ -2293,7 +2293,9 @@ def test_realtime_session_reasoning_vad_and_warmup_not_spoken(live_server):
     assert cfg["reasoning"] == {"effort": "minimal"}
     assert cfg["audio"]["input"]["turn_detection"]["silence_duration_ms"] == 400
     warm = fake.of("response.create")[0]["response"]
-    assert warm["conversation"] == "none" and warm["max_output_tokens"] == 1
+    assert (
+        warm["conversation"] == "none" and warm["max_output_tokens"] == 16
+    )  # на 1 OpenAI отвечает server_error
 
 
 def test_realtime_not_addressed_speculation_is_cancelled(live_server):
