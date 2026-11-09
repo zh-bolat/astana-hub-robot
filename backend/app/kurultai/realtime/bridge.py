@@ -39,8 +39,9 @@ from starlette.websockets import WebSocketState
 
 from app.config import Settings, secret_text
 from app.kurultai.quryltai import ASTANA_TZ
+from app.kurultai.rag.knowledge import TOOL as SEARCH_TOOL
 from app.kurultai.realtime import websearch
-from app.kurultai.realtime.instructions import realtime_instructions
+from app.kurultai.realtime.instructions import realtime_instructions, realtime_instructions_rag
 from app.lang import Lang, normalize_lang
 from app.live.protocol import AUDIO_FORMAT, MAX_AUDIO_FRAME, MAX_TEXT_FRAME, event, new_turn_id
 from app.live.stop import is_stop_command
@@ -146,6 +147,7 @@ class RealtimeBridge:
         connector: Connector | None = None,
         search: Callable[[str], Awaitable[str]] | None = None,
         tts: TtsStream | None = None,
+        knowledge: Any = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ws = ws
@@ -162,6 +164,8 @@ class RealtimeBridge:
         )
         self._pronunciations = settings.knowledge_dir / "pronunciations.yaml"
         self._clock = clock
+        # знания Курултая через поиск (app/kurultai/rag): сводка в промпт, подробности — search_kurultai
+        self.knowledge = knowledge if settings.kurultai_rag else None
         self.oa: Any = None
         self._send_lock = asyncio.Lock()
         self._audio_buf = bytearray()
@@ -282,6 +286,8 @@ class RealtimeBridge:
         return datetime.now(UTC).astimezone(ASTANA_TZ).replace(second=0, microsecond=0)
 
     def _build_instructions(self) -> str:
+        if self.knowledge is not None:
+            return realtime_instructions_rag(self.knowledge.summary(), self.lang, self._now())
         return realtime_instructions(
             self.chat.snapshot(), self.chat.materials_block(), self.lang, self._now()
         )
@@ -309,7 +315,8 @@ class RealtimeBridge:
                 "instructions": self._instructions,
                 "output_modalities": ["text"] if self._text_mode else ["audio"],
                 "audio": audio,
-                "tools": [websearch.TOOL] if s.kurultai_web_search else [],
+                "tools": ([SEARCH_TOOL] if self.knowledge is not None else [])
+                + ([websearch.TOOL] if s.kurultai_web_search else []),
                 "tool_choice": "auto",
                 **(
                     {"reasoning": {"effort": s.kurultai_realtime_reasoning}}
@@ -845,7 +852,20 @@ class RealtimeBridge:
                 args = json.loads(call.get("arguments") or "{}")
             except ValueError:
                 args = {}
-            if name == "web_search":
+            if name == "search_kurultai" and self.knowledge is not None:
+                started = self._clock()
+                query = str(args.get("query") or "")
+                try:
+                    result = await self.knowledge.search(query, self.settings.kurultai_rag_results)
+                except Exception as exc:  # БД недоступна — модель скажет, что данных нет
+                    logger.warning(
+                        "kurultai_rag_search_failed", extra={"error": type(exc).__name__}
+                    )
+                    result = "Поиск по данным Курултая недоступен."
+                logger.info(
+                    "realtime_search_kurultai", extra={"ms": int((self._clock() - started) * 1000)}
+                )
+            elif name == "web_search":
                 started = self._clock()
                 result = await self._search(str(args.get("query") or ""))
                 logger.info(
@@ -866,6 +886,8 @@ class RealtimeBridge:
                 }
             )
         if self._turn_open:
+            # продолжение после инструмента — новый ответ модели, он тоже начинается с тега эмоции
+            self._emotion_pending = True
             await self._oa_send({"type": "response.create"})
 
     async def _end_turn(self, ok: bool) -> None:

@@ -2443,3 +2443,74 @@ def test_realtime_reconnects_to_openai_without_dropping_robot(live_server):
             assert [e["text"] for e in c.events("phrase")] == ["Снова на связи."]
 
     run(scenario())
+
+
+class FakeKnowledge:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def summary(self) -> str:
+        return "Законопроектов всего 42. Комитетов 8."
+
+    async def search(self, query: str, k: int = 5) -> str:
+        self.queries.append(query)
+        return "[Повестка 11.11] Пункт 4 докладывает Годунова Н. Н."
+
+
+def test_realtime_rag_compact_prompt_and_search_tool(live_server):
+    fake = FakeRealtime()
+    url, app, _, _ = _realtime_server(live_server, fake, kurultai_wake_word=False)
+    kn = FakeKnowledge()
+    app.state.kurultai_knowledge = kn
+    fake.tool_first = True
+
+    def respond(n: int) -> None:  # 1-й ответ — вызов search_kurultai, 2-й — ответ по найденному
+        fake.push({"type": "response.created", "response": {"id": fake.cur}})
+        if n == 1:
+            fake.push(
+                {
+                    "type": "response.done",
+                    "response": {
+                        "id": fake.cur,
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "search_kurultai",
+                                "call_id": "c1",
+                                "arguments": json.dumps({"query": "докладчик по энергетике"}),
+                            }
+                        ],
+                    },
+                }
+            )
+            return
+        fake.say("[neutral] Докладывает Годунова.")
+        fake.push({"type": "response.output_text.done"})
+        fake.push(
+            {
+                "type": "response.done",
+                "response": {
+                    "id": fake.cur,
+                    "status": "completed",
+                    "output": [{"type": "message"}],
+                },
+            }
+        )
+
+    fake._respond = respond
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Кто докладывает по альтернативной энергетике?")
+            await c.wait("turn_end")
+            assert [e["text"] for e in c.events("phrase")] == ["Докладывает Годунова."]
+
+    run(scenario())
+    cfg = fake.of("session.update")[0]["session"]
+    assert "Законопроектов всего 42" in cfg["instructions"]
+    assert "Официальный локальный снимок" not in cfg["instructions"]  # полный снимок — не в промпте
+    assert [t["name"] for t in cfg["tools"]][:1] == ["search_kurultai"]
+    assert kn.queries == ["докладчик по энергетике"]
+    out = fake.of("conversation.item.create")[0]["item"]
+    assert out["call_id"] == "c1" and "Годунова" in out["output"]

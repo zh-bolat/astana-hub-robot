@@ -281,6 +281,11 @@ class Settings(BaseSettings):
     kurultai_realtime_warmup: bool = True
     # Рассуждение модели: low — умнее (09.11, «больше интеллекта»), minimal — быстрее на 0,2–0,4 с; пусто — OpenAI
     kurultai_realtime_reasoning: str = "low"
+    # Знания Realtime через поиск (app/kurultai/rag): в промпте короткая сводка, подробности — search_kurultai
+    # по kurultai_chunks (векторы + слова). false — как раньше: весь снимок и справки в промпт.
+    kurultai_rag: bool = True
+    kurultai_rag_reindex_s: float = Field(300.0, ge=30.0)
+    kurultai_rag_results: int = Field(5, ge=1, le=10)
     # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
     kurultai_realtime_transcribe_model: str = "gpt-4o-transcribe"
     kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)

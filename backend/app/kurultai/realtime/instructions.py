@@ -48,3 +48,18 @@ def realtime_instructions(snapshot: str, materials: str, lang: Lang, now: dateti
         f"Язык ответа: {_LANG.get(lang, _LANG['ru'])} — весь ответ строго на этом языке.\n"
         f"Сейчас в Астане: {now:%Y-%m-%d %H:%M}."
     )
+
+
+RAG_RULE = """Данные Курултая: ниже — короткая сводка. Подробности (конкретный законопроект и его статус, депутатский
+запрос, кто в каком комитете, пункт повестки, докладчик, цифры доклада, статья Регламента, текст справки) —
+вызови search_kurultai, перед вызовом ничего не говори. Нашлось — отвечай по найденному; не нашлось — так и скажи.
+Новости, погода и прочее вне Курултая — web_search."""
+
+
+def realtime_instructions_rag(summary: str, lang: Lang, now: datetime) -> str:
+    """Компактные инструкции: персона + правила + сводка (подробности — инструмент search_kurultai)."""
+    return (
+        f"{prompts.PERSONA}\n\n{REALTIME_RULES}\n\n{RAG_RULE}\n\nСводка:\n{summary}\n\n"
+        f"Язык ответа: {_LANG.get(lang, _LANG['ru'])} — весь ответ строго на этом языке.\n"
+        f"Сейчас в Астане: {now:%Y-%m-%d %H:%M}."
+    )

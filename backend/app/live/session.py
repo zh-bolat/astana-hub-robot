@@ -371,6 +371,7 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
         metrics=app.state.metrics,
         connector=getattr(app.state, "realtime_connector", None),
         tts=getattr(app.state, "realtime_tts", None),
+        knowledge=getattr(app.state, "kurultai_knowledge", None),
     )
     if not await bridge.connect():
         logger.warning(

@@ -412,5 +412,39 @@ class KurultaiMaterialEventRow(Base):
     detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
 
+class KurultaiChunkRow(Base):
+    """Фрагмент поиска робота Курултая (app/kurultai/rag): снимок quryltai.kz (законопроекты, депутатские
+    запросы, комитеты, планы) и опубликованные материалы админки (справка + полный текст исходника).
+    Отдельно от kb_chunks: там база Astana Hub. Ключ — (source, source_id, chunk_no)."""
+
+    __tablename__ = "kurultai_chunks"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('bill', 'request', 'committee', 'plan', 'material')", name="source"
+        ),
+        UniqueConstraint("source", "source_id", "chunk_no"),
+        Index("ix_kurultai_chunks_tsv_gin", "tsv", postgresql_using="gin"),
+        Index("ix_kurultai_chunks_source", "source", "source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    title: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(Text)
+    tsv: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "to_tsvector('simple'::regconfig, ((COALESCE(title, ''::text) || ' '::text) || content))",
+            persisted=True,
+        ),
+    )
+    updated_at: Mapped[datetime] = _now()
+
+
 # Таблицы, которые очищаются в тестах (порядок не важен — TRUNCATE ... CASCADE)
 ALL_TABLES = [t.name for t in Base.metadata.sorted_tables]

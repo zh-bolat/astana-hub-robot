@@ -35,6 +35,7 @@ from app.kurultai.download import router as kurultai_app_router
 from app.kurultai.materials.store import MaterialsStore, openrouter_complete
 from app.kurultai.materials.structure import Complete
 from app.kurultai.quryltai import QuryltaiSync
+from app.kurultai.rag.knowledge import KurultaiKnowledge
 from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
 from app.live.session import router as live_router
@@ -193,6 +194,7 @@ def create_app(
     live_services: LiveServicesFactory | None = None,
     embedder: Embedder | None = None,
     kurultai_chat_client: AsyncOpenAI | None = None,
+    kurultai_embedder: Embedder | None = None,
     quryltai: QuryltaiSync | None = None,
     kurultai_materials_complete: Complete | None = None,
 ) -> FastAPI:
@@ -271,6 +273,7 @@ def create_app(
     )
     # Профиль kurultai (KURULTAI_ROBOT_TOKEN): свой агент, снимок quryltai.kz, память разговоров — отдельно от хаба
     kurultai_chat: KurultaiChatService | None = None
+    kurultai_knowledge: KurultaiKnowledge | None = None
     if settings.kurultai_enabled():
         if quryltai is None:
             quryltai = QuryltaiSync(
@@ -287,6 +290,18 @@ def create_app(
             kurultai_materials.recover_interrupted()
         except Exception:
             logger.exception("kurultai_materials_recover_failed")
+        # знания для Realtime через поиск (app/kurultai/rag): свой индекс kurultai_chunks, эмбеддинги — те же
+        if settings.kurultai_rag:
+            k_embedder = kurultai_embedder if kurultai_embedder is not None else embedder
+            if k_embedder is None and settings.resolved_embedding_provider() != "off":
+                k_embedder = build_embedder(settings)
+            kurultai_knowledge = KurultaiKnowledge(
+                engine,
+                k_embedder,
+                quryltai,
+                settings.embedding_query_timeout_s,
+                settings.embedding_batch_size,
+            )
         kurultai_chat = KurultaiChatService(
             settings,
             store,
@@ -310,6 +325,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         sync_task = refresh_task = retention_task = index_task = quryltai_task = None
+        rag_task = None
         sheet_client = None
         if syncer is not None:
             refresh_task = asyncio.create_task(
@@ -330,6 +346,11 @@ def create_app(
             quryltai_task = asyncio.create_task(
                 quryltai.run_periodic(settings.quryltai_refresh_s, settings.quryltai_retry_s)
             )
+        if kurultai_knowledge is not None:
+            # индекс поиска Курултая: сразу и раз в KURULTAI_RAG_REINDEX_S (снимок и материалы)
+            rag_task = asyncio.create_task(
+                kurultai_knowledge.indexer.run_periodic(settings.kurultai_rag_reindex_s)
+            )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(
                 _retention_loop(log_writer, repo, settings.question_log_retention_days)
@@ -342,6 +363,7 @@ def create_app(
             await _cancel(retention_task)
             await _cancel(index_task)
             await _cancel(quryltai_task)
+            await _cancel(rag_task)
             await close_resources(
                 sheet_client,
                 text_llm,
@@ -370,6 +392,7 @@ def create_app(
     app.state.knowledge = syncer
     app.state.engine = engine
     app.state.kurultai_materials = kurultai_materials  # None — профиль kurultai выключен
+    app.state.kurultai_knowledge = kurultai_knowledge  # поиск Realtime Курултая (None — выключен)
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service
