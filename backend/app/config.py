@@ -261,6 +261,19 @@ class Settings(BaseSettings):
     kurultai_web_search: bool = True
     # Обращение (app/kurultai/wake.py): live отвечает только на имя «Ақылтай» или слово «робот»; после обращения —
     # разговор без имени KURULTAI_WAKE_WINDOW_S с от конца ответа робота; false — отвечает на всё (как раньше)
+    # Движок live у Курултая (docs/kurultai/realtime-voice.md): pipeline — VAD → STT → агент → ElevenLabs (как было);
+    # realtime — OpenAI Realtime «голос в голос» (app/kurultai/realtime/bridge.py), протокол робота тот же.
+    # Без ключа OpenAI или при ошибке подключения — pipeline.
+    kurultai_live_engine: Literal["pipeline", "realtime"] = "pipeline"
+    kurultai_openai_api_key: SecretStr = Field(default=SecretStr(""))
+    kurultai_realtime_url: str = "wss://api.openai.com/v1/realtime"
+    kurultai_realtime_model: str = "gpt-realtime-2.1"
+    kurultai_realtime_voice: str = "cedar"
+    # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
+    kurultai_realtime_transcribe_model: str = "gpt-4o-mini-transcribe"
+    kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)
+    kurultai_realtime_vad_silence_ms: int = Field(500, ge=200, le=2000)
+    kurultai_realtime_connect_timeout_s: float = 8.0
     kurultai_wake_word: bool = True
     kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)
     # Тап по лицу: false — робот просыпается молча и ждёт обращения (без приветствия и без окна разговора)

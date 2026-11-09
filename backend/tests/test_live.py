@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import math
@@ -17,6 +18,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 
+import numpy as np
 import pytest
 import uvicorn
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
@@ -1861,3 +1863,268 @@ def test_live_kurultai_answer_without_greeting_opener(live_server):
 
     run(scenario())
     assert fakes.tts[0].texts == ["Комитетов восемь."]
+
+
+# ---------- Курултай: OpenAI Realtime «голос в голос» (app/kurultai/realtime/bridge.py) ----------
+class FakeRealtime:
+    """Поддельная сессия OpenAI Realtime: записывает, что прислал сервер; отвечает на response.create."""
+
+    def __init__(
+        self, answer: str = "В Курултае восемь комитетов.", tool_first: bool = False
+    ) -> None:
+        self.sent: list[dict] = []
+        self.q: asyncio.Queue = asyncio.Queue()
+        self.answer = answer
+        self.tool_first = tool_first
+        self.closed = False
+        self.url = ""
+
+    def push(self, msg: dict | None) -> None:
+        self.q.put_nowait(msg)
+
+    def utterance(self, item_id: str, text: str) -> None:
+        self.push({"type": "input_audio_buffer.speech_started"})
+        self.push({"type": "input_audio_buffer.speech_stopped"})
+        self.push(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": item_id,
+                "transcript": text,
+            }
+        )
+
+    def of(self, kind: str) -> list[dict]:
+        return [m for m in self.sent if m["type"] == kind]
+
+    async def send(self, raw: str) -> None:
+        msg = json.loads(raw)
+        self.sent.append(msg)
+        if msg["type"] == "response.create":
+            self._respond(len(self.of("response.create")))
+        elif msg["type"] == "response.cancel":
+            self.push({"type": "response.done", "response": {"status": "cancelled", "output": []}})
+
+    def _respond(self, n: int) -> None:
+        audio = base64.b64encode(b"\x01\x00" * 2400).decode()
+        self.push({"type": "response.created"})
+        if self.tool_first and n == 1:
+            self.push({"type": "response.output_audio.delta", "delta": audio})
+            self.push(
+                {"type": "response.output_audio_transcript.delta", "delta": "Сейчас посмотрю."}
+            )
+            self.push(
+                {
+                    "type": "response.done",
+                    "response": {
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "web_search",
+                                "call_id": "call_1",
+                                "arguments": json.dumps({"query": "новости Курултая"}),
+                            }
+                        ],
+                    },
+                }
+            )
+            return
+        for _ in range(3):
+            self.push({"type": "response.output_audio.delta", "delta": audio})
+        self.push({"type": "response.output_audio_transcript.delta", "delta": self.answer})
+        self.push({"type": "response.output_audio_transcript.done"})
+        self.push(
+            {
+                "type": "response.done",
+                "response": {"status": "completed", "output": [{"type": "message"}]},
+            }
+        )
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        msg = await self.q.get()
+        if msg is None:
+            raise StopAsyncIteration
+        return json.dumps(msg)
+
+    async def close(self) -> None:
+        self.closed = True
+        self.push(None)
+
+
+def _realtime_server(live_server, fake: FakeRealtime | None, *, fail: bool = False, **overrides):
+    model = FakeModel(say("Ответ пайплайна."))
+    url, app, _fakes = live_server(
+        kurultai_model=model,
+        script=["Акылтай, вопрос"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+        kurultai_live_engine="realtime",
+        kurultai_openai_api_key=SecretStr("sk-test"),
+        **overrides,
+    )
+    calls: list[str] = []
+
+    async def connector(url, additional_headers=None, max_size=None):
+        calls.append(url)
+        assert additional_headers == {"Authorization": "Bearer sk-test"}
+        if fail:
+            raise OSError("no route")
+        fake.url = url
+        return fake
+
+    app.state.realtime_connector = connector
+    return url, app, calls, model
+
+
+async def _until(cond, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > deadline:
+            raise AssertionError("timeout")
+        await asyncio.sleep(0.02)
+
+
+def test_realtime_addressed_answer_streams_audio_and_phrases(live_server):
+    fake = FakeRealtime()
+    url, _, calls, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            cfg = fake.of("session.update")[0]["session"]
+            assert "Ақылтай" in cfg["instructions"] and "Язык ответа: ru" in cfg["instructions"]
+            td = cfg["audio"]["input"]["turn_detection"]
+            assert td["create_response"] is False and td["interrupt_response"] is False
+            c.speak(0.3)
+            await _until(lambda: fake.of("input_audio_buffer.append"))  # микрофон уходит в OpenAI
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            end = await c.wait("turn_end")
+            assert [e["text"] for e in c.events("phrase")] == ["В Курултае восемь комитетов."]
+            assert c.events("user_final")[0]["text"] == "Акылтай, сколько комитетов?"
+            kinds = c.kinds()
+            assert kinds.index("thinking") < kinds.index("turn_start") < kinds.index("audio")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+
+    run(scenario())
+    assert calls and "model=gpt-realtime-2.1" in calls[0]
+    assert len(fake.of("response.create")) == 1
+    assert model.requests == []  # старый агент не вызывался
+
+
+def test_realtime_not_addressed_is_dropped_then_window_after_answer(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Пойдём кофе попьём")
+            await c.wait("ignored")
+            assert fake.of("conversation.item.delete")[0]["item_id"] == "item_1"
+            assert fake.of("response.create") == []
+            fake.utterance("item_2", "Робот, где зал заседаний?")
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=3)
+            fake.utterance("item_3", "А во сколько начало?")  # без имени — в окне разговора
+            await c.wait("turn_end", count=2)
+
+    run(scenario())
+    assert len(fake.of("response.create")) == 2
+
+
+def test_realtime_stop_cancels_answer_and_echo_is_dropped(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, расскажи про законопроекты")
+            await c.wait("turn_end")  # ответ доигрывается на роботе — playback_done ещё нет
+            fake.utterance("item_echo", "законопроекты сорок")  # эхо голоса робота
+            fake.utterance("item_stop", "Стоп")
+            await c.wait("interrupted")
+            assert {d["item_id"] for d in fake.of("conversation.item.delete")} >= {
+                "item_echo",
+                "item_stop",
+            }
+
+    run(scenario())
+    assert len(fake.of("response.create")) == 1
+
+
+def test_realtime_web_search_tool_continues_same_turn(live_server, monkeypatch):
+    from app.kurultai.realtime import websearch
+
+    async def fake_search(settings, query, client=None):
+        return f"Найдено по запросу: {query}"
+
+    monkeypatch.setattr(websearch, "web_search", fake_search)
+    fake = FakeRealtime(answer="Вчера прошло пленарное заседание.", tool_first=True)
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, какие новости?")
+            await c.wait("turn_end")
+            assert len(c.events("turn_start")) == 1
+            assert [e["text"] for e in c.events("phrase")] == [
+                "Сейчас посмотрю.",
+                "Вчера прошло пленарное заседание.",
+            ]
+
+    run(scenario())
+    out = fake.of("conversation.item.create")[0]["item"]
+    assert out["type"] == "function_call_output" and out["call_id"] == "call_1"
+    assert "новости Курултая" in out["output"]
+    assert len(fake.of("response.create")) == 2
+
+
+def test_realtime_screen_language_updates_instructions(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, lang="ru", token=KURULTAI_LIVE_TOKEN) as c:
+            await c.send({"type": "hello", "lang": "kk", "place_id": None, "aec": True})
+            await _until(lambda: len(fake.of("session.update")) >= 2)
+
+    run(scenario())
+    assert "Язык ответа: kk" in fake.of("session.update")[-1]["session"]["instructions"]
+
+
+def test_realtime_unavailable_falls_back_to_pipeline(live_server):
+    url, _, calls, model = _realtime_server(live_server, None, fail=True)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            c.speak(0.6)
+            await c.wait("turn_end")  # ответил старый пайплайн
+
+    run(scenario())
+    assert calls  # пробовали Realtime
+    assert len(model.requests) == 1
+
+
+def test_realtime_not_used_for_hub_profile(live_server):
+    fake = FakeRealtime()
+    url, _, calls, _ = _realtime_server(live_server, fake, live_fast_places=False)
+
+    async def scenario() -> None:
+        async with session(url) as c:  # токен Astana Hub
+            await c.wait("listening")
+
+    run(scenario())
+    assert calls == []
+
+
+def test_resample_16_to_24():
+    from app.kurultai.realtime.bridge import resample_16_to_24
+
+    pcm = (np.arange(160, dtype="<i2") * 10).tobytes()
+    out = resample_16_to_24(pcm)
+    assert len(out) == 240 * 2
+    assert resample_16_to_24(b"") == b""

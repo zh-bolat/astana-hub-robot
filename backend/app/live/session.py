@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from loguru import logger as pipecat_logger
@@ -115,11 +116,18 @@ class LiveSession:
         self.phrase_cache: PhraseAudioCache | None = None
         self.close_code = 1000
         self.close_reason = ""
+        self.bridge: Any = (
+            None  # Курултай, KURULTAI_LIVE_ENGINE=realtime: мост к OpenAI Realtime вместо пайплайна
+        )
 
     async def stop(
         self, ended_by: str, code: int = 1000, reason: str = "", error: dict | None = None
     ) -> None:
         """Закрыть сессию: error — событие роботу прямо в сокет (мимо очереди пайплайна), затем close."""
+        if self.bridge is not None:  # Realtime: пайплайна нет — закрыть мост
+            self.ended_by = self.ended_by or ended_by
+            await self.bridge.close()
+            return
         if self.ended_by is None:
             self.ended_by, self.close_code, self.close_reason = ended_by, code, reason
             if error is not None:
@@ -346,6 +354,43 @@ async def _reject(ws: WebSocket, code: str, message: str, close_code: int) -> No
         pass
 
 
+async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
+    """Курултай с KURULTAI_LIVE_ENGINE=realtime: сессия через OpenAI Realtime (docs/kurultai/realtime-voice.md).
+    False — не тот профиль, движок или OpenAI недоступен: дальше обычный пайплайн."""
+    settings = app.state.settings
+    if session.profile != KURULTAI or settings.kurultai_live_engine != "realtime":
+        return False
+    from app.kurultai.realtime.bridge import RealtimeBridge
+
+    bridge = RealtimeBridge(
+        ws,
+        settings=settings,
+        session_id=session.session_id,
+        lang=session.lang,
+        chat=session.chat,
+        metrics=app.state.metrics,
+        connector=getattr(app.state, "realtime_connector", None),
+    )
+    if not await bridge.connect():
+        logger.warning(
+            "realtime_unavailable_fallback_pipeline", extra={"session_id": session.session_id}
+        )
+        return False
+    session.bridge = bridge
+    await ws.accept()
+    logger.info(
+        "live_session_opened",
+        extra={
+            "session_id": session.session_id,
+            "lang": session.lang,
+            "engine": "realtime",
+            **session._profile_extra(),
+        },
+    )
+    await bridge.run()
+    return True
+
+
 @router.websocket("/live")
 async def live(
     ws: WebSocket,
@@ -384,6 +429,8 @@ async def live(
     registry.add(session)
     token = set_request_id(new_request_id())
     try:
+        if await _run_realtime(ws, app, session):
+            return
         try:
             services = factory(settings, session.lang)
         except Exception:
