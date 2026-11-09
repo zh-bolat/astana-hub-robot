@@ -55,6 +55,11 @@ TRANSCRIBE_PROMPT = (
     "Ақылтай, Акылтай, Құрылтай, Курултай, робот, депутат, законопроект, заң жобасы, Мәжіліс."
 )
 _SENTENCE = re.compile(r"(.+?[.!?…])(\s+|$)", re.S)
+_EMOTION = re.compile(r"^\s*\[(\w+)\]\s*")
+EMOTIONS = frozenset(
+    {"neutral", "happy", "thinking", "surprised", "sad", "excited"}
+)  # лица робота (face.js)
+_WORDS = re.compile(r"\w+", re.U)
 _CLAUSE = re.compile(
     r"(.{25,}?[,;:—])(\s+)", re.S
 )  # первая фраза ответа: режем по запятой — голос раньше
@@ -159,6 +164,10 @@ class RealtimeBridge:
         self._first_audio_at: float | None = None
         self._audio_bytes = 0
         self._pcm_carry = b""  # нечётный хвост куска звука (см. _send_audio)
+        self._emotion_pending = (
+            False  # ответ начинается с тега эмоции [happy] — для лица робота, не для голоса
+        )
+        self._robot_aec = False  # у робота работает эхоподавление (hello.aec)
         self._question = ""
         self._answer = ""
         self._phrase_buf = ""
@@ -257,14 +266,7 @@ class RealtimeBridge:
                     "model": s.kurultai_realtime_transcribe_model,
                     "prompt": TRANSCRIBE_PROMPT,
                 },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": s.kurultai_realtime_vad_threshold,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": s.kurultai_realtime_vad_silence_ms,
-                    "create_response": False,
-                    "interrupt_response": False,
-                },
+                "turn_detection": self._turn_detection(),
             },
         }
         if not self._text_mode:
@@ -288,6 +290,21 @@ class RealtimeBridge:
                 ),
             },
         }
+
+    def _turn_detection(self) -> dict:
+        """Конец реплики — у OpenAI; ответ сам не создаётся и речь его не обрывает: решает сервер."""
+        st = self.settings
+        if st.kurultai_realtime_turn_detection == "semantic_vad":
+            # по смыслу: пауза «э-э…» посреди фразы не считается концом реплики
+            td: dict = {"type": "semantic_vad", "eagerness": st.kurultai_realtime_eagerness}
+        else:
+            td = {
+                "type": "server_vad",
+                "threshold": st.kurultai_realtime_vad_threshold,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": st.kurultai_realtime_vad_silence_ms,
+            }
+        return {**td, "create_response": False, "interrupt_response": False}
 
     async def _refresh_instructions(self) -> None:
         """Материалы, снимок, язык или минута поменялись — новые инструкции до ответа (префикс прежний — кэш)."""
@@ -350,6 +367,8 @@ class RealtimeBridge:
     async def _on_robot(self, cmd: dict) -> None:
         kind = cmd.get("type")
         if kind == "hello":
+            if isinstance(cmd.get("aec"), bool):
+                self._robot_aec = cmd["aec"]
             lang = normalize_lang(cmd.get("lang"))
             if lang in ("ru", "kk") and lang != self.lang:
                 self.lang = lang
@@ -524,10 +543,22 @@ class RealtimeBridge:
             await self._delete(item_id)
             return
         if self._bot_busy():
-            # робот говорит: эхо его голоса и чужая речь в разговор не идут; «стоп» — отменить ответ
-            await self._delete(item_id)
+            # робот говорит: «стоп» — замолчать; осмысленная фраза (не эхо его голоса) — перебить и ответить на
+            # неё (KURULTAI_REALTIME_BARGE_IN=speech); эхо и обрывки в разговор не идут
             if is_stop_command(text):
+                await self._delete(item_id)
                 await self._cancel("stop")
+                return
+            if self.settings.kurultai_realtime_barge_in != "speech" or not self._real_speech(text):
+                await self._delete(item_id)
+                return
+            await self._cancel("barge_in")
+            logger.info("realtime_barge_in", extra={"chars": len(text)})
+            self._start_turn(text, self._since_speech_end())
+            await self._robot_json(event("user_final", text=text, lang=self.lang))
+            await self._robot_json(event("thinking"))
+            await self._refresh_instructions()
+            await self._oa_send({"type": "response.create"})
             return
         stt_ms = self._since_speech_end()
         await self._robot_json(event("user_final", text=text, lang=self.lang))
@@ -541,6 +572,16 @@ class RealtimeBridge:
         await self._robot_json(event("thinking"))
         await self._refresh_instructions()
         await self._oa_send({"type": "response.create"})
+
+    def _real_speech(self, text: str) -> bool:
+        """Фраза посетителя, а не эхо голоса робота: хотя бы 2 слова, и не больше половины из них — слова
+        ответа, который робот сейчас говорит (микрофон слышит динамик)."""
+        words = [w.lower() for w in _WORDS.findall(text)]
+        if len(words) < 2:
+            return False
+        spoken = {w.lower() for w in _WORDS.findall(self._answer)}
+        echo = sum(1 for w in words if w in spoken)
+        return echo * 2 <= len(words)
 
     def _since_speech_end(self) -> int | None:
         if self._speech_end_at is None:
@@ -561,6 +602,7 @@ class RealtimeBridge:
         self._first_audio_at = None
         self._audio_bytes = 0
         self._pcm_carry = b""
+        self._emotion_pending = True
         self._stt_ms = stt_ms
         self.turns += 1
         if self._text_mode:
@@ -598,6 +640,17 @@ class RealtimeBridge:
         if self._dropping or not self._turn_open:
             return
         self._phrase_buf += delta
+        if self._emotion_pending:
+            buf = self._phrase_buf.lstrip()
+            if buf.startswith("[") and "]" not in buf and len(buf) < 16 and not final:
+                return  # тег эмоции ещё приходит по кусочкам
+            self._emotion_pending = False
+            m = _EMOTION.match(self._phrase_buf)
+            if m:
+                self._phrase_buf = self._phrase_buf[m.end() :]
+                name = m.group(1).lower()
+                if name in EMOTIONS:
+                    await self._robot_json(event("emotion", name=name))
         while True:
             m = _SENTENCE.match(self._phrase_buf)
             if self._phrases_in_turn == 0 and self._text_mode:

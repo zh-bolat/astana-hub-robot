@@ -279,12 +279,19 @@ class Settings(BaseSettings):
     kurultai_realtime_speculative: bool = True
     # Прогрев: при открытии сессии (пробуждение робота) база уходит в OpenAI заранее — первый вопрос из кэша
     kurultai_realtime_warmup: bool = True
-    # Рассуждение модели: minimal — быстрее (проверено 09.11 на ru/kk); пусто — по умолчанию OpenAI
-    kurultai_realtime_reasoning: str = "minimal"
+    # Рассуждение модели: low — умнее (09.11, «больше интеллекта»), minimal — быстрее на 0,2–0,4 с; пусто — OpenAI
+    kurultai_realtime_reasoning: str = "low"
     # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
-    kurultai_realtime_transcribe_model: str = "gpt-4o-mini-transcribe"
+    kurultai_realtime_transcribe_model: str = "gpt-4o-transcribe"
     kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)
-    kurultai_realtime_vad_silence_ms: int = Field(400, ge=200, le=2000)  # пауза «договорил», мс
+    kurultai_realtime_vad_silence_ms: int = Field(
+        400, ge=200, le=2000
+    )  # пауза «договорил», мс (server_vad)
+    # Конец реплики: semantic_vad — по смыслу (не режет фразу на паузе «э-э…»; по умолчанию), server_vad — по тишине
+    kurultai_realtime_turn_detection: Literal["semantic_vad", "server_vad"] = "semantic_vad"
+    kurultai_realtime_eagerness: Literal["auto", "low", "medium", "high"] = "auto"
+    # Перебить робота: speech — любой осмысленной фразой (кроме эха его голоса); stop_only — только «стоп»
+    kurultai_realtime_barge_in: Literal["speech", "stop_only"] = "speech"
     kurultai_realtime_connect_timeout_s: float = 8.0
     kurultai_wake_word: bool = True
     kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)

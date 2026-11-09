@@ -2119,7 +2119,7 @@ def test_realtime_stop_cancels_answer_and_echo_is_dropped(live_server):
         async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
             fake.utterance("item_1", "Акылтай, расскажи про законопроекты")
             await c.wait("turn_end")  # ответ доигрывается на роботе — playback_done ещё нет
-            fake.utterance("item_echo", "законопроекты сорок")  # эхо голоса робота
+            fake.utterance("item_echo", "восемь комитетов")  # эхо голоса робота: слова его ответа
             fake.utterance("item_stop", "Стоп")
             await c.wait("interrupted")
             assert {d["item_id"] for d in fake.of("conversation.item.delete")} >= {
@@ -2290,8 +2290,13 @@ def test_realtime_session_reasoning_vad_and_warmup_not_spoken(live_server):
 
     run(scenario())
     cfg = fake.of("session.update")[0]["session"]
-    assert cfg["reasoning"] == {"effort": "minimal"}
-    assert cfg["audio"]["input"]["turn_detection"]["silence_duration_ms"] == 400
+    assert cfg["reasoning"] == {"effort": "low"}
+    td = cfg["audio"]["input"]["turn_detection"]
+    assert (
+        td["type"] == "semantic_vad"
+        and td["create_response"] is False
+        and td["interrupt_response"] is False
+    )
     warm = fake.of("response.create")[0]["response"]
     assert (
         warm["conversation"] == "none" and warm["max_output_tokens"] == 16
@@ -2365,3 +2370,35 @@ def test_realtime_hybrid_sends_only_whole_pcm_samples(live_server):
             )  # 5811 байт → 5810 (нечётный последний байт ждёт следующий кусок)
 
     run(scenario())
+
+
+def test_realtime_emotion_tag_goes_to_face_not_voice(live_server):
+    fake = FakeRealtime(answer="[happy] Здравствуйте! Рад вас видеть.")
+    url, app, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Привет, Акылтай!")
+            await c.wait("turn_end")
+            assert [e["name"] for e in c.events("emotion")] == ["happy"]
+            assert [e["text"] for e in c.events("phrase")] == ["Здравствуйте!", "Рад вас видеть."]
+
+    run(scenario())
+    assert all("[" not in t for t in app.state.realtime_spoken)
+
+
+def test_realtime_barge_in_by_speech_answers_new_question(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")  # робот ещё говорит (playback_done нет)
+            fake.utterance("item_2", "Подожди, а какая погода завтра?")  # перебили своей фразой
+            await c.wait("interrupted")
+            await c.wait("turn_end", count=2)
+            assert c.events("user_final")[-1]["text"] == "Подожди, а какая погода завтра?"
+
+    run(scenario())
+    assert len(fake.creates()) == 2
