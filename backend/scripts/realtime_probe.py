@@ -55,9 +55,14 @@ REALTIME_NOTE = (
 def instructions(settings: Settings, lang: str) -> str:
     q = QuryltaiSync(settings.quryltai_base_url, 5.0, settings.quryltai_snapshot_path)
     q.load_cache()
+    now = datetime.now(UTC).astimezone(ASTANA_TZ)
+    builder = globals().get(
+        "realtime_instructions"
+    )  # инструкции движка (scripts/run_realtime_probe.sh склеивает)
+    if builder is not None:
+        return builder(q.prompt_context(), "", lang, now)
     base = prompts.kurultai_instructions(q.prompt_context(), "")
     lang_line = "\nЯзык ответа: " + ("kk (казахский)" if lang == "kk" else "ru (русский)")
-    now = datetime.now(UTC).astimezone(ASTANA_TZ)
     return base + REALTIME_NOTE + lang_line + f"\nСейчас в Астане: {now:%Y-%m-%d %H:%M}"
 
 
@@ -82,9 +87,16 @@ def save_wav(path: Path, pcm: bytes) -> None:
         w.writeframes(pcm)
 
 
-async def ask(settings: Settings, model: str, voice: str, key: str, lang: str, pcm: bytes) -> dict:
+async def session_run(
+    settings: Settings,
+    model: str,
+    voice: str,
+    key: str,
+    lang: str,
+    items: list[tuple[int, str, bytes]],
+) -> None:
+    """Одна сессия на язык, вопросы по очереди — как на роботе (со 2-го вопроса инструкции из кэша)."""
     url = f"wss://api.openai.com/v1/realtime?model={model}"
-    out = {"first_audio_s": None, "done_s": None, "transcript": "", "error": None, "audio": b""}
     async with websockets.connect(
         url, additional_headers={"Authorization": f"Bearer {key}"}, max_size=None, open_timeout=15
     ) as ws:
@@ -110,42 +122,45 @@ async def ask(settings: Settings, model: str, voice: str, key: str, lang: str, p
                 }
             )
         )
-        for i in range(0, len(pcm), 48_000):  # ~1 с кусками
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "input_audio_buffer.append",
-                        "audio": base64.b64encode(pcm[i : i + 48_000]).decode(),
-                    }
+        for n, text, pcm in items:
+            for i in range(0, len(pcm), 48_000):
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(pcm[i : i + 48_000]).decode(),
+                        }
+                    )
                 )
+            await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            t0 = time.perf_counter()
+            await ws.send(json.dumps({"type": "response.create"}))
+            first, done, transcript, audio, err, usage = None, None, "", bytearray(), None, {}
+            while True:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 40))
+                kind = msg.get("type", "")
+                if kind in ("response.output_audio.delta", "response.audio.delta"):
+                    first = first if first is not None else round(time.perf_counter() - t0, 2)
+                    audio += base64.b64decode(msg["delta"])
+                elif kind in (
+                    "response.output_audio_transcript.delta",
+                    "response.audio_transcript.delta",
+                ):
+                    transcript += msg.get("delta", "")
+                elif kind == "error":
+                    err = (msg.get("error") or {}).get("message", "error")[:200]
+                    break
+                elif kind == "response.done":
+                    done = round(time.perf_counter() - t0, 2)
+                    usage = (msg.get("response") or {}).get("usage") or {}
+                    break
+            if audio:
+                save_wav(OUT / f"{n:02d}-{lang}-answer.wav", bytes(audio))
+            cached = (usage.get("input_token_details") or {}).get("cached_tokens")
+            print(
+                f"{n:02d} {lang} первый звук {first} с, весь ответ {done} с, вход {usage.get('input_tokens')}"
+                f" (кэш {cached}){' ОШИБКА ' + err if err else ''}\n   В: {text}\n   О: {transcript[:300]}"
             )
-        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-        t0 = time.perf_counter()
-        await ws.send(json.dumps({"type": "response.create"}))
-        audio = bytearray()
-        while True:
-            msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
-            kind = msg.get("type", "")
-            if kind in ("response.output_audio.delta", "response.audio.delta"):
-                if out["first_audio_s"] is None:
-                    out["first_audio_s"] = round(time.perf_counter() - t0, 2)
-                audio += base64.b64decode(msg["delta"])
-            elif kind in (
-                "response.output_audio_transcript.delta",
-                "response.audio_transcript.delta",
-            ):
-                out["transcript"] += msg.get("delta", "")
-            elif kind == "error":
-                out["error"] = (msg.get("error") or {}).get("message", "error")[:200]
-                break
-            elif kind == "response.done":
-                out["done_s"] = round(time.perf_counter() - t0, 2)
-                status = (msg.get("response") or {}).get("status")
-                if status not in (None, "completed"):
-                    out["error"] = f"response {status}"
-                break
-        out["audio"] = bytes(audio)
-    return out
 
 
 async def main() -> None:
@@ -160,20 +175,18 @@ async def main() -> None:
     print(
         f"модель {model}, голос {voice}, инструкции ~{len(instructions(settings, 'ru')) // 1000} тыс. знаков"
     )
-    for n, (lang, text) in enumerate(QUESTIONS, 1):
-        try:
+    for lang in ("ru", "kk"):
+        items = []
+        for n, (q_lang, text) in enumerate(QUESTIONS, 1):
+            if q_lang != lang:
+                continue
             pcm = await synth(settings, lang, text)
             save_wav(OUT / f"{n:02d}-{lang}-question.wav", pcm)
-            res = await ask(settings, model, voice, key, lang, pcm)
+            items.append((n, text, pcm))
+        try:
+            await session_run(settings, model, voice, key, lang, items)
         except Exception as exc:  # пробник: показываем и идём дальше
-            print(f"{n:02d} {lang} ОШИБКА {type(exc).__name__}: {str(exc)[:160]}")
-            continue
-        if res["audio"]:
-            save_wav(OUT / f"{n:02d}-{lang}-answer.wav", res["audio"])
-        print(
-            f"{n:02d} {lang} первый звук {res['first_audio_s']} с, весь ответ {res['done_s']} с"
-            f"{' ОШИБКА ' + res['error'] if res['error'] else ''}\n   В: {text}\n   О: {res['transcript'][:300]}"
-        )
+            print(f"{lang} ОШИБКА {type(exc).__name__}: {str(exc)[:160]}")
 
 
 asyncio.run(main())
