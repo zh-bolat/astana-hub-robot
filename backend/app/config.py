@@ -274,10 +274,17 @@ class Settings(BaseSettings):
     kurultai_realtime_output: Literal["text", "voice"] = "text"
     # В окне разговора отвечать сразу по концу фразы, не дожидаясь расшифровки (−0,3…0,8 с)
     kurultai_realtime_early_response: bool = True
+    # Вне окна разговора: ответ сочиняется сразу по концу фразы, а звучит только если расшифровка подтвердила
+    # обращение («Ақылтай / робот / бот»); иначе ответ отменяется (−0,3…0,8 с, лишние запросы на чужую речь)
+    kurultai_realtime_speculative: bool = True
+    # Прогрев: при открытии сессии (пробуждение робота) база уходит в OpenAI заранее — первый вопрос из кэша
+    kurultai_realtime_warmup: bool = True
+    # Рассуждение модели: minimal — быстрее (проверено 09.11 на ru/kk); пусто — по умолчанию OpenAI
+    kurultai_realtime_reasoning: str = "minimal"
     # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
     kurultai_realtime_transcribe_model: str = "gpt-4o-mini-transcribe"
     kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)
-    kurultai_realtime_vad_silence_ms: int = Field(500, ge=200, le=2000)
+    kurultai_realtime_vad_silence_ms: int = Field(400, ge=200, le=2000)  # пауза «договорил», мс
     kurultai_realtime_connect_timeout_s: float = 8.0
     kurultai_wake_word: bool = True
     kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)

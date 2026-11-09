@@ -135,9 +135,18 @@ class RealtimeBridge:
         # разговор
         self._engaged_until = 0.0
         self._speech_end_at: float | None = None
-        self._early_item: str | None = (
-            None  # фраза, на которую ответ начат до расшифровки (окно разговора)
+        self._early_item: str | None = None  # фраза, на которую ответ начат до расшифровки
+        # «Ставка» вне окна разговора: ответ сочиняется до расшифровки, но фразы держатся, пока она не подтвердит
+        # обращение (_held); не подтвердила — ответ отменяется, робот ничего не слышит
+        self._gated = False
+        self._held: list[str] = []
+        self._held_done = False
+        self._fallback_pending = (
+            False  # OpenAI отказал до расшифровки — ответить старой цепочкой, когда придёт
         )
+        self._warmup_ids: set[str] = (
+            set()
+        )  # ответы-прогревы (conversation: none) — их события пропускаем
         # ход робота: открыт от response.create до turn_end; робот играет звук до playback_done
         self._turn_id: str | None = None
         self._turn_open = False
@@ -183,6 +192,20 @@ class RealtimeBridge:
         """Сессия робота целиком: настройка Realtime, ready, два потока (робот → OpenAI, OpenAI → робот)."""
         try:
             await self._oa_send(self._session_config())
+            if self.settings.kurultai_realtime_warmup:
+                # база (~20 тыс. токенов) — в кэш OpenAI заранее, вне разговора: первый вопрос отвечается быстрее
+                await self._oa_send(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "conversation": "none",
+                            "input": [],
+                            "output_modalities": ["text"],
+                            "max_output_tokens": 1,
+                            "metadata": {"purpose": "warmup"},
+                        },
+                    }
+                )
             await self._robot_json(event("ready", audio_format=AUDIO_FORMAT))
             await self._robot_json(event("listening"))
             tasks = [
@@ -257,6 +280,11 @@ class RealtimeBridge:
                 "audio": audio,
                 "tools": [websearch.TOOL] if s.kurultai_web_search else [],
                 "tool_choice": "auto",
+                **(
+                    {"reasoning": {"effort": s.kurultai_realtime_reasoning}}
+                    if s.kurultai_realtime_reasoning
+                    else {}
+                ),
             },
         }
 
@@ -346,15 +374,37 @@ class RealtimeBridge:
                 continue
             await self._on_openai(msg)
 
+    def _is_warmup(self, msg: dict) -> bool:
+        resp = msg.get("response") or {}
+        if (
+            msg.get("type") == "response.created"
+            and (resp.get("metadata") or {}).get("purpose") == "warmup"
+        ):
+            self._warmup_ids.add(str(resp.get("id") or ""))
+            return True
+        rid = str(msg.get("response_id") or resp.get("id") or "")
+        if rid and rid in self._warmup_ids:
+            if msg.get("type") == "response.done":
+                self._warmup_ids.discard(rid)
+                usage = resp.get("usage") or {}
+                logger.info(
+                    "realtime_warmup",
+                    extra={"input_tokens": usage.get("input_tokens"), "status": resp.get("status")},
+                )
+            return True
+        return False
+
     async def _on_openai(self, msg: dict) -> None:
         kind = msg.get("type", "")
+        if kind.startswith("response.") and self._is_warmup(msg):
+            return
         if kind == "input_audio_buffer.speech_started":
             if not self._bot_busy():
                 await self._robot_json(event("user_speaking"))
         elif kind == "input_audio_buffer.speech_stopped":
             self._speech_end_at = self._clock()
         elif kind == "input_audio_buffer.committed":
-            await self._maybe_early_response(str(msg.get("item_id") or ""))
+            await self._on_committed(str(msg.get("item_id") or ""))
         elif kind == "conversation.item.input_audio_transcription.completed":
             await self._on_utterance(
                 str(msg.get("item_id") or ""), str(msg.get("transcript") or "")
@@ -420,30 +470,54 @@ class RealtimeBridge:
         if item_id:
             await self._oa_send({"type": "conversation.item.delete", "item_id": item_id})
 
-    async def _maybe_early_response(self, item_id: str) -> None:
-        """Окно разговора открыто и робот молчит — отвечать сразу, не дожидаясь расшифровки (−0,3…0,8 с)."""
-        if not item_id or self._bot_busy() or not self._engaged():
+    async def _on_committed(self, item_id: str) -> None:
+        """Конец фразы. Робот молчит → ответ начинается сразу, не дожидаясь расшифровки (−0,3…0,8 с):
+        в окне разговора — как обычно; вне окна — «ставка»: фразы держатся до подтверждения обращения."""
+        if not item_id or self._bot_busy():
             return
-        if not self.settings.kurultai_realtime_early_response:
+        engaged = self._engaged()
+        st = self.settings
+        if (engaged and not st.kurultai_realtime_early_response) or (
+            not engaged and not (st.kurultai_realtime_speculative and self._text_mode)
+        ):
             return
         self._early_item = item_id
         self._start_turn("", None)
-        await self._robot_json(event("thinking"))
+        self._gated = not engaged
+        if not self._gated:
+            await self._robot_json(event("thinking"))
         await self._refresh_instructions()
         await self._oa_send({"type": "response.create"})
 
     async def _on_utterance(self, item_id: str, text: str) -> None:
         text = text.strip()
-        if item_id and item_id == self._early_item:  # ответ уже идёт — только расшифровка и «стоп»
+        if item_id and item_id == self._early_item:  # ответ уже сочиняется — решаем по расшифровке
             self._early_item = None
-            if not has_letters(text) or is_stop_command(text):
-                await self._cancel("stop" if text else "noise")
+            gated = self._gated
+            addressed = (
+                has_letters(text)
+                and not is_stop_command(text)
+                and (not gated or self.chat.addressed(text))
+            )
+            if not addressed:
+                await self._cancel("not_addressed" if gated else ("stop" if text else "noise"))
                 await self._delete(item_id)
+                if gated and has_letters(text):
+                    await self._robot_json(event("user_final", text=text, lang=self.lang))
+                    logger.info(
+                        "live_not_addressed", extra={"chars": len(text), "engine": "realtime"}
+                    )
+                    await self._robot_json(event("ignored", reason="not_addressed"))
                 return
             self._question = text
             self._stt_ms = self._since_speech_end()
             await self._robot_json(event("user_final", text=text, lang=self.lang))
             self._engage()
+            if gated:
+                await self._release()
+            elif self._fallback_pending:
+                self._fallback_pending = False
+                self._spawn(self._fallback_answer(), "realtime_fallback")
             return
         if not has_letters(text):
             await self._delete(item_id)
@@ -479,6 +553,9 @@ class RealtimeBridge:
         self._dropping = False
         self._question, self._answer, self._phrase_buf = question, "", ""
         self._phrases_in_turn = 0
+        self._gated = False
+        self._held, self._held_done = [], False
+        self._fallback_pending = False
         self._first_audio_ms = None
         self._first_audio_at = None
         self._audio_bytes = 0
@@ -530,10 +607,48 @@ class RealtimeBridge:
     async def _phrase(self, phrase: str) -> None:
         self._phrases_in_turn += 1
         self._answer = f"{self._answer} {phrase}".strip()
+        if self._gated:
+            self._held.append(phrase)  # «ставка»: прозвучит после подтверждения обращения
+            return
         if self._text_mode and self._speech is not None:
             self._speech.put_nowait(phrase)  # субтитр уйдёт вместе с её звуком
         else:
             await self._robot_json(event("phrase", text=phrase))
+
+    async def _release(self) -> None:
+        """Обращение подтверждено: «ставка» становится обычным ответом — держанные фразы в озвучку."""
+        self._gated = False
+        await self._robot_json(event("thinking"))
+        if self._fallback_pending:
+            self._fallback_pending = False
+            self._spawn(self._fallback_answer(), "realtime_fallback")
+            return
+        held, self._held = self._held, []
+        for phrase in held:
+            if self._speech is not None:
+                self._speech.put_nowait(phrase)
+        if self._held_done and self._speech is not None:
+            self._speech.put_nowait(None)
+
+    async def _fallback_answer(self) -> None:
+        """OpenAI отказал (лимит, сбой) — ответ старой цепочкой: агент Курултая (OpenRouter), голос Dmitry."""
+        from app.schemas import ChatRequest
+
+        turn_id = self._turn_id
+        logger.warning("realtime_fallback_pipeline", extra={"question_chars": len(self._question)})
+        req = ChatRequest(question=self._question, lang=self.lang, session_id=self.session_id)
+        try:
+            async for kind, data in self.chat.chat_stream(
+                req, self._request_id or new_request_id()
+            ):
+                if self._turn_id != turn_id or not self._turn_open:
+                    return
+                if kind == "phrase" and data.get("text"):
+                    await self._phrase(str(data["text"]))
+        except Exception as exc:
+            logger.warning("realtime_fallback_failed", extra={"error": type(exc).__name__})
+        if self._turn_id == turn_id and self._turn_open and self._speech is not None:
+            self._speech.put_nowait(None)
 
     async def _speak_loop(self, turn_id: str | None, queue: asyncio.Queue) -> None:
         """Режим text: фразы по очереди голосом Dmitry потоком; None в очереди — ответ закончен."""
@@ -565,11 +680,25 @@ class RealtimeBridge:
             self._spawn(self._run_tools(calls), "realtime_tools")
             return
         ok = response.get("status") in (None, "completed")
+        if not ok:
+            details = response.get("status_details") or {}
+            code = str((details.get("error") or {}).get("code") or details.get("reason") or "")
+            logger.warning(
+                "realtime_response_failed", extra={"status": response.get("status"), "code": code}
+            )
         if self._text_mode and self._speech is not None:
             await self._on_text("", final=True)
+            if not ok and self._phrases_in_turn == 0:
+                # OpenAI не ответил (лимит токенов в минуту и т. п.) — эту реплику отвечает старая цепочка
+                if self._gated or not self._question:
+                    self._fallback_pending = True  # ждём расшифровку (и подтверждение обращения)
+                else:
+                    self._spawn(self._fallback_answer(), "realtime_fallback")
+                return
+            if self._gated:
+                self._held_done = True  # конец хода — после подтверждения обращения (_release)
+                return
             self._speech.put_nowait(None)  # конец хода — после последней фразы (_speak_loop)
-            if not ok:
-                logger.warning("realtime_response_failed", extra={"status": response.get("status")})
             return
         await self._end_turn(ok=ok)
 
@@ -648,9 +777,12 @@ class RealtimeBridge:
         self._turn_open = False
         self._playing_turn = None
         self._early_item = None
+        self._gated, self._held, self._fallback_pending = False, [], False
         if had_audio or reason in ("stop", "client"):
             await self._robot_json(event("interrupted", turn_id=turn_id))
         await self._robot_json(event("listening"))
+        if reason in ("not_addressed", "noise"):  # «ставка» не сыграла — робот ничего не говорил
+            return
         logger.info("realtime_interrupted", extra={"reason": reason})
         if was_open:
             self._record(ok=True, interrupted=True)
