@@ -2402,3 +2402,44 @@ def test_realtime_barge_in_by_speech_answers_new_question(live_server):
 
     run(scenario())
     assert len(fake.creates()) == 2
+
+
+def test_realtime_no_transcription_prompt_and_noise_is_not_answered(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake, kurultai_wake_word=False)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Жасалған")  # обрывок шума — ответ отменяется молча
+            await _until(lambda: fake.of("response.cancel") or fake.of("conversation.item.delete"))
+            await asyncio.sleep(0.3)
+            assert "turn_start" not in c.kinds() and c.events("phrase") == []
+            fake.utterance("item_2", "Привет")  # короткая, но осмысленная — отвечает
+            await c.wait("turn_end")
+
+    run(scenario())
+    cfg = fake.of("session.update")[0]["session"]
+    assert "prompt" not in cfg["audio"]["input"]["transcription"]
+
+
+def test_realtime_reconnects_to_openai_without_dropping_robot(live_server):
+    fakes = [FakeRealtime(), FakeRealtime(answer="Снова на связи.")]
+    url, app, _, _ = _realtime_server(live_server, fakes[0])
+    calls: list[int] = []
+
+    async def connector(url, additional_headers=None, max_size=None):
+        calls.append(1)
+        return fakes[min(len(calls) - 1, 1)]
+
+    app.state.realtime_connector = connector
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await _until(lambda: fakes[0].of("session.update"))
+            fakes[0].push(None)  # OpenAI закрыл сессию (лимит 60 мин / сбой)
+            await _until(lambda: len(calls) == 2 and fakes[1].of("session.update"), timeout=8)
+            fakes[1].utterance("item_1", "Акылтай, ты здесь?")
+            await c.wait("turn_end")
+            assert [e["text"] for e in c.events("phrase")] == ["Снова на связи."]
+
+    run(scenario())

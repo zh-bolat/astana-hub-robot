@@ -51,8 +51,39 @@ from app.tts_text import normalize_for_tts
 IN_RATE = 16_000  # микрофон робота
 OA_RATE = 24_000  # вход OpenAI Realtime и звук ответа роботу (pcm_s16le_24000)
 SEND_CHUNK = OA_RATE * 2 // 10  # копим 100 мс перед отправкой в OpenAI
-TRANSCRIBE_PROMPT = (
-    "Ақылтай, Акылтай, Құрылтай, Курултай, робот, депутат, законопроект, заң жобасы, Мәжіліс."
+# Подсказку распознаванию не даём: на шуме и неразборчивой речи gpt-4o-transcribe выдавал её текстом
+# («Ақылтай, Акылтай, Құрылтай, Курултай, робот…» в субтитрах, журнал 09.11 17:02–17:06) — и робот на это отвечал.
+# Короткие осмысленные реплики, на которые отвечаем даже одним словом; другое одно слово — шум (_is_noise).
+SHORT_OK = frozenset(
+    [
+        "привет",
+        "здравствуйте",
+        "здравствуй",
+        "спасибо",
+        "да",
+        "нет",
+        "ага",
+        "пока",
+        "стоп",
+        "хорошо",
+        "понятно",
+        "ясно",
+        "ок",
+        "окей",
+        "сәлем",
+        "сәлеметсіз",
+        "рахмет",
+        "иә",
+        "жоқ",
+        "жарайды",
+        "түсінікті",
+        "сау",
+        "hello",
+        "hi",
+        "thanks",
+        "yes",
+        "no",
+    ]
 )
 _SENTENCE = re.compile(r"(.+?[.!?…])(\s+|$)", re.S)
 _EMOTION = re.compile(r"^\s*\[(\w+)\]\s*")
@@ -220,7 +251,7 @@ class RealtimeBridge:
             await self._robot_json(event("listening"))
             tasks = [
                 asyncio.create_task(self._robot_loop(), name="realtime_robot"),
-                asyncio.create_task(self._openai_loop(), name="realtime_openai"),
+                asyncio.create_task(self._openai_supervisor(), name="realtime_openai"),
             ]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
@@ -262,10 +293,7 @@ class RealtimeBridge:
             "input": {
                 "format": {"type": "audio/pcm", "rate": OA_RATE},
                 "noise_reduction": {"type": "far_field"},
-                "transcription": {
-                    "model": s.kurultai_realtime_transcribe_model,
-                    "prompt": TRANSCRIBE_PROMPT,
-                },
+                "transcription": {"model": s.kurultai_realtime_transcribe_model},
                 "turn_detection": self._turn_detection(),
             },
         }
@@ -317,8 +345,18 @@ class RealtimeBridge:
 
     # ---------- отправка ----------
     async def _oa_send(self, msg: dict) -> None:
-        if self.oa is not None and not self._closed:
+        if self.oa is None or self._closed:
+            return
+        try:
             await self.oa.send(json.dumps(msg, ensure_ascii=False))
+        except (
+            Exception
+        ) as exc:  # связь с OpenAI оборвалась — переподключит _openai_supervisor, робот не рвём
+            if msg.get("type") != "input_audio_buffer.append":
+                logger.warning(
+                    "realtime_send_failed",
+                    extra={"type": msg.get("type"), "error": type(exc).__name__},
+                )
 
     async def _robot_json(self, msg: dict) -> None:
         async with self._send_lock:
@@ -386,6 +424,33 @@ class RealtimeBridge:
                 await self._robot_json(event("listening"))
 
     # ---------- OpenAI → робот ----------
+    async def _openai_supervisor(self) -> None:
+        """Связь с OpenAI оборвалась (сессия Realtime живёт ≤ 60 мин, бывают сбои сети) — переподключиться
+        с паузой 1→2→5→10 с, заново настроить сессию; робот всё это время на связи. Не вышло 5 раз — конец."""
+        failures = 0
+        while not self._closed:
+            try:
+                await self._openai_loop()
+                reason = "closed"
+            except Exception as exc:
+                reason = type(exc).__name__
+            if self._closed:
+                return
+            logger.warning("realtime_openai_lost", extra={"reason": reason, "failures": failures})
+            if self._turn_open or self._playing_turn is not None:
+                await self._cancel("openai_lost")
+            for delay in (1, 2, 5, 10, 10)[failures:]:
+                await asyncio.sleep(delay)
+                failures += 1
+                if await self.connect():
+                    await self._oa_send(self._session_config())
+                    logger.info("realtime_openai_reconnected", extra={"attempt": failures})
+                    failures = 0
+                    break
+            else:
+                logger.warning("realtime_openai_gave_up")
+                return
+
     async def _openai_loop(self) -> None:
         async for raw in self.oa:
             try:
@@ -517,6 +582,7 @@ class RealtimeBridge:
             addressed = (
                 has_letters(text)
                 and not is_stop_command(text)
+                and not self._is_noise(text)
                 and (not gated or self.chat.addressed(text))
             )
             if not addressed:
@@ -572,6 +638,12 @@ class RealtimeBridge:
         await self._robot_json(event("thinking"))
         await self._refresh_instructions()
         await self._oa_send({"type": "response.create"})
+
+    @staticmethod
+    def _is_noise(text: str) -> bool:
+        """Обрывок вместо реплики: одно слово, не из коротких осмысленных («да», «привет», «рахмет»…)."""
+        words = [w.lower() for w in _WORDS.findall(text)]
+        return len(words) <= 1 and not (words and words[0] in SHORT_OK)
 
     def _real_speech(self, text: str) -> bool:
         """Фраза посетителя, а не эхо голоса робота: хотя бы 2 слова, и не больше половины из них — слова
