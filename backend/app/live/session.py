@@ -124,9 +124,12 @@ class LiveSession:
         self, ended_by: str, code: int = 1000, reason: str = "", error: dict | None = None
     ) -> None:
         """Закрыть сессию: error — событие роботу прямо в сокет (мимо очереди пайплайна), затем close."""
-        if self.bridge is not None:  # Realtime: пайплайна нет — закрыть мост
-            self.ended_by = self.ended_by or ended_by
-            await self.bridge.close()
+        if (
+            self.bridge is not None
+        ):  # Realtime: пайплайна нет — закрыть мост (с тем же кодом/ошибкой роботу)
+            if self.ended_by is None:
+                self.ended_by, self.close_code, self.close_reason = ended_by, code, reason
+            await self.bridge.close(code, reason, error)
             return
         if self.ended_by is None:
             self.ended_by, self.close_code, self.close_reason = ended_by, code, reason

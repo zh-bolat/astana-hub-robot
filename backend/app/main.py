@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import time
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from openai import AsyncOpenAI
@@ -274,6 +275,7 @@ def create_app(
     # Профиль kurultai (KURULTAI_ROBOT_TOKEN): свой агент, снимок quryltai.kz, память разговоров — отдельно от хаба
     kurultai_chat: KurultaiChatService | None = None
     kurultai_knowledge: KurultaiKnowledge | None = None
+    realtime_tts_provider: Any = None  # голос Dmitry для Realtime-гибрида (один клиент на сервер)
     if settings.kurultai_enabled():
         if quryltai is None:
             quryltai = QuryltaiSync(
@@ -290,8 +292,9 @@ def create_app(
             kurultai_materials.recover_interrupted()
         except Exception:
             logger.exception("kurultai_materials_recover_failed")
-        # знания для Realtime через поиск (app/kurultai/rag): свой индекс kurultai_chunks, эмбеддинги — те же
-        if settings.kurultai_rag:
+        # знания для Realtime через поиск (app/kurultai/rag): свой индекс kurultai_chunks, эмбеддинги — те же;
+        # у старой цепочки (pipeline) поиска нет — индекс и эмбеддинги зря не считаем
+        if settings.kurultai_rag and settings.kurultai_live_engine == "realtime":
             k_embedder = kurultai_embedder if kurultai_embedder is not None else embedder
             if k_embedder is None and settings.resolved_embedding_provider() != "off":
                 k_embedder = build_embedder(settings)
@@ -305,6 +308,14 @@ def create_app(
             kurultai_materials.on_change = (
                 kurultai_knowledge.request_reindex
             )  # публикация → в поиск сразу
+        if (
+            settings.kurultai_live_engine == "realtime"
+            and settings.kurultai_realtime_output == "text"
+        ):
+            # один HTTP-клиент ElevenLabs на сервер, а не на каждое подключение робота (закрывается в lifespan)
+            from app.kurultai.realtime.bridge import elevenlabs_provider
+
+            realtime_tts_provider = elevenlabs_provider(settings)
         kurultai_chat = KurultaiChatService(
             settings,
             store,
@@ -377,6 +388,7 @@ def create_app(
                 kurultai_chat,
                 quryltai,
                 embedder,
+                realtime_tts_provider,
             )
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
@@ -396,6 +408,8 @@ def create_app(
     app.state.engine = engine
     app.state.kurultai_materials = kurultai_materials  # None — профиль kurultai выключен
     app.state.kurultai_knowledge = kurultai_knowledge  # поиск Realtime Курултая (None — выключен)
+    if realtime_tts_provider is not None:
+        app.state.realtime_tts = realtime_tts_provider.tts_stream
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
     app.state.kb_rate_limiter = RateLimiter(settings.kb_rate_limit_per_min)
     app.state.service = service

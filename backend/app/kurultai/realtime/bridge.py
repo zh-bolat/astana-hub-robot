@@ -112,15 +112,16 @@ def resample_16_to_24(pcm: bytes) -> bytes:
     return np.clip(np.round(y), -32768, 32767).astype("<i2").tobytes()
 
 
-def elevenlabs_tts(settings: Settings) -> TtsStream | None:
-    """Голос робота (Dmitry, как в live-пайплайне: модели, голоса и настройки из .env) потоком PCM 24 кГц."""
+def elevenlabs_provider(settings: Settings) -> Any:
+    """Провайдер голоса робота (Dmitry, как в live-пайплайне: модели, голоса и настройки из .env), PCM 24 кГц.
+    Один на сервер (main.py → app.state.realtime_tts), закрывается в lifespan; у провайдера есть aclose()."""
     key = secret_text(settings.elevenlabs_api_key)
     if not key:
         return None
     from app.live.services import live_tts_model, live_voices, voice_settings
     from app.speech.elevenlabs import ElevenLabsProvider
 
-    provider = ElevenLabsProvider(
+    return ElevenLabsProvider(
         key,
         base_url=settings.elevenlabs_base_url,
         voices=live_voices(settings),
@@ -131,7 +132,11 @@ def elevenlabs_tts(settings: Settings) -> TtsStream | None:
         voice_settings=voice_settings(settings),
         timeout_s=15.0,
     )
-    return provider.tts_stream
+
+
+def elevenlabs_tts(settings: Settings) -> TtsStream | None:
+    provider = elevenlabs_provider(settings)
+    return provider.tts_stream if provider is not None else None
 
 
 class RealtimeBridge:
@@ -159,9 +164,12 @@ class RealtimeBridge:
         self._connector = connector or websockets.connect
         self._search = search or (lambda q: websearch.web_search(settings, q))
         self._text_mode = settings.kurultai_realtime_output == "text"
-        self._tts = (
-            tts if tts is not None else (elevenlabs_tts(settings) if self._text_mode else None)
-        )
+        # голос: общий провайдер сервера (app.state.realtime_tts); нет — свой, закрывается вместе с мостом
+        self._own_tts: Any = None
+        if tts is None and self._text_mode:
+            self._own_tts = elevenlabs_provider(settings)
+            tts = self._own_tts.tts_stream if self._own_tts is not None else None
+        self._tts = tts
         self._pronunciations = settings.knowledge_dir / "pronunciations.yaml"
         self._clock = clock
         # знания Курултая через поиск (app/kurultai/rag): сводка в промпт, подробности — search_kurultai
@@ -191,6 +199,8 @@ class RealtimeBridge:
         self._turn_id: str | None = None
         self._turn_open = False
         self._response_active = False
+        self._response_id = ""  # текущий ответ OpenAI (response.created)
+        self._cancelled: set[str] = set()  # ответы, которые отменили мы: их response.done — не сбой
         self._dropping = False  # ответ отменён: остаток не озвучиваем и не шлём
         self._playing_turn: str | None = None
         self._playing_until = (
@@ -268,7 +278,8 @@ class RealtimeBridge:
         finally:
             await self.close()
 
-    async def close(self) -> None:
+    async def close(self, code: int = 1000, reason: str = "", error: dict | None = None) -> None:
+        """Закрыть сессию: error — событие роботу перед закрытием, code/reason — код закрытия (как у пайплайна)."""
         if self._closed:
             return
         self._closed = True
@@ -277,9 +288,14 @@ class RealtimeBridge:
         if self.oa is not None:
             with contextlib.suppress(Exception):
                 await self.oa.close()
+        if self._own_tts is not None:
+            with contextlib.suppress(Exception):
+                await self._own_tts.aclose()
         if self.ws.client_state == WebSocketState.CONNECTED:
             with contextlib.suppress(Exception):
-                await self.ws.close(1000)
+                if error is not None:
+                    await self.ws.send_json(error)
+                await self.ws.close(code, reason)
 
     # ---------- настройки сессии ----------
     def _now(self) -> datetime:
@@ -508,6 +524,7 @@ class RealtimeBridge:
             await self._delete(item)
         elif kind == "response.created":
             self._response_active = True
+            self._response_id = str((msg.get("response") or {}).get("id") or "")
         elif kind in ("response.output_audio.delta", "response.audio.delta"):
             if not self._text_mode:
                 await self._on_audio(msg.get("delta") or "")
@@ -615,6 +632,10 @@ class RealtimeBridge:
         if not has_letters(text):
             await self._delete(item_id)
             return
+        if self._bot_busy() and self._gated:
+            # «ставка» на предыдущую фразу ещё не подтверждена — это не перебивание: ставку снять (робот ничего
+            # не говорил), а эту фразу решать как обычно, с проверкой обращения
+            await self._cancel("not_addressed")
         if self._bot_busy():
             # робот говорит: «стоп» — замолчать; осмысленная фраза (не эхо его голоса) — перебить и ответить на
             # неё (KURULTAI_REALTIME_BARGE_IN=speech); эхо и обрывки в разговор не идут
@@ -721,8 +742,10 @@ class RealtimeBridge:
         self._phrase_buf += delta
         if self._emotion_pending:
             buf = self._phrase_buf.lstrip()
-            if buf.startswith("[") and "]" not in buf and len(buf) < 16 and not final:
-                return  # тег эмоции ещё приходит по кусочкам
+            if not final and (
+                not buf or (buf.startswith("[") and "]" not in buf and len(buf) < 16)
+            ):
+                return  # пока только пробелы, или тег эмоции ещё приходит по кусочкам
             self._emotion_pending = False
             m = _EMOTION.match(self._phrase_buf)
             if m:
@@ -813,9 +836,26 @@ class RealtimeBridge:
             await self._end_turn(ok=True)
 
     async def _on_response_done(self, response: dict) -> None:
-        self._response_active = False
+        rid = str(response.get("id") or "")
+        if rid and rid in self._cancelled:
+            # ответ, который мы отменили (response.cancel): новый ход мог уже начаться — его не трогаем
+            self._cancelled.discard(rid)
+            if not self._turn_open:
+                self._dropping = False
+            return
+        if not rid or rid == self._response_id:
+            self._response_active = False
         if self._dropping or not self._turn_open:
             self._dropping = False
+            return
+        if response.get("status") == "cancelled":
+            # отменён не по нашему response.cancel (interrupt_response выключен — так быть не должно):
+            # не сбой, старой цепочкой не отвечаем — ход просто заканчивается
+            if self._text_mode and self._speech is not None:
+                await self._on_text("", final=True)
+                self._speech.put_nowait(None)
+            else:
+                await self._end_turn(ok=False)
             return
         calls = [o for o in response.get("output") or [] if o.get("type") == "function_call"]
         if calls and response.get("status") == "completed":
@@ -925,6 +965,8 @@ class RealtimeBridge:
         turn_id = self._turn_id
         self._dropping = True
         if self._response_active:
+            if self._response_id:
+                self._cancelled.add(self._response_id)
             await self._oa_send({"type": "response.cancel"})
         else:
             self._dropping = self._turn_open  # ответ уже сгенерирован: глушим только озвучку

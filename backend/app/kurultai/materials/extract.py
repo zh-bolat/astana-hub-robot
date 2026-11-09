@@ -41,7 +41,7 @@ TEXT_EXT = {
     ".ini",
 }
 HTML_EXT = {".html", ".htm"}
-SUPPORTED = TEXT_EXT | HTML_EXT | {".pdf", ".docx", ".doc", ".rtf", ".xlsx", ".pptx"}
+SUPPORTED = TEXT_EXT | HTML_EXT | {".pdf", ".docx", ".doc", ".rtf", ".xlsx", ".xlsm", ".pptx"}
 
 
 class ExtractError(Exception):
@@ -70,7 +70,12 @@ def extract(data: bytes, filename: str) -> Extracted:
     if ext == ".docx" or (data[:2] == b"PK" and ext not in TEXT_EXT):
         return _limit(_docx(data))
     if data[:8] == OLE_MAGIC:
-        return _limit(_doc(data))
+        if ext == "":
+            return _limit(_doc(data))
+        raise ExtractError(  # .xls / .ppt / переименованный файл старого Office
+            f"«{ext}» внутри — старый формат Office (Word 97–2003, Excel .xls, PowerPoint .ppt): сохраните файл "
+            "как .docx / .xlsx / .pptx и загрузите снова."
+        )
     if ext == ".rtf" or data[:5] == b"{\\rtf":
         return _limit(Extracted(_rtf(decode(data)), "rtf"))
     if ext in HTML_EXT:

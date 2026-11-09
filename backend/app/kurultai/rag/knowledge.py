@@ -49,17 +49,19 @@ class KurultaiKnowledge:
         self.indexer = KurultaiIndexer(engine, embedder, quryltai, batch_size)
         self.search_engine = KurultaiSearch(engine, embedder, query_timeout_s)
         self._summary: tuple[float, str] | None = None
+        self._refreshing = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
 
     def request_reindex(self) -> None:
-        """Материалы изменились: сводка — заново, индекс — ближайшим проходом (можно из любого потока)."""
-        self._summary = None
+        """Материалы изменились: сводка устарела, индекс — ближайшим проходом (можно из любого потока)."""
+        if self._summary is not None:
+            self._summary = (0.0, self._summary[1])  # отдаём прежнюю, пока фоном не пересчитается
         if self._loop is not None and self._wake is not None:
             self._loop.call_soon_threadsafe(self._wake.set)
 
     async def run_periodic(self, interval_s: float) -> None:
-        """Фоном: сразу при старте, затем по `request_reindex` или раз в interval_s."""
+        """Фоном: сразу при старте, затем по `request_reindex` или раз в interval_s; после прохода — сводка."""
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
         while True:
@@ -68,7 +70,7 @@ class KurultaiKnowledge:
                 await asyncio.to_thread(self.indexer.index)
             except Exception:
                 logger.exception("kurultai_rag_index_failed")
-            self._summary = None
+            await self._refresh_summary()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), interval_s)
             if self._wake.is_set():
@@ -84,12 +86,30 @@ class KurultaiKnowledge:
             )
             return {int(sid): n for sid, n in rows if str(sid).isdigit()}
 
+    def _build_summary(self) -> str:
+        data = getattr(self.quryltai, "data", None)
+        return build_summary(data, live_materials(self.engine), datetime.now(UTC))
+
+    async def _refresh_summary(self) -> None:
+        if self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            text = await asyncio.to_thread(self._build_summary)
+            self._summary = (time.monotonic(), text)
+        except Exception:
+            logger.exception("kurultai_rag_summary_failed")
+        finally:
+            self._refreshing = False
+
     def summary(self) -> str:
+        """Сводка для промпта. На горячем пути (перед каждым ответом) цикл не блокируем: устаревшую отдаём сразу,
+        свежую считаем фоном; только самый первый вызов (до первого прохода индекса) — синхронно."""
         now = time.monotonic()
-        if self._summary is None or now - self._summary[0] > SUMMARY_TTL_S:
-            data = getattr(self.quryltai, "data", None)
-            text = build_summary(data, live_materials(self.engine), datetime.now(UTC))
-            self._summary = (now, text)
+        if self._summary is None:
+            self._summary = (now, self._build_summary())
+        elif now - self._summary[0] > SUMMARY_TTL_S and self._loop is not None:
+            self._loop.create_task(self._refresh_summary())
         return self._summary[1]
 
     async def search(self, query: str, k: int = 5) -> str:

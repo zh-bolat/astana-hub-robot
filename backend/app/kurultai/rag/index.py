@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -181,11 +181,12 @@ class KurultaiIndexer:
                     report.failed += len(batch)
             self._upsert(batch, vectors, model if vectors[0] is not None else None)
         if gone:
+            key = tuple_(
+                KurultaiChunkRow.source, KurultaiChunkRow.source_id, KurultaiChunkRow.chunk_no
+            )
             with Session(self.engine) as s, s.begin():
-                for source, source_id, chunk_no in gone:
-                    s.execute(delete(KurultaiChunkRow).where(
-                        KurultaiChunkRow.source == source, KurultaiChunkRow.source_id == source_id,
-                        KurultaiChunkRow.chunk_no == chunk_no))  # fmt: skip
+                for i in range(0, len(gone), 500):  # одним запросом, партиями
+                    s.execute(delete(KurultaiChunkRow).where(key.in_(gone[i : i + 500])))
             report.removed = len(gone)
         report.ms = int((time.perf_counter() - started) * 1000)
         self.last = report

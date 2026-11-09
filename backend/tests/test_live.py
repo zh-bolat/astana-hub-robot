@@ -1953,7 +1953,12 @@ class FakeRealtime:
                 return
             self._respond(len(self.creates()))
         elif msg["type"] == "response.cancel":
-            self.push({"type": "response.done", "response": {"status": "cancelled", "output": []}})
+            self.push(
+                {
+                    "type": "response.done",
+                    "response": {"id": self.cur, "status": "cancelled", "output": []},
+                }
+            )
 
     def _respond(self, n: int) -> None:
         self.push({"type": "response.created", "response": {"id": self.cur}})
@@ -2389,7 +2394,7 @@ def test_realtime_emotion_tag_goes_to_face_not_voice(live_server):
 
 def test_realtime_barge_in_by_speech_answers_new_question(live_server):
     fake = FakeRealtime()
-    url, _, _, _ = _realtime_server(live_server, fake)
+    url, app, _, model = _realtime_server(live_server, fake)
 
     async def scenario() -> None:
         async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
@@ -2398,10 +2403,44 @@ def test_realtime_barge_in_by_speech_answers_new_question(live_server):
             fake.utterance("item_2", "Подожди, а какая погода завтра?")  # перебили своей фразой
             await c.wait("interrupted")
             await c.wait("turn_end", count=2)
+            await asyncio.sleep(0.3)
             assert c.events("user_final")[-1]["text"] == "Подожди, а какая погода завтра?"
+            # response.done(cancelled) отменённого ответа пришёл уже в новом ходе — это не сбой нового
+            assert [e["text"] for e in c.events("phrase")] == [fake.answer, fake.answer]
 
     run(scenario())
     assert len(fake.creates()) == 2
+    assert model.requests == []  # запасная цепочка (OpenRouter) не вызывалась
+    assert len(app.state.realtime_spoken) == 2
+
+
+def test_realtime_second_phrase_during_speculation_is_not_barge_in(live_server):
+    """Вне окна разговора «ставка» на фразу A ещё не подтверждена, а уже расшифрована фраза B (чужой разговор):
+    это не перебивание — B проверяется на обращение, как любая фраза, и робот молчит."""
+    fake = FakeRealtime()
+    url, _, _, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.push({"type": "input_audio_buffer.speech_started"})
+            fake.push({"type": "input_audio_buffer.speech_stopped"})
+            fake.push({"type": "input_audio_buffer.committed", "item_id": "item_1"})
+            await _until(lambda: fake.creates())  # ставка на A сочиняется
+            fake.utterance("item_2", "Пойдём лучше кофе попьём")  # B — люди между собой
+            await c.wait("ignored")
+            fake.push(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "item_1",
+                    "transcript": "Он вчера опоздал на работу",
+                }
+            )
+            await c.wait("ignored", count=2)
+            await asyncio.sleep(0.3)
+            assert c.events("phrase") == [] and "turn_start" not in c.kinds()
+
+    run(scenario())
+    assert len(fake.creates()) == 1 and model.requests == []
 
 
 def test_realtime_no_transcription_prompt_and_noise_is_not_answered(live_server):
