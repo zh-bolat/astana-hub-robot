@@ -302,6 +302,9 @@ def create_app(
                 settings.embedding_query_timeout_s,
                 settings.embedding_batch_size,
             )
+            kurultai_materials.on_change = (
+                kurultai_knowledge.request_reindex
+            )  # публикация → в поиск сразу
         kurultai_chat = KurultaiChatService(
             settings,
             store,
@@ -347,9 +350,9 @@ def create_app(
                 quryltai.run_periodic(settings.quryltai_refresh_s, settings.quryltai_retry_s)
             )
         if kurultai_knowledge is not None:
-            # индекс поиска Курултая: сразу и раз в KURULTAI_RAG_REINDEX_S (снимок и материалы)
+            # индекс поиска Курултая: сразу, после изменений в админке и раз в KURULTAI_RAG_REINDEX_S
             rag_task = asyncio.create_task(
-                kurultai_knowledge.indexer.run_periodic(settings.kurultai_rag_reindex_s)
+                kurultai_knowledge.run_periodic(settings.kurultai_rag_reindex_s)
             )
         if settings.question_log_retention_days > 0:
             retention_task = asyncio.create_task(

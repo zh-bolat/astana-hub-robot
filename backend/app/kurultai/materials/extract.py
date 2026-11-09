@@ -1,7 +1,8 @@
-"""Файл → текст: PDF, DOCX, TXT, MD, HTML, RTF, CSV, JSON и прочие текстовые форматы.
+"""Файл → текст: PDF, DOCX, DOC, XLSX, PPTX, TXT, MD, HTML, RTF, CSV, JSON и прочие текстовые форматы.
 
 PDF без текстового слоя (скан) отмечается `needs_ocr=True` — текст распознаёт модель (structure.ocr_pdf).
 Кодировка текстовых файлов: BOM → UTF-8 → UTF-16 по нулям → cp1251 (Windows, частая у русских документов).
+Старый Word (.doc, OLE) читает `antiword` (в образе сервера); `.doc`, внутри которого RTF/DOCX/HTML, — по содержимому.
 """
 
 from __future__ import annotations
@@ -10,10 +11,16 @@ import contextlib
 import io
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import PurePath
 from typing import ClassVar
+
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # Word 97–2003 (.doc) и прочие OLE2
+XLSX_ROWS_PER_SHEET = 5000  # дальше — обрезаем лист с пометкой (это не справка, а выгрузка)
 
 # Сколько текста держим из одного файла (≈100 тыс. токенов): больше — обрезаем и предупреждаем
 MAX_TEXT_CHARS = 400_000
@@ -34,7 +41,7 @@ TEXT_EXT = {
     ".ini",
 }
 HTML_EXT = {".html", ".htm"}
-SUPPORTED = TEXT_EXT | HTML_EXT | {".pdf", ".docx", ".rtf"}
+SUPPORTED = TEXT_EXT | HTML_EXT | {".pdf", ".docx", ".doc", ".rtf", ".xlsx", ".pptx"}
 
 
 class ExtractError(Exception):
@@ -44,7 +51,7 @@ class ExtractError(Exception):
 @dataclass
 class Extracted:
     text: str
-    kind: str  # pdf | docx | text | html | rtf
+    kind: str  # pdf | docx | doc | xlsx | pptx | text | html | rtf
     pages: int | None = None
     needs_ocr: bool = False
     truncated: bool = False
@@ -54,8 +61,16 @@ def extract(data: bytes, filename: str) -> Extracted:
     ext = PurePath(filename or "").suffix.lower()
     if ext == ".pdf" or data[:5] == b"%PDF-":
         return _limit(_pdf(data))
+    if ext in (".xlsx", ".xlsm"):
+        return _limit(_xlsx(data))
+    if ext == ".pptx":
+        return _limit(_pptx(data))
+    if ext == ".doc":
+        return _limit(_doc(data))
     if ext == ".docx" or (data[:2] == b"PK" and ext not in TEXT_EXT):
         return _limit(_docx(data))
+    if data[:8] == OLE_MAGIC:
+        return _limit(_doc(data))
     if ext == ".rtf" or data[:5] == b"{\\rtf":
         return _limit(Extracted(_rtf(decode(data)), "rtf"))
     if ext in HTML_EXT:
@@ -68,7 +83,8 @@ def extract(data: bytes, filename: str) -> Extracted:
     if ext in TEXT_EXT or ext == "" or _looks_text(data):
         return _limit(Extracted(decode(data), "text"))
     raise ExtractError(
-        f"Формат «{ext or 'без расширения'}» не поддерживается. Подходят: PDF, DOCX, TXT, MD, HTML, RTF, CSV, JSON."
+        f"Формат «{ext or 'без расширения'}» не поддерживается. Подходят: PDF, DOCX, DOC, XLSX, PPTX, TXT, MD, "
+        "HTML, RTF, CSV, JSON."
     )
 
 
@@ -170,6 +186,126 @@ def _docx(data: bytes) -> Extracted:
                 out.append("| " + " | ".join(cells) + " |")
             out.append("")
     return Extracted("\n".join(out), "docx")
+
+
+def _doc(data: bytes) -> Extracted:
+    """Файл .doc: часто это RTF, DOCX или HTML с чужим расширением; настоящий Word 97–2003 — через antiword."""
+    if data[:5] == b"{\\rtf":
+        return Extracted(_rtf(decode(data)), "rtf")
+    if data[:2] == b"PK":
+        return _docx(data)
+    if data[:8] != OLE_MAGIC:
+        if _looks_text(data):
+            text = decode(data)
+            if "<html" in text[:3000].lower() or "<body" in text[:3000].lower():
+                return Extracted(_html(text), "html")
+            return Extracted(text, "text")
+        raise ExtractError(
+            "DOC повреждён или не читается — сохраните в Word как .docx и загрузите снова."
+        )
+    exe = shutil.which("antiword")
+    if not exe:
+        raise ExtractError(
+            "Старый формат Word (.doc) на этом сервере не читается — сохраните как .docx и загрузите снова."
+        )
+    with tempfile.NamedTemporaryFile(suffix=".doc") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        try:  # -m UTF-8.txt — кодировка вывода, -w 0 — без переносов строк по ширине
+            res = subprocess.run(
+                [exe, "-m", "UTF-8.txt", "-w", "0", tmp.name], capture_output=True, timeout=60
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ExtractError("DOC читается слишком долго — сохраните как .docx.") from exc
+    text = res.stdout.decode("utf-8", errors="replace")
+    if res.returncode != 0 or not text.strip():
+        raise ExtractError(
+            "DOC не читается (повреждён, защищён паролем или это не Word) — сохраните как .docx и загрузите снова."
+        )
+    text = re.sub(r"^[ \t]+", "", text, flags=re.M)  # antiword центрирует и выравнивает пробелами
+    text = re.sub(r"(?<=\S) {2,}(?=\S)", " ", text)
+    return Extracted(text, "doc")
+
+
+def _cell(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if hasattr(value, "isoformat"):  # date / datetime
+        text = value.isoformat()
+        return text[:10] if text.endswith("T00:00:00") else text.replace("T", " ")
+    return " ".join(str(value).split())
+
+
+def _xlsx(data: bytes) -> Extracted:
+    try:
+        import warnings
+
+        import openpyxl
+
+        with (
+            warnings.catch_warnings()
+        ):  # «Workbook contains no default style» у выгрузок из 1С/eKuriltay
+            warnings.simplefilter("ignore")
+            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ExtractError("XLSX повреждён или это не книга Excel.") from exc
+    out: list[str] = []
+    for ws in wb.worksheets:
+        out.append(f"## {ws.title}")
+        for n, row in enumerate(ws.iter_rows(values_only=True)):
+            if n >= XLSX_ROWS_PER_SHEET:
+                out.append(f"[лист обрезан: показаны первые {XLSX_ROWS_PER_SHEET} строк]")
+                break
+            cells = [_cell(v) for v in row]
+            while cells and not cells[-1]:
+                cells.pop()
+            if any(cells):
+                out.append("| " + " | ".join(cells) + " |")
+        out.append("")
+    pages = len(wb.worksheets)
+    wb.close()
+    return Extracted("\n".join(out), "xlsx", pages=pages)
+
+
+def _shape_text(shape) -> list[str]:
+    out: list[str] = []
+    inner = getattr(shape, "shapes", None)  # группа фигур
+    if inner is not None:
+        for s in sorted(inner, key=lambda s: (s.top or 0, s.left or 0)):
+            out.extend(_shape_text(s))
+        return out
+    if getattr(shape, "has_table", False):
+        for row in shape.table.rows:
+            out.append("| " + " | ".join(" ".join(c.text.split()) for c in row.cells) + " |")
+        out.append("")
+    elif getattr(shape, "has_text_frame", False):
+        for p in shape.text_frame.paragraphs:
+            text = "".join(r.text for r in p.runs).strip()
+            if text:
+                out.append(text)
+    return out
+
+
+def _pptx(data: bytes) -> Extracted:
+    try:
+        from pptx import Presentation
+
+        prs = Presentation(io.BytesIO(data))
+    except Exception as exc:
+        raise ExtractError("PPTX повреждён или это не презентация PowerPoint.") from exc
+    out: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        out.append(f"[слайд {i}]")
+        for shape in sorted(slide.shapes, key=lambda s: (s.top or 0, s.left or 0)):
+            out.extend(_shape_text(shape))
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
+            notes = " ".join(slide.notes_slide.notes_text_frame.text.split())
+            if notes:
+                out.append(f"Заметки докладчика: {notes}")
+        out.append("")
+    return Extracted("\n".join(out), "pptx", pages=len(prs.slides))
 
 
 class _HtmlText(HTMLParser):

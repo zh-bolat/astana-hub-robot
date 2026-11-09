@@ -168,10 +168,20 @@ def _json(data: Any, status: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status, headers=_HEADERS)
 
 
-def _overview(store: MaterialsStore, settings: Settings) -> dict:
+def _overview(store: MaterialsStore, settings: Settings, knowledge=None) -> dict:
     stats = store.block_stats()
+    items = store.items()
+    if knowledge is not None:  # поиск Realtime: сколько фрагментов материала уже в индексе
+        try:
+            counts = knowledge.material_chunks()
+        except Exception:
+            logger.exception("kurultai_admin_search_counts_failed")
+            counts = {}
+        for it in items:
+            it["search_chunks"] = counts.get(it["id"], 0)
     return {
-        "items": store.items(),
+        "items": items,
+        "search": knowledge is not None,
         "stats": {
             "chars": stats.chars,
             "budget": stats.budget,
@@ -191,7 +201,8 @@ async def list_materials(request: Request) -> Response:
         return denied
     store = _store(request)
     assert store is not None
-    return _json(_overview(store, _settings(request)))
+    knowledge = getattr(request.app.state, "kurultai_knowledge", None)
+    return _json(_overview(store, _settings(request), knowledge))
 
 
 @router.post("/api/materials", include_in_schema=False)

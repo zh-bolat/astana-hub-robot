@@ -16,6 +16,10 @@ RUN uv sync --frozen --no-dev
 
 FROM python:3.12-slim-bookworm
 
+# antiword — старый Word (.doc) в админке материалов Курултая (app/kurultai/materials/extract.py)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends antiword \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /app /app

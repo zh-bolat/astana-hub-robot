@@ -101,10 +101,18 @@ class MaterialsStore:
         self._block: tuple[int, float, str, BlockStats] | None = None
         self._tasks: set[asyncio.Task] = set()
         self._sem = asyncio.Semaphore(PROCESSING_CONCURRENCY)
+        # после любого изменения материалов (публикация, правка, удаление, обработка): поиск Realtime
+        # (app/kurultai/rag) переиндексирует сразу, не дожидаясь периодического прохода
+        self.on_change: Callable[[], None] | None = None
 
     # ---------- журнал и служебное ----------
     def _changed(self) -> None:
         self._version += 1
+        if self.on_change is not None:
+            try:
+                self.on_change()
+            except Exception:
+                logger.exception("kurultai_materials_on_change_failed")
 
     def _event(self, s: Session, material_id: int | None, action: str, title: str | None, ip: str | None,
                **detail: Any) -> None:  # fmt: skip

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -110,3 +111,28 @@ def test_summary_is_short_and_has_upcoming_agenda(db):
 
 def test_format_hits_empty():
     assert format_hits([], "x").startswith("Ничего не нашлось")
+
+
+def test_request_reindex_wakes_loop_and_material_chunks(db, monkeypatch):
+    """Публикация в админке → on_change → индекс обновляется сразу, не через KURULTAI_RAG_REINDEX_S."""
+    from app.kurultai.rag import knowledge as kn_mod
+
+    monkeypatch.setattr(kn_mod, "REINDEX_DEBOUNCE_S", 0.05)
+    kn = KurultaiKnowledge(db, FakeEmbeddings(), Q(None))
+
+    async def run():
+        task = asyncio.create_task(kn.run_periodic(3600))
+        await asyncio.sleep(0.3)  # стартовый проход: материалов нет
+        assert kn.material_chunks() == {}
+        mid = _material(db)
+        kn.request_reindex()  # то, что делает MaterialsStore._changed()
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if kn.material_chunks():
+                break
+        assert kn.material_chunks() == {mid: 2}  # справка + 1 фрагмент текста
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
