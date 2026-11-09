@@ -1885,6 +1885,7 @@ class FakeRealtime:
     def utterance(self, item_id: str, text: str) -> None:
         self.push({"type": "input_audio_buffer.speech_started"})
         self.push({"type": "input_audio_buffer.speech_stopped"})
+        self.push({"type": "input_audio_buffer.committed", "item_id": item_id})
         self.push(
             {
                 "type": "conversation.item.input_audio_transcription.completed",
@@ -1896,6 +1897,20 @@ class FakeRealtime:
     def of(self, kind: str) -> list[dict]:
         return [m for m in self.sent if m["type"] == kind]
 
+    def text_mode(self) -> bool:
+        ups = self.of("session.update")
+        return bool(ups) and ups[0]["session"].get("output_modalities") == ["text"]
+
+    def say(self, text: str) -> None:
+        """Ответ модели: текст (гибрид) или звук + расшифровка (голос OpenAI)."""
+        if self.text_mode():
+            self.push({"type": "response.output_text.delta", "delta": text})
+            return
+        audio = base64.b64encode(b"\x01\x00" * 2400).decode()
+        for _ in range(3):
+            self.push({"type": "response.output_audio.delta", "delta": audio})
+        self.push({"type": "response.output_audio_transcript.delta", "delta": text})
+
     async def send(self, raw: str) -> None:
         msg = json.loads(raw)
         self.sent.append(msg)
@@ -1905,13 +1920,9 @@ class FakeRealtime:
             self.push({"type": "response.done", "response": {"status": "cancelled", "output": []}})
 
     def _respond(self, n: int) -> None:
-        audio = base64.b64encode(b"\x01\x00" * 2400).decode()
         self.push({"type": "response.created"})
         if self.tool_first and n == 1:
-            self.push({"type": "response.output_audio.delta", "delta": audio})
-            self.push(
-                {"type": "response.output_audio_transcript.delta", "delta": "Сейчас посмотрю."}
-            )
+            self.say("Сейчас посмотрю.")
             self.push(
                 {
                     "type": "response.done",
@@ -1929,10 +1940,13 @@ class FakeRealtime:
                 }
             )
             return
-        for _ in range(3):
-            self.push({"type": "response.output_audio.delta", "delta": audio})
-        self.push({"type": "response.output_audio_transcript.delta", "delta": self.answer})
-        self.push({"type": "response.output_audio_transcript.done"})
+        self.say(self.answer)
+        done = (
+            "response.output_text.done"
+            if self.text_mode()
+            else "response.output_audio_transcript.done"
+        )
+        self.push({"type": done})
         self.push(
             {
                 "type": "response.done",
@@ -1977,6 +1991,14 @@ def _realtime_server(live_server, fake: FakeRealtime | None, *, fail: bool = Fal
         return fake
 
     app.state.realtime_connector = connector
+    spoken: list[str] = []
+
+    async def tts(text, lang):  # голос робота (ElevenLabs) — подделка: 0,2 с тишины на фразу
+        spoken.append(text)
+        yield b"\x00\x00" * 4800
+
+    app.state.realtime_tts = tts
+    app.state.realtime_spoken = spoken
     return url, app, calls, model
 
 
@@ -2128,3 +2150,76 @@ def test_resample_16_to_24():
     out = resample_16_to_24(pcm)
     assert len(out) == 240 * 2
     assert resample_16_to_24(b"") == b""
+
+
+def test_realtime_hybrid_speaks_with_robot_voice_first_clause_early(live_server):
+    fake = FakeRealtime(
+        answer="Сейчас на рассмотрении сорок два законопроекта, из них три по цифровизации. "
+        "Подробнее — во вкладке «Законопроекты»."
+    )
+    url, app, _, _ = _realtime_server(live_server, fake)
+
+    phrases: list[str] = []
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько законопроектов?")
+            await c.wait("turn_end")
+            phrases.extend(e["text"] for e in c.events("phrase"))
+            assert "audio" in c.kinds()
+
+    run(scenario())
+    assert fake.of("session.update")[0]["session"]["output_modalities"] == ["text"]
+    assert "output" not in fake.of("session.update")[0]["session"]["audio"]
+    assert phrases == [  # субтитры = текст модели
+        "Сейчас на рассмотрении сорок два законопроекта,",  # первая — по запятой: голос раньше
+        "из них три по цифровизации.",
+        "Подробнее — во вкладке «Законопроекты».",
+    ]
+    # озвучено то же (после normalize_for_tts — первая буква фразы заглавная)
+    assert [t.lower() for t in app.state.realtime_spoken] == [t.lower() for t in phrases]
+
+
+def test_realtime_window_answer_starts_before_transcript(live_server):
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            end = await c.wait("turn_end")
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await c.wait("listening", count=2)
+            # окно открыто: ответ по committed, расшифровка приходит позже
+            fake.push({"type": "input_audio_buffer.speech_started"})
+            fake.push({"type": "input_audio_buffer.speech_stopped"})
+            fake.push({"type": "input_audio_buffer.committed", "item_id": "item_2"})
+            await c.wait("turn_start", count=2)
+            assert len(c.events("user_final")) == 1
+            fake.push(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "item_2",
+                    "transcript": "А кто председатель?",
+                }
+            )
+            await c.wait("user_final", count=2)
+            await c.wait("turn_end", count=2)
+
+    run(scenario())
+    assert len(fake.of("response.create")) == 2
+
+
+def test_realtime_voice_mode_streams_openai_audio(live_server):
+    fake = FakeRealtime()
+    url, app, _, _ = _realtime_server(live_server, fake, kurultai_realtime_output="voice")
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")
+            assert [e["text"] for e in c.events("phrase")] == ["В Курултае восемь комитетов."]
+
+    run(scenario())
+    assert app.state.realtime_spoken == []  # голос — от OpenAI, ElevenLabs не вызывался
+    assert fake.of("session.update")[0]["session"]["audio"]["output"]["voice"] == "cedar"

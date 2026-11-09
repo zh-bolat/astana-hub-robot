@@ -269,6 +269,11 @@ class Settings(BaseSettings):
     kurultai_realtime_url: str = "wss://api.openai.com/v1/realtime"
     kurultai_realtime_model: str = "gpt-realtime-2.1"
     kurultai_realtime_voice: str = "cedar"
+    # Голос ответа: text — модель пишет текст, говорит ElevenLabs Dmitry («гибрид», без акцента; по умолчанию);
+    # voice — модель говорит сама голосом OpenAI (быстрее на ~0,3 с, но с акцентом в ru/kk — решение 09.11: нет)
+    kurultai_realtime_output: Literal["text", "voice"] = "text"
+    # В окне разговора отвечать сразу по концу фразы, не дожидаясь расшифровки (−0,3…0,8 с)
+    kurultai_realtime_early_response: bool = True
     # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
     kurultai_realtime_transcribe_model: str = "gpt-4o-mini-transcribe"
     kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)

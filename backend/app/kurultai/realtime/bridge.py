@@ -6,15 +6,18 @@
 Приложение робота не меняется: меняется только то, что за сервером.
 
 Внутри — одна сессия OpenAI Realtime на соединение робота:
-- микрофон → 24 кГц → `input_audio_buffer.append`; конец фразы находит VAD OpenAI (`server_vad`), но ответ сам не
-  создаётся (`create_response: false`) и речь ответ не перебивает (`interrupt_response: false`);
-- расшифровка фразы (`conversation.item.input_audio_transcription.completed`) → решение сервера: робот говорит —
-  только «стоп» отменяет ответ, прочее (эхо, чужая речь) удаляется; обращение «Ақылтай / робот / бот» или окно
-  разговора 30 с (`app/kurultai/wake.py` через чат-сервис Курултая) → `response.create`; иначе фраза удаляется и
-  робот получает `ignored`;
-- звук ответа → роботу как есть (PCM16 24 кГц); расшифровка ответа → `phrase` (субтитры) и журнал;
+- микрофон → 24 кГц → `input_audio_buffer.append`; конец фразы находит VAD OpenAI (`server_vad`), ответ сам не
+  создаётся (`create_response: false`), речь ответ не перебивает (`interrupt_response: false`);
+- решение сервера по расшифровке фразы: робот говорит — только «стоп» отменяет ответ, остальное (эхо, чужая речь)
+  удаляется; обращение «Ақылтай / робот / бот» или окно разговора 30 с (`app/kurultai/wake.py` через чат-сервис
+  Курултая) → `response.create`, иначе фраза удаляется и робот получает `ignored`. Быстрый путь: внутри окна
+  разговора ответ стартует сразу по `input_audio_buffer.committed`, не дожидаясь расшифровки;
+- **ответ голосом** (KURULTAI_REALTIME_OUTPUT):
+  - `text` (по умолчанию, «гибрид»): модель пишет текст потоком, сервер режет его на фразы и озвучивает каждую
+    голосом робота ElevenLabs Dmitry (потоком PCM 24 кГц) — без акцента голосов OpenAI;
+  - `voice`: модель говорит сама голосом OpenAI (быстрее на ~0,3 с, но с акцентом в ru/kk — решение 09.11: нет);
 - `web_search` → справка из интернета (`websearch.py`) → `function_call_output` → продолжение того же ответа.
-Инструкции — та же база Курултая (`instructions.py`); язык — с экрана (`hello.lang`).
+Инструкции — та же база Курултая (`instructions.py`); язык — с экрана (`hello.lang`), голос — на языке экрана.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import contextlib
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,16 +46,21 @@ from app.live.protocol import AUDIO_FORMAT, MAX_AUDIO_FRAME, MAX_TEXT_FRAME, eve
 from app.live.stop import is_stop_command
 from app.logging_setup import logger, new_request_id
 from app.speech.base import has_letters
+from app.tts_text import normalize_for_tts
 
 IN_RATE = 16_000  # микрофон робота
-OA_RATE = 24_000  # вход и выход OpenAI Realtime, он же звук ответа роботу
+OA_RATE = 24_000  # вход OpenAI Realtime и звук ответа роботу (pcm_s16le_24000)
 SEND_CHUNK = OA_RATE * 2 // 10  # копим 100 мс перед отправкой в OpenAI
 TRANSCRIBE_PROMPT = (
     "Ақылтай, Акылтай, Құрылтай, Курултай, робот, депутат, законопроект, заң жобасы, Мәжіліс."
 )
 _SENTENCE = re.compile(r"(.+?[.!?…])(\s+|$)", re.S)
+_CLAUSE = re.compile(
+    r"(.{25,}?[,;:—])(\s+)", re.S
+)  # первая фраза ответа: режем по запятой — голос раньше
 
 Connector = Callable[..., Awaitable[Any]]
+TtsStream = Callable[[str, Lang], AsyncIterator[bytes]]
 
 
 def resample_16_to_24(pcm: bytes) -> bytes:
@@ -67,6 +75,28 @@ def resample_16_to_24(pcm: bytes) -> bytes:
     return np.clip(np.round(y), -32768, 32767).astype("<i2").tobytes()
 
 
+def elevenlabs_tts(settings: Settings) -> TtsStream | None:
+    """Голос робота (Dmitry, как в live-пайплайне: модели, голоса и настройки из .env) потоком PCM 24 кГц."""
+    key = secret_text(settings.elevenlabs_api_key)
+    if not key:
+        return None
+    from app.live.services import live_tts_model, live_voices, voice_settings
+    from app.speech.elevenlabs import ElevenLabsProvider
+
+    provider = ElevenLabsProvider(
+        key,
+        base_url=settings.elevenlabs_base_url,
+        voices=live_voices(settings),
+        tts_model_kk=live_tts_model(settings, "kk"),
+        tts_model_default=live_tts_model(settings, "ru"),
+        tts_models={"en": live_tts_model(settings, "en")},
+        output_format=f"pcm_{OA_RATE}",
+        voice_settings=voice_settings(settings),
+        timeout_s=15.0,
+    )
+    return provider.tts_stream
+
+
 class RealtimeBridge:
     def __init__(
         self,
@@ -79,6 +109,7 @@ class RealtimeBridge:
         metrics: Any = None,
         connector: Connector | None = None,
         search: Callable[[str], Awaitable[str]] | None = None,
+        tts: TtsStream | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ws = ws
@@ -89,6 +120,11 @@ class RealtimeBridge:
         self.metrics = metrics
         self._connector = connector or websockets.connect
         self._search = search or (lambda q: websearch.web_search(settings, q))
+        self._text_mode = settings.kurultai_realtime_output == "text"
+        self._tts = (
+            tts if tts is not None else (elevenlabs_tts(settings) if self._text_mode else None)
+        )
+        self._pronunciations = settings.knowledge_dir / "pronunciations.yaml"
         self._clock = clock
         self.oa: Any = None
         self._send_lock = asyncio.Lock()
@@ -99,30 +135,36 @@ class RealtimeBridge:
         # разговор
         self._engaged_until = 0.0
         self._speech_end_at: float | None = None
+        self._early_item: str | None = (
+            None  # фраза, на которую ответ начат до расшифровки (окно разговора)
+        )
         # ход робота: открыт от response.create до turn_end; робот играет звук до playback_done
         self._turn_id: str | None = None
         self._turn_open = False
         self._response_active = False
-        self._dropping = False  # ответ отменён: остаток звука не шлём
+        self._dropping = False  # ответ отменён: остаток не озвучиваем и не шлём
         self._playing_turn: str | None = None
         self._playing_until = (
-            0.0  # страховка: робот не прислал playback_done — считаем доигранным к этому времени
+            0.0  # страховка: playback_done не пришёл — к этому времени звук доигран
         )
         self._first_audio_at: float | None = None
         self._audio_bytes = 0
         self._question = ""
         self._answer = ""
         self._phrase_buf = ""
+        self._phrases_in_turn = 0
         self._first_audio_ms: int | None = None
         self._stt_ms: int | None = None
         self._request_id = ""
+        self._speech: asyncio.Queue | None = None  # фразы на озвучку (режим text)
+        self._speaker: asyncio.Task | None = None
         self.turns = 0
 
     # ---------- подключение ----------
     async def connect(self) -> bool:
-        """Сессия OpenAI Realtime; нет ключа или не подключились — False (сессия пойдёт старым pipeline)."""
+        """Сессия OpenAI Realtime; нет ключа, голоса (режим text) или связи — False (сессия пойдёт старым pipeline)."""
         key = secret_text(self.settings.kurultai_openai_api_key)
-        if not key:
+        if not key or (self._text_mode and self._tts is None):
             return False
         url = f"{self.settings.kurultai_realtime_url}?model={self.settings.kurultai_realtime_model}"
         try:
@@ -162,7 +204,7 @@ class RealtimeBridge:
         if self._closed:
             return
         self._closed = True
-        for t in list(self._tasks):
+        for t in [*self._tasks, *([self._speaker] if self._speaker else [])]:
             t.cancel()
         if self.oa is not None:
             with contextlib.suppress(Exception):
@@ -172,45 +214,47 @@ class RealtimeBridge:
                 await self.ws.close(1000)
 
     # ---------- настройки сессии ----------
-    def _now_text(self) -> datetime:
+    def _now(self) -> datetime:
         return datetime.now(UTC).astimezone(ASTANA_TZ).replace(second=0, microsecond=0)
 
     def _build_instructions(self) -> str:
         return realtime_instructions(
-            self.chat.snapshot(), self.chat.materials_block(), self.lang, self._now_text()
+            self.chat.snapshot(), self.chat.materials_block(), self.lang, self._now()
         )
 
     def _session_config(self) -> dict:
         s = self.settings
         self._instructions = self._build_instructions()
+        audio: dict = {
+            "input": {
+                "format": {"type": "audio/pcm", "rate": OA_RATE},
+                "noise_reduction": {"type": "far_field"},
+                "transcription": {
+                    "model": s.kurultai_realtime_transcribe_model,
+                    "prompt": TRANSCRIBE_PROMPT,
+                },
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": s.kurultai_realtime_vad_threshold,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": s.kurultai_realtime_vad_silence_ms,
+                    "create_response": False,
+                    "interrupt_response": False,
+                },
+            },
+        }
+        if not self._text_mode:
+            audio["output"] = {
+                "format": {"type": "audio/pcm", "rate": OA_RATE},
+                "voice": s.kurultai_realtime_voice,
+            }
         return {
             "type": "session.update",
             "session": {
                 "type": "realtime",
                 "instructions": self._instructions,
-                "output_modalities": ["audio"],
-                "audio": {
-                    "input": {
-                        "format": {"type": "audio/pcm", "rate": OA_RATE},
-                        "noise_reduction": {"type": "far_field"},
-                        "transcription": {
-                            "model": s.kurultai_realtime_transcribe_model,
-                            "prompt": TRANSCRIBE_PROMPT,
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": s.kurultai_realtime_vad_threshold,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": s.kurultai_realtime_vad_silence_ms,
-                            "create_response": False,
-                            "interrupt_response": False,
-                        },
-                    },
-                    "output": {
-                        "format": {"type": "audio/pcm", "rate": OA_RATE},
-                        "voice": s.kurultai_realtime_voice,
-                    },
-                },
+                "output_modalities": ["text"] if self._text_mode else ["audio"],
+                "audio": audio,
                 "tools": [websearch.TOOL] if s.kurultai_web_search else [],
                 "tool_choice": "auto",
             },
@@ -309,20 +353,36 @@ class RealtimeBridge:
                 await self._robot_json(event("user_speaking"))
         elif kind == "input_audio_buffer.speech_stopped":
             self._speech_end_at = self._clock()
+        elif kind == "input_audio_buffer.committed":
+            await self._maybe_early_response(str(msg.get("item_id") or ""))
         elif kind == "conversation.item.input_audio_transcription.completed":
             await self._on_utterance(
                 str(msg.get("item_id") or ""), str(msg.get("transcript") or "")
             )
         elif kind == "conversation.item.input_audio_transcription.failed":
-            await self._delete(str(msg.get("item_id") or ""))
+            item = str(msg.get("item_id") or "")
+            if item and item == self._early_item:
+                await self._cancel("no_transcript")
+            await self._delete(item)
         elif kind == "response.created":
             self._response_active = True
         elif kind in ("response.output_audio.delta", "response.audio.delta"):
-            await self._on_audio(msg.get("delta") or "")
-        elif kind in ("response.output_audio_transcript.delta", "response.audio_transcript.delta"):
-            await self._on_transcript(msg.get("delta") or "", final=False)
-        elif kind in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
-            await self._on_transcript("", final=True)
+            if not self._text_mode:
+                await self._on_audio(msg.get("delta") or "")
+        elif kind in (
+            "response.output_audio_transcript.delta",
+            "response.audio_transcript.delta",
+            "response.output_text.delta",
+            "response.text.delta",
+        ):
+            await self._on_text(msg.get("delta") or "", final=False)
+        elif kind in (
+            "response.output_audio_transcript.done",
+            "response.audio_transcript.done",
+            "response.output_text.done",
+            "response.text.done",
+        ):
+            await self._on_text("", final=True)
         elif kind == "response.done":
             await self._on_response_done(msg.get("response") or {})
         elif kind == "error":
@@ -339,16 +399,19 @@ class RealtimeBridge:
             self._playing_turn = None  # playback_done не пришёл — звук давно доигран
         return self._turn_open or self._playing_turn is not None
 
+    def _window(self) -> float | None:
+        return getattr(self.chat, "wake_window_s", None)
+
+    def _engaged(self) -> bool:
+        return self._window() is None or self._clock() < self._engaged_until
+
     def _engage(self) -> None:
-        window = getattr(self.chat, "wake_window_s", None)
+        window = self._window()
         if window is not None:
             self._engaged_until = self._clock() + window
 
     def _addressed(self, text: str) -> bool:
-        window = getattr(self.chat, "wake_window_s", None)
-        if window is None:
-            return True
-        if self._clock() < self._engaged_until or self.chat.addressed(text):
+        if self._engaged() or self.chat.addressed(text):
             self._engage()
             return True
         return False
@@ -357,8 +420,31 @@ class RealtimeBridge:
         if item_id:
             await self._oa_send({"type": "conversation.item.delete", "item_id": item_id})
 
+    async def _maybe_early_response(self, item_id: str) -> None:
+        """Окно разговора открыто и робот молчит — отвечать сразу, не дожидаясь расшифровки (−0,3…0,8 с)."""
+        if not item_id or self._bot_busy() or not self._engaged():
+            return
+        if not self.settings.kurultai_realtime_early_response:
+            return
+        self._early_item = item_id
+        self._start_turn("", None)
+        await self._robot_json(event("thinking"))
+        await self._refresh_instructions()
+        await self._oa_send({"type": "response.create"})
+
     async def _on_utterance(self, item_id: str, text: str) -> None:
         text = text.strip()
+        if item_id and item_id == self._early_item:  # ответ уже идёт — только расшифровка и «стоп»
+            self._early_item = None
+            if not has_letters(text) or is_stop_command(text):
+                await self._cancel("stop" if text else "noise")
+                await self._delete(item_id)
+                return
+            self._question = text
+            self._stt_ms = self._since_speech_end()
+            await self._robot_json(event("user_final", text=text, lang=self.lang))
+            self._engage()
+            return
         if not has_letters(text):
             await self._delete(item_id)
             return
@@ -368,7 +454,7 @@ class RealtimeBridge:
             if is_stop_command(text):
                 await self._cancel("stop")
             return
-        stt_ms = int((self._clock() - self._speech_end_at) * 1000) if self._speech_end_at else None
+        stt_ms = self._since_speech_end()
         await self._robot_json(event("user_final", text=text, lang=self.lang))
         if is_stop_command(text) or not self._addressed(text):
             await self._delete(item_id)
@@ -381,36 +467,56 @@ class RealtimeBridge:
         await self._refresh_instructions()
         await self._oa_send({"type": "response.create"})
 
+    def _since_speech_end(self) -> int | None:
+        if self._speech_end_at is None:
+            return None
+        return max(0, int((self._clock() - self._speech_end_at) * 1000))
+
     def _start_turn(self, question: str, stt_ms: int | None) -> None:
         self._turn_id = new_turn_id()
         self._request_id = new_request_id()
         self._turn_open = True
         self._dropping = False
         self._question, self._answer, self._phrase_buf = question, "", ""
+        self._phrases_in_turn = 0
         self._first_audio_ms = None
         self._first_audio_at = None
         self._audio_bytes = 0
         self._stt_ms = stt_ms
         self.turns += 1
+        if self._text_mode:
+            self._speech = asyncio.Queue()
+            self._speaker = asyncio.ensure_future(self._speak_loop(self._turn_id, self._speech))
 
-    async def _on_audio(self, b64: str) -> None:
-        if self._dropping or not self._turn_open or not b64:
+    # ---------- звук ответа ----------
+    async def _send_audio(self, pcm: bytes) -> None:
+        if self._dropping or not pcm:
             return
-        pcm = base64.b64decode(b64)
         self._audio_bytes += len(pcm)
         if self._first_audio_ms is None:
             self._first_audio_at = self._clock()
-            if self._speech_end_at is not None:
-                self._first_audio_ms = max(0, int((self._clock() - self._speech_end_at) * 1000))
+            self._first_audio_ms = self._since_speech_end()
             await self._robot_json(event("turn_start", turn_id=self._turn_id))
         await self._robot_bytes(pcm)
 
-    async def _on_transcript(self, delta: str, final: bool) -> None:
+    async def _on_audio(self, b64: str) -> None:
+        """Режим voice: звук модели как есть."""
+        if self._dropping or not self._turn_open or not b64:
+            return
+        await self._send_audio(base64.b64decode(b64))
+
+    async def _on_text(self, delta: str, final: bool) -> None:
+        """Текст ответа (режим text) или расшифровка звука (режим voice) → фразы: субтитры и озвучка."""
         if self._dropping or not self._turn_open:
             return
         self._phrase_buf += delta
         while True:
             m = _SENTENCE.match(self._phrase_buf)
+            if self._phrases_in_turn == 0 and self._text_mode:
+                # первая фраза — до запятой, если она раньше точки: Dmitry начинает говорить раньше
+                c = _CLAUSE.match(self._phrase_buf)
+                if c and (not m or c.end(1) < m.end(1)):
+                    m = c
             if not m:
                 break
             phrase = m.group(1).strip()
@@ -422,8 +528,31 @@ class RealtimeBridge:
             self._phrase_buf = ""
 
     async def _phrase(self, phrase: str) -> None:
+        self._phrases_in_turn += 1
         self._answer = f"{self._answer} {phrase}".strip()
-        await self._robot_json(event("phrase", text=phrase))
+        if self._text_mode and self._speech is not None:
+            self._speech.put_nowait(phrase)  # субтитр уйдёт вместе с её звуком
+        else:
+            await self._robot_json(event("phrase", text=phrase))
+
+    async def _speak_loop(self, turn_id: str | None, queue: asyncio.Queue) -> None:
+        """Режим text: фразы по очереди голосом Dmitry потоком; None в очереди — ответ закончен."""
+        assert self._tts is not None
+        while True:
+            phrase = await queue.get()
+            if phrase is None or self._dropping or self._turn_id != turn_id:
+                break
+            await self._robot_json(event("phrase", text=phrase))
+            spoken = normalize_for_tts(phrase, self.lang, self._pronunciations)
+            try:
+                async for chunk in self._tts(spoken, self.lang):
+                    if self._dropping or self._turn_id != turn_id:
+                        return
+                    await self._send_audio(chunk)
+            except Exception as exc:
+                logger.warning("realtime_tts_failed", extra={"error": type(exc).__name__})
+        if self._turn_id == turn_id and self._turn_open and not self._dropping:
+            await self._end_turn(ok=True)
 
     async def _on_response_done(self, response: dict) -> None:
         self._response_active = False
@@ -432,9 +561,17 @@ class RealtimeBridge:
             return
         calls = [o for o in response.get("output") or [] if o.get("type") == "function_call"]
         if calls and response.get("status") == "completed":
+            await self._on_text("", final=True)  # «Сейчас посмотрю» — озвучить до поиска
             self._spawn(self._run_tools(calls), "realtime_tools")
             return
-        await self._end_turn(ok=response.get("status") in (None, "completed"))
+        ok = response.get("status") in (None, "completed")
+        if self._text_mode and self._speech is not None:
+            await self._on_text("", final=True)
+            self._speech.put_nowait(None)  # конец хода — после последней фразы (_speak_loop)
+            if not ok:
+                logger.warning("realtime_response_failed", extra={"status": response.get("status")})
+            return
+        await self._end_turn(ok=ok)
 
     async def _run_tools(self, calls: list[dict]) -> None:
         for call in calls:
@@ -468,10 +605,13 @@ class RealtimeBridge:
 
     async def _end_turn(self, ok: bool) -> None:
         turn_id = self._turn_id
-        await self._on_transcript("", final=True)
+        if not self._text_mode:
+            await self._on_text("", final=True)
         self._turn_open = False
-        if self._first_audio_ms is None:  # звука не было (ошибка) — робот не ждёт playback_done
-            await self._robot_json(event("listening"))
+        if self._first_audio_ms is None and self._first_audio_at is None:
+            await self._robot_json(
+                event("listening")
+            )  # звука не было — робот не ждёт playback_done
         else:
             self._playing_turn = turn_id
             started = self._first_audio_at if self._first_audio_at is not None else self._clock()
@@ -481,6 +621,7 @@ class RealtimeBridge:
             "live_answered",
             extra={
                 "engine": "realtime",
+                "output": "text+elevenlabs" if self._text_mode else "openai_voice",
                 "question": self._question[:500],
                 "answer": self._answer[:1000],
                 "lang": self.lang,
@@ -488,20 +629,27 @@ class RealtimeBridge:
                 "profile": "kurultai",
             },
         )
-        self._record(ok=ok and self._first_audio_ms is not None)
+        self._record(ok=ok and self._first_audio_at is not None)
 
     async def _cancel(self, reason: str) -> None:
-        """«Стоп» / кнопка / сон: ответ отменить, остаток звука не слать, робот сбрасывает воспроизведение."""
+        """«Стоп» / кнопка / сон / шум: ответ отменить, остаток не слать, робот сбрасывает воспроизведение."""
         if not self._turn_open and self._playing_turn is None:
             return
         turn_id = self._turn_id
+        self._dropping = True
         if self._response_active:
-            self._dropping = True
             await self._oa_send({"type": "response.cancel"})
+        else:
+            self._dropping = self._turn_open  # ответ уже сгенерирован: глушим только озвучку
+        if self._speech is not None:
+            self._speech.put_nowait(None)
         was_open = self._turn_open
+        had_audio = self._first_audio_at is not None
         self._turn_open = False
         self._playing_turn = None
-        await self._robot_json(event("interrupted", turn_id=turn_id))
+        self._early_item = None
+        if had_audio or reason in ("stop", "client"):
+            await self._robot_json(event("interrupted", turn_id=turn_id))
         await self._robot_json(event("listening"))
         logger.info("realtime_interrupted", extra={"reason": reason})
         if was_open:
@@ -519,5 +667,10 @@ class RealtimeBridge:
                 request_id=self._request_id,
                 session_id=self.session_id,
                 ok=ok,
-                extra={"engine": "realtime", "profile": "kurultai", "interrupted": interrupted},
+                extra={
+                    "engine": "realtime",
+                    "output": "text+elevenlabs" if self._text_mode else "openai_voice",
+                    "profile": "kurultai",
+                    "interrupted": interrupted,
+                },
             )
