@@ -2339,3 +2339,29 @@ def test_realtime_rate_limit_answers_via_old_pipeline(live_server):
     run(scenario())
     assert len(model.requests) == 1  # агент Курултая через OpenRouter ответил вместо OpenAI
     assert [t.lower() for t in app.state.realtime_spoken] == ["ответ пайплайна."]
+
+
+def test_realtime_hybrid_sends_only_whole_pcm_samples(live_server):
+    """ElevenLabs по HTTP отдаёт куски любой длины — роботу уходят только чётные (целые отсчёты PCM16)."""
+    fake = FakeRealtime()
+    url, app, _, _ = _realtime_server(live_server, fake)
+
+    async def odd_tts(text, lang):
+        for size in (4801, 3, 1000, 7):
+            yield b"\x01" * size
+
+    app.state.realtime_tts = odd_tts
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")
+            frames = [i for i in c.items if isinstance(i, int)]
+            got = sum(frames)
+            assert frames and all(n % 2 == 0 for n in frames), frames
+            assert got in (
+                5810,
+                5811 - 1,
+            )  # 5811 байт → 5810 (нечётный последний байт ждёт следующий кусок)
+
+    run(scenario())

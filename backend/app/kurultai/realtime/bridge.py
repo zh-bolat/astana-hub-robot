@@ -158,6 +158,7 @@ class RealtimeBridge:
         )
         self._first_audio_at: float | None = None
         self._audio_bytes = 0
+        self._pcm_carry = b""  # нечётный хвост куска звука (см. _send_audio)
         self._question = ""
         self._answer = ""
         self._phrase_buf = ""
@@ -559,6 +560,7 @@ class RealtimeBridge:
         self._first_audio_ms = None
         self._first_audio_at = None
         self._audio_bytes = 0
+        self._pcm_carry = b""
         self._stt_ms = stt_ms
         self.turns += 1
         if self._text_mode:
@@ -567,7 +569,16 @@ class RealtimeBridge:
 
     # ---------- звук ответа ----------
     async def _send_audio(self, pcm: bytes) -> None:
+        # Звук роботу — только целыми отсчётами PCM16 (чётное число байт): ElevenLabs по HTTP отдаёт куски
+        # произвольной длины, а AudioTrack робота на нечётном куске падает (write < 0) и дальше молчит.
         if self._dropping or not pcm:
+            return
+        pcm = self._pcm_carry + pcm
+        if len(pcm) % 2:
+            self._pcm_carry, pcm = pcm[-1:], pcm[:-1]
+        else:
+            self._pcm_carry = b""
+        if not pcm:
             return
         self._audio_bytes += len(pcm)
         if self._first_audio_ms is None:
