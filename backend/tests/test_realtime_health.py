@@ -42,3 +42,27 @@ def test_losses_in_a_row_trip_breaker():
 def test_fatal_codes():
     assert {"credit_balance_exhausted", "insufficient_quota", "invalid_api_key"} <= FATAL_CODES
     assert "rate_limit_exceeded" not in FATAL_CODES
+
+
+def test_first_message_works_with_async_generator_connections():
+    """websockets.ClientConnection: __aiter__ — асинхронный генератор без __anext__, читать надо через recv()."""
+    import asyncio
+
+    from app.kurultai.realtime.bridge import first_message
+
+    class WsLike:
+        async def recv(self):
+            return '{"type": "session.created"}'
+
+        async def __aiter__(self):
+            yield '{"type": "never"}'
+
+    class FakeLike:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return '{"type": "session.created"}'
+
+    assert asyncio.run(first_message(WsLike())) == '{"type": "session.created"}'
+    assert asyncio.run(first_message(FakeLike())) == '{"type": "session.created"}'

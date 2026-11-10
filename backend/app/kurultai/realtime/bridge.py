@@ -159,6 +159,15 @@ def elevenlabs_tts(settings: Settings) -> TtsStream | None:
     return provider.tts_stream if provider is not None else None
 
 
+async def first_message(conn: Any) -> Any:
+    """Первое сообщение соединения: у websockets это recv() (его __aiter__ — асинхронный генератор, у которого
+    нет __anext__), у поддельных соединений в тестах — __anext__."""
+    recv = getattr(conn, "recv", None)
+    if callable(recv):
+        return await recv()
+    return await conn.__anext__()
+
+
 class RealtimeBridge:
     def __init__(
         self,
@@ -303,7 +312,7 @@ class RealtimeBridge:
         # ключ) → подключение не считается: сессия пойдёт старой цепочкой. Молчание — не повод отказываться.
         try:
             first = await asyncio.wait_for(
-                self.oa.__anext__(), self.settings.kurultai_realtime_hello_timeout_s
+                first_message(self.oa), self.settings.kurultai_realtime_hello_timeout_s
             )
         except TimeoutError:
             return True
