@@ -408,6 +408,14 @@ def create_app(
     app.state.engine = engine
     app.state.kurultai_materials = kurultai_materials  # None — профиль kurultai выключен
     app.state.kurultai_knowledge = kurultai_knowledge  # поиск Realtime Курултая (None — выключен)
+    if settings.kurultai_enabled():
+        # навигация Realtime (docs/kurultai/navigation.md): точки карты и общий на процесс интервал предложений
+        from app.kurultai.offers import OfferPolicy
+        from app.kurultai.places import FILE_NAME as PLACES_FILE
+        from app.kurultai.places import load_places
+
+        app.state.kurultai_places = load_places(settings.knowledge_dir / PLACES_FILE)
+        app.state.kurultai_offers = OfferPolicy()
     if realtime_tts_provider is not None:
         app.state.realtime_tts = realtime_tts_provider.tts_stream
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)

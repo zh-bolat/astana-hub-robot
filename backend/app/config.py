@@ -298,6 +298,13 @@ class Settings(BaseSettings):
     # Перебить робота: speech — любой осмысленной фразой (кроме эха его голоса); stop_only — только «стоп»
     kurultai_realtime_barge_in: Literal["speech", "stop_only"] = "speech"
     kurultai_realtime_connect_timeout_s: float = 8.0
+    # Навигация Realtime (docs/kurultai/navigation.md): guide_to уходит роботу после playback_done хода, а если
+    # его нет — через столько секунд после turn_end
+    kurultai_guide_playback_timeout_s: float = Field(8.0, ge=0.1, le=60.0)
+    # Предложение проводить: куда (place_id из knowledge/kurultai_places.yaml; пусто — не предлагать) и не чаще
+    # раза в столько секунд на робота (между любыми двумя предложениями; одно на сессию — всегда)
+    kurultai_offer_place: str = "museum"
+    kurultai_offer_min_interval_s: int = Field(600, ge=0)
     kurultai_wake_word: bool = True
     kurultai_wake_window_s: float = Field(30.0, ge=5.0, le=600.0)
     # Тап по лицу: false — робот просыпается молча и ждёт обращения (без приветствия и без окна разговора)

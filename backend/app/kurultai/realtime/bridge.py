@@ -18,6 +18,13 @@
   - `voice`: модель говорит сама голосом OpenAI (быстрее на ~0,3 с, но с акцентом в ru/kk — решение 09.11: нет);
 - `web_search` → справка из интернета (`websearch.py`) → `function_call_output` → продолжение того же ответа.
 Инструкции — та же база Курултая (`instructions.py`); язык — с экрана (`hello.lang`), голос — на языке экрана.
+
+Навигация (docs/kurultai/navigation.md): инструмент `guide_to(place_id)` → `action guide_to` роботу после
+`playback_done` хода (или через KURULTAI_GUIDE_PLAYBACK_TIMEOUT_S после `turn_end`); в поездке (`state
+navigating:true`) реплики не отвечаются (`ignored`, reason navigating), «стоп» / `interrupt` → `action
+stop_navigation`; после `navigating:false` сервер сам говорит итог новым ходом (кроме авто-возврата на пост,
+`auto:true`). Предложение проводить (`app/kurultai/offers.py`) — дополнение к `response.create` приветствия или
+второго ответа; `response.instructions` заменяет инструкции сессии, поэтому уходят полные инструкции + дополнение.
 """
 
 from __future__ import annotations
@@ -38,10 +45,19 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
 from app.config import Settings, secret_text
+from app.kurultai.offers import OfferPolicy
+from app.kurultai.places import KurultaiPlaces
 from app.kurultai.quryltai import ASTANA_TZ
 from app.kurultai.rag.knowledge import TOOL as SEARCH_TOOL
 from app.kurultai.realtime import websearch
-from app.kurultai.realtime.instructions import realtime_instructions, realtime_instructions_rag
+from app.kurultai.realtime.instructions import (
+    GUIDE_TOOL,
+    greeting_addition,
+    navigation_addition,
+    offer_addition,
+    realtime_instructions,
+    realtime_instructions_rag,
+)
 from app.lang import Lang, normalize_lang
 from app.live.protocol import AUDIO_FORMAT, MAX_AUDIO_FRAME, MAX_TEXT_FRAME, event, new_turn_id
 from app.live.stop import is_stop_command
@@ -153,6 +169,8 @@ class RealtimeBridge:
         search: Callable[[str], Awaitable[str]] | None = None,
         tts: TtsStream | None = None,
         knowledge: Any = None,
+        places: KurultaiPlaces | None = None,
+        offers: OfferPolicy | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ws = ws
@@ -223,6 +241,27 @@ class RealtimeBridge:
         self._speech: asyncio.Queue | None = None  # фразы на озвучку (режим text)
         self._speaker: asyncio.Task | None = None
         self.turns = 0
+        # навигация (docs/kurultai/navigation.md): точки карты и поездка
+        self.places = places if places is not None else KurultaiPlaces()
+        self._places_available = self.places  # после hello.places — только точки карты этого робота
+        self._tools_sent: list[dict] = []
+        self._pending_guide: dict | None = None  # action guide_to — уйдёт после playback_done хода
+        self._navigating = False
+        self._nav_place_id: str | None = None
+        self._nav_auto = False  # авто-возврат на пост: сервер молчит
+        self._nav_started_at: float | None = None
+        self._guided = False  # в сессии уже была поездка — больше не предлагать
+        # предложение проводить (OfferPolicy общий на процесс; одно на сессию)
+        self.offers = offers if offers is not None else OfferPolicy()
+        self._offered = False
+        self._offer_turn: int | None = None  # ход с предложением: согласие — следующий ход
+        self._answers = (
+            0  # законченных ответов на вопросы посетителя (предложение — в конце второго)
+        )
+        self._turn_kind = "answer"  # answer / greeting / navigation
+        self._turn_extra: str | None = (
+            None  # дополнение инструкций хода (повторяется после инструмента)
+        )
 
     # ---------- подключение ----------
     async def connect(self) -> bool:
@@ -302,15 +341,27 @@ class RealtimeBridge:
         return datetime.now(UTC).astimezone(ASTANA_TZ).replace(second=0, microsecond=0)
 
     def _build_instructions(self) -> str:
+        places = self._places_available.prompt_block(self.lang)
         if self.knowledge is not None:
-            return realtime_instructions_rag(self.knowledge.summary(), self.lang, self._now())
+            return realtime_instructions_rag(
+                self.knowledge.summary(), self.lang, self._now(), places
+            )
         return realtime_instructions(
-            self.chat.snapshot(), self.chat.materials_block(), self.lang, self._now()
+            self.chat.snapshot(), self.chat.materials_block(), self.lang, self._now(), places
+        )
+
+    def _tools(self) -> list[dict]:
+        s = self.settings
+        return (
+            ([SEARCH_TOOL] if self.knowledge is not None else [])
+            + ([websearch.TOOL] if s.kurultai_web_search else [])
+            + ([GUIDE_TOOL] if self._places_available.targets() else [])
         )
 
     def _session_config(self) -> dict:
         s = self.settings
         self._instructions = self._build_instructions()
+        self._tools_sent = self._tools()
         audio: dict = {
             "input": {
                 "format": {"type": "audio/pcm", "rate": OA_RATE},
@@ -331,8 +382,7 @@ class RealtimeBridge:
                 "instructions": self._instructions,
                 "output_modalities": ["text"] if self._text_mode else ["audio"],
                 "audio": audio,
-                "tools": ([SEARCH_TOOL] if self.knowledge is not None else [])
-                + ([websearch.TOOL] if s.kurultai_web_search else []),
+                "tools": self._tools_sent,
                 "tool_choice": "auto",
                 **(
                     {"reasoning": {"effort": s.kurultai_realtime_reasoning}}
@@ -360,11 +410,53 @@ class RealtimeBridge:
     async def _refresh_instructions(self) -> None:
         """Материалы, снимок, язык или минута поменялись — новые инструкции до ответа (префикс прежний — кэш)."""
         text = self._build_instructions()
-        if text != self._instructions:
-            self._instructions = text
+        tools = self._tools()
+        if text != self._instructions or tools != self._tools_sent:
+            self._instructions, self._tools_sent = text, tools
             await self._oa_send(
-                {"type": "session.update", "session": {"type": "realtime", "instructions": text}}
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "instructions": text, "tools": tools},
+                }
             )
+
+    async def _create_response(self, extra: str | None = None) -> None:
+        """response.create хода. extra — дополнение (приветствие, предложение проводить, итог поездки): в OpenAI
+        Realtime response.instructions ЗАМЕНЯЕТ инструкции сессии на этот ответ, поэтому уходят полные
+        инструкции + дополнение; оно запоминается и повторяется в продолжении хода после инструмента."""
+        if extra is not None:
+            self._turn_extra = extra
+        msg: dict = {"type": "response.create"}
+        if self._turn_extra:
+            msg["response"] = {"instructions": f"{self._instructions}\n\n{self._turn_extra}"}
+        await self._oa_send(msg)
+
+    # ---------- предложение проводить ----------
+    def _offer(self, where: str) -> str | None:
+        """Дополнение «предложи проводить в …» к этому ходу, если политика разрешает; время фиксируется сразу."""
+        st = self.settings
+        if not st.kurultai_offer_place or self._offered or self._guided or self._navigating:
+            return None
+        place = self._places_available.find(st.kurultai_offer_place)
+        if place is None or not self.offers.due(st.kurultai_offer_min_interval_s):
+            return None
+        self._offered = True
+        self._offer_turn = self.turns
+        self.offers.mark()
+        logger.info(
+            "live_offer",
+            extra={
+                "place_id": place.id,
+                "where": where,
+                "engine": "realtime",
+                "session_id": self.session_id,
+            },
+        )
+        return offer_addition(place.name(self.lang), self.lang)
+
+    def _answer_extra(self) -> str | None:
+        """Предложение проводить — в конце второго (и далее) ответа на вопросы посетителя."""
+        return self._offer("answer") if self._answers >= 1 else None
 
     # ---------- отправка ----------
     async def _oa_send(self, msg: dict) -> None:
@@ -433,18 +525,143 @@ class RealtimeBridge:
             lang = normalize_lang(cmd.get("lang"))
             if lang in ("ru", "kk") and lang != self.lang:
                 self.lang = lang
-                await self._refresh_instructions()
+            if isinstance(cmd.get("places"), list):
+                # точки карты этого робота: предлагаем и возим только туда, где точка реально есть
+                self._places_available = self.places.available(cmd["places"])
+            await self._refresh_instructions()
         elif kind == "visitor_arrived":
-            # тап по лицу: у Курултая по умолчанию молча (KURULTAI_LIVE_GREETING); включено — открыть разговор
+            # тап по лицу: у Курултая по умолчанию молча (KURULTAI_LIVE_GREETING); включено — поздороваться
+            # (и, если политика разрешает, предложить проводить) и открыть разговор
             if getattr(self.chat, "live_greeting", False):
                 self._engage()
+                await self._greet()
         elif kind == "interrupt":
+            if self._navigating:
+                await self._stop_navigation("button")
             await self._cancel("client")
         elif kind == "playback_done":
-            if cmd.get("turn_id") and cmd.get("turn_id") == self._playing_turn:
+            turn_id = cmd.get("turn_id")
+            if turn_id and turn_id == self._playing_turn:
                 self._playing_turn = None
                 self._engage()  # окно разговора — от конца ответа робота
                 await self._robot_json(event("listening"))
+            if turn_id and self._pending_guide and self._pending_guide["turn_id"] == turn_id:
+                await self._fire_guide()  # робот договорил «Пойдёмте, провожу» — теперь едем
+        elif kind == "state":
+            await self._on_state(cmd)
+
+    # ---------- навигация ----------
+    async def _greet(self) -> None:
+        """Приветствие по тапу (KURULTAI_LIVE_GREETING) — ход без реплики посетителя."""
+        if self._bot_busy() or self._navigating:
+            return
+        self._start_turn("", None, kind="greeting")
+        await self._robot_json(event("thinking"))
+        await self._refresh_instructions()
+        offer = self._offer("greeting")
+        await self._create_response(greeting_addition() + (f"\n{offer}" if offer else ""))
+
+    def _guide_to(self, place_id: str) -> dict:
+        """Инструмент guide_to: точка есть — действие откладывается до playback_done хода; нет — список точек."""
+        place = self._places_available.find(place_id)
+        if place is None:
+            return {
+                "ok": False,
+                "error": "unknown place",
+                "places": self._places_available.ids(),
+            }
+        if self._navigating:
+            return {"ok": False, "error": "already navigating", "places": []}
+        accepted = (
+            self._offer_turn is not None
+            and self._offer_turn == self.turns - 1
+            and place.id == self.settings.kurultai_offer_place
+        )
+        self._pending_guide = {
+            "place_id": place.id,
+            "map_name": place.map_name,
+            "turn_id": self._turn_id,
+        }
+        logger.info(
+            "live_guide",
+            extra={
+                "place_id": place.id,
+                "source": "offer_accepted" if accepted else "tool",
+                "turn_id": self._turn_id,
+                "engine": "realtime",
+                "session_id": self.session_id,
+            },
+        )
+        return {"ok": True, "place": place.name("ru")}
+
+    async def _fire_guide(self) -> None:
+        guide, self._pending_guide = self._pending_guide, None
+        if guide is None or self._closed:
+            return
+        self._guided = True
+        await self._robot_json(event("action", type_="guide_to", **guide))
+
+    async def _guide_after(self, turn_id: str | None, delay: float) -> None:
+        """playback_done не пришёл — едем через delay с после turn_end (контракт: 8 с)."""
+        await asyncio.sleep(delay)
+        if self._pending_guide is not None and self._pending_guide["turn_id"] == turn_id:
+            await self._fire_guide()
+
+    async def _stop_navigation(self, source: str) -> None:
+        logger.info(
+            "live_stop_navigation",
+            extra={"source": source, "place_id": self._nav_place_id, "engine": "realtime"},
+        )
+        await self._robot_json(event("action", type_="stop_navigation"))
+
+    async def _on_state(self, cmd: dict) -> None:
+        """Кадр state робота: поездка началась / закончилась (directions и прочие поля — не наше)."""
+        nav = cmd.get("navigating")
+        if not isinstance(nav, bool):
+            return
+        auto = bool(cmd.get("auto", False))
+        if nav:
+            self._navigating = True
+            self._nav_place_id = str(cmd.get("place_id") or "") or None
+            self._nav_auto = auto
+            self._nav_started_at = self._clock()
+            self._pending_guide = None
+            if not auto:
+                self._guided = True
+            return
+        if not self._navigating:
+            return
+        self._navigating = False
+        place_id = str(cmd.get("place_id") or self._nav_place_id or "")
+        result = str(cmd.get("result") or "unknown")
+        reason = cmd.get("reason")
+        started = self._nav_started_at
+        auto = auto or self._nav_auto
+        logger.info(
+            "live_navigation_result",
+            extra={
+                "place_id": place_id,
+                "result": result,
+                "reason": str(reason) if reason else None,
+                "seconds": round(self._clock() - started, 1) if started is not None else None,
+                "auto": auto,
+                "engine": "realtime",
+                "session_id": self.session_id,
+            },
+        )
+        if auto:
+            return  # авто-возврат на пост: робот молчит
+        place = self.places.find(place_id, targets_only=False)
+        name = place.name(self.lang) if place is not None else place_id
+        if self._bot_busy():
+            await self._cancel("navigation_result")
+        self._start_turn("", None, kind="navigation")
+        await self._robot_json(event("thinking"))
+        await self._refresh_instructions()
+        await self._create_response(
+            navigation_addition(name, result, str(reason) if reason else None)
+        )
+        self._engage()  # после поездки окно разговора открыто
 
     # ---------- OpenAI → робот ----------
     async def _openai_supervisor(self) -> None:
@@ -507,7 +724,7 @@ class RealtimeBridge:
         if kind.startswith("response.") and self._is_warmup(msg):
             return
         if kind == "input_audio_buffer.speech_started":
-            if not self._bot_busy():
+            if not self._bot_busy() and not self._navigating:
                 await self._robot_json(event("user_speaking"))
         elif kind == "input_audio_buffer.speech_stopped":
             self._speech_end_at = self._clock()
@@ -582,7 +799,7 @@ class RealtimeBridge:
     async def _on_committed(self, item_id: str) -> None:
         """Конец фразы. Робот молчит → ответ начинается сразу, не дожидаясь расшифровки (−0,3…0,8 с):
         в окне разговора — как обычно; вне окна — «ставка»: фразы держатся до подтверждения обращения."""
-        if not item_id or self._bot_busy():
+        if not item_id or self._bot_busy() or self._navigating:
             return
         engaged = self._engaged()
         st = self.settings
@@ -596,10 +813,29 @@ class RealtimeBridge:
         if not self._gated:
             await self._robot_json(event("thinking"))
         await self._refresh_instructions()
-        await self._oa_send({"type": "response.create"})
+        # предложение — только в подтверждённом окне разговора («ставка» может и не прозвучать)
+        await self._create_response(None if self._gated else self._answer_extra())
 
     async def _on_utterance(self, item_id: str, text: str) -> None:
         text = text.strip()
+        if self._navigating:
+            # в поездке не отвечаем: только «стоп / тоқта / хватит» останавливает робота
+            if item_id and item_id == self._early_item:
+                self._early_item = None
+                await self._cancel("navigating")
+            await self._delete(item_id)
+            if not has_letters(text):
+                return
+            await self._robot_json(event("user_final", text=text, lang=self.lang))
+            if is_stop_command(text):
+                await self._stop_navigation("voice")
+            else:
+                logger.info(
+                    "live_ignored_navigating", extra={"chars": len(text), "engine": "realtime"}
+                )
+                await self._robot_json(event("ignored", reason="navigating"))
+            await self._robot_json(event("listening"))
+            return
         if item_id and item_id == self._early_item:  # ответ уже сочиняется — решаем по расшифровке
             self._early_item = None
             gated = self._gated
@@ -652,7 +888,7 @@ class RealtimeBridge:
             await self._robot_json(event("user_final", text=text, lang=self.lang))
             await self._robot_json(event("thinking"))
             await self._refresh_instructions()
-            await self._oa_send({"type": "response.create"})
+            await self._create_response(self._answer_extra())
             return
         stt_ms = self._since_speech_end()
         await self._robot_json(event("user_final", text=text, lang=self.lang))
@@ -665,7 +901,7 @@ class RealtimeBridge:
         self._start_turn(text, stt_ms)
         await self._robot_json(event("thinking"))
         await self._refresh_instructions()
-        await self._oa_send({"type": "response.create"})
+        await self._create_response(self._answer_extra())
 
     @staticmethod
     def _is_noise(text: str) -> bool:
@@ -688,10 +924,12 @@ class RealtimeBridge:
             return None
         return max(0, int((self._clock() - self._speech_end_at) * 1000))
 
-    def _start_turn(self, question: str, stt_ms: int | None) -> None:
+    def _start_turn(self, question: str, stt_ms: int | None, kind: str = "answer") -> None:
         self._turn_id = new_turn_id()
         self._request_id = new_request_id()
         self._turn_open = True
+        self._turn_kind = kind
+        self._turn_extra = None
         self._dropping = False
         self._question, self._answer, self._phrase_buf = question, "", ""
         self._phrases_in_turn = 0
@@ -872,6 +1110,11 @@ class RealtimeBridge:
         if self._text_mode and self._speech is not None:
             await self._on_text("", final=True)
             if not ok and self._phrases_in_turn == 0:
+                if self._turn_kind != "answer":
+                    self._speech.put_nowait(
+                        None
+                    )  # приветствие / итог поездки не вышли — ход молча кончается
+                    return
                 # OpenAI не ответил (лимит токенов в минуту и т. п.) — эту реплику отвечает старая цепочка
                 if self._gated or not self._question:
                     self._fallback_pending = True  # ждём расшифровку (и подтверждение обращения)
@@ -911,24 +1154,27 @@ class RealtimeBridge:
                 logger.info(
                     "realtime_web_search", extra={"ms": int((self._clock() - started) * 1000)}
                 )
+            elif name == "guide_to":
+                result = self._guide_to(str(args.get("place_id") or ""))
             else:
                 result = "Неизвестный инструмент."
             if not self._turn_open:  # пока искали, ответ отменили («стоп», сон)
                 return
+            output = result if isinstance(result, dict) else {"result": result}
             await self._oa_send(
                 {
                     "type": "conversation.item.create",
                     "item": {
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": json.dumps({"result": result}, ensure_ascii=False),
+                        "output": json.dumps(output, ensure_ascii=False),
                     },
                 }
             )
         if self._turn_open:
             # продолжение после инструмента — новый ответ модели, он тоже начинается с тега эмоции
             self._emotion_pending = True
-            await self._oa_send({"type": "response.create"})
+            await self._create_response()
 
     async def _end_turn(self, ok: bool) -> None:
         turn_id = self._turn_id
@@ -944,11 +1190,22 @@ class RealtimeBridge:
             started = self._first_audio_at if self._first_audio_at is not None else self._clock()
             self._playing_until = started + self._audio_bytes / (OA_RATE * 2) + 3.0
             await self._robot_json(event("turn_end", turn_id=turn_id, lang=self.lang, found=True))
+        if self._turn_kind == "answer" and self._phrases_in_turn > 0:
+            self._answers += 1
+        if self._pending_guide is not None and self._pending_guide["turn_id"] == turn_id:
+            if self._first_audio_at is None:
+                await self._fire_guide()  # сказать было нечего — едем сразу
+            else:
+                self._spawn(
+                    self._guide_after(turn_id, self.settings.kurultai_guide_playback_timeout_s),
+                    "realtime_guide_timer",
+                )
         logger.info(
             "live_answered",
             extra={
                 "engine": "realtime",
                 "output": "text+elevenlabs" if self._text_mode else "openai_voice",
+                "kind": self._turn_kind,
                 "question": self._question[:500],
                 "answer": self._answer[:1000],
                 "lang": self.lang,
@@ -976,6 +1233,7 @@ class RealtimeBridge:
         had_audio = self._first_audio_at is not None
         self._turn_open = False
         self._playing_turn = None
+        self._pending_guide = None  # «Пойдёмте, провожу» перебили — не едем
         self._early_item = None
         self._gated, self._held, self._fallback_pending = False, [], False
         if had_audio or reason in ("stop", "client"):
