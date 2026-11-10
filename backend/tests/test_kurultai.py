@@ -825,7 +825,8 @@ def test_smalltalk_skips_web_search() -> None:
 # ---------- имя робота: Ақылтай ----------
 def test_kurultai_name_in_persona_rules_and_greetings():
     out = prompts.kurultai_instructions("")
-    assert "Тебя зовут Ақылтай" in out and "«Я Акылтай, ИИ-помощник Курултая" in out
+    assert "Тебя зовут Ақылтай" in out and "«Я Акылтай, помощник Курултая" in out
+    assert "не говори «слышу вас»" in out  # бессмысленная фраза — переспросить, а не заготовка
     assert "обращаются по имени" in out  # обращение по имени — всегда к роботу, не «не мне»
     assert all("Акылтай" in g for g in prompts.GREETINGS["ru"])
     assert all("Ақылтай" in g for g in prompts.GREETINGS["kk"])
