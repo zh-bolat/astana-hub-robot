@@ -68,7 +68,8 @@ def openrouter_complete(
             "model": settings.kurultai_materials_model,
             "messages": messages,
             "temperature": 0,
-            "max_tokens": 32_000,
+            "max_tokens": 16_000,  # справка ≤ 8 тыс. знаков, OCR скана — больше; OpenRouter резервирует
+            # стоимость max_tokens заранее: при малом остатке на ключе 32k давали 402 даже на короткие документы
         }
         if response_format is not None:
             kw["response_format"] = response_format
