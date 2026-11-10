@@ -446,5 +446,17 @@ class KurultaiChunkRow(Base):
     updated_at: Mapped[datetime] = _now()
 
 
+class KurultaiRuntimeSettingRow(Base):
+    """Переключатели вкладки «Робот и настройки» (docs/kurultai/robot-settings.md): live_engine, noise_mode.
+    Нет строки — значение по умолчанию из .env (app/kurultai/runtime_settings.py). updated_by — IP робота."""
+
+    __tablename__ = "kurultai_runtime_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = _now()
+    updated_by: Mapped[str | None] = mapped_column(Text)
+
+
 # Таблицы, которые очищаются в тестах (порядок не важен — TRUNCATE ... CASCADE)
 ALL_TABLES = [t.name for t in Base.metadata.sorted_tables]

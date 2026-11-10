@@ -37,6 +37,7 @@ EXPECTED_TABLES = {
     "question_log",
     "feedback",
     "latency_events",
+    "kurultai_runtime_settings",
 }
 
 # Таблица question_log, как её создавал ручной migrate() до Alembic (create_all + ALTER)
@@ -92,7 +93,7 @@ def test_upgrade_from_empty_db_is_idempotent_and_matches_models():
     with temp_database() as url:
         upgrade_head(url)
         upgrade_head(url)  # повторно — без ошибок и изменений
-        assert current_revision(url) == head_revision() == "0006_kurultai_chunks"
+        assert current_revision(url) == head_revision() == "0007_kurultai_runtime_settings"
         tables = set(inspect(create_engine(url)).get_table_names())
         assert tables >= EXPECTED_TABLES
         assert _diff(url) == []  # модели и миграции совпадают

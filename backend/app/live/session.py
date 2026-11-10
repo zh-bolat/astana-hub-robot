@@ -98,6 +98,9 @@ class LiveRegistry:
     def __len__(self) -> int:
         return len(self._sessions)
 
+    def all(self) -> list[LiveSession]:
+        return list(self._sessions.values())
+
 
 class LiveSession:
     def __init__(self, ws: WebSocket, key: str, session_id: str, lang: Lang) -> None:
@@ -117,8 +120,9 @@ class LiveSession:
         self.close_code = 1000
         self.close_reason = ""
         self.bridge: Any = (
-            None  # Курултай, KURULTAI_LIVE_ENGINE=realtime: мост к OpenAI Realtime вместо пайплайна
+            None  # Курултай, движок realtime: мост к OpenAI Realtime вместо пайплайна
         )
+        self.noise_mode = "normal"  # режим зала Курултая (docs/kurultai/robot-settings.md)
 
     async def stop(
         self, ended_by: str, code: int = 1000, reason: str = "", error: dict | None = None
@@ -188,6 +192,7 @@ class LiveSession:
             warmup=services.warmup if s.live_tts_warmup != "off" else None,
             pronunciations=s.knowledge_dir / "pronunciations.yaml",
             tts_text=services.tts_text,
+            noise_mode=self.noise_mode,
         )
         self.conversation = conv
         if self.profile == KURULTAI and isinstance(services.stt, SegmentedProviderSTT):
@@ -357,11 +362,25 @@ async def _reject(ws: WebSocket, code: str, message: str, close_code: int) -> No
         pass
 
 
-async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
-    """Курултай с KURULTAI_LIVE_ENGINE=realtime: сессия через OpenAI Realtime (docs/kurultai/realtime-voice.md).
-    False — не тот профиль, движок или OpenAI недоступен: дальше обычный пайплайн."""
+def kurultai_runtime(app, session: LiveSession) -> tuple[str, str]:
+    """(движок, режим зала) для новой сессии: у Курултая — из настроек вкладки робота
+    (app.state.kurultai_runtime, docs/kurultai/robot-settings.md), .env — умолчание; у хаба — pipeline/normal."""
     settings = app.state.settings
-    if session.profile != KURULTAI or settings.kurultai_live_engine != "realtime":
+    if session.profile != KURULTAI:
+        return "pipeline", "normal"
+    runtime = getattr(app.state, "kurultai_runtime", None)
+    if runtime is None:
+        return settings.kurultai_live_engine, settings.kurultai_noise_mode
+    return runtime.live_engine, runtime.noise_mode
+
+
+async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
+    """Курултай с движком realtime (вкладка робота / KURULTAI_LIVE_ENGINE): сессия через OpenAI Realtime
+    (docs/kurultai/realtime-voice.md). False — не тот профиль, движок или OpenAI недоступен: дальше обычный
+    пайплайн."""
+    settings = app.state.settings
+    engine, noise_mode = kurultai_runtime(app, session)
+    if engine != "realtime":
         return False
     from app.kurultai.realtime.bridge import RealtimeBridge
 
@@ -386,6 +405,7 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
         places=getattr(app.state, "kurultai_places", None),
         offers=getattr(app.state, "kurultai_offers", None),
         health=health,
+        noise_mode=noise_mode,
     )
     if not await bridge.connect():
         logger.warning(
@@ -402,6 +422,7 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
             "session_id": session.session_id,
             "lang": session.lang,
             "engine": "realtime",
+            "noise_mode": noise_mode,
             **session._profile_extra(),
         },
     )
@@ -456,12 +477,14 @@ async def live(
             await _reject(ws, "speech_unavailable", "Speech provider is unavailable", 1011)
             return
         await ws.accept()
+        session.noise_mode = kurultai_runtime(app, session)[1]
         logger.info(
             "live_session_opened",
             extra={
                 "session_id": session_id,
                 "lang": session.lang,
                 "active": len(registry),
+                "noise_mode": session.noise_mode,
                 **session._profile_extra(),
             },
         )

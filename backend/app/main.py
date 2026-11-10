@@ -37,6 +37,7 @@ from app.kurultai.materials.store import MaterialsStore, openrouter_complete
 from app.kurultai.materials.structure import Complete
 from app.kurultai.quryltai import QuryltaiSync
 from app.kurultai.rag.knowledge import KurultaiKnowledge
+from app.kurultai.settings_api import router as kurultai_settings_router
 from app.live.services import LiveServicesFactory, build_live_services
 from app.live.session import LiveRegistry, route_pipecat_logs
 from app.live.session import router as live_router
@@ -276,6 +277,9 @@ def create_app(
     kurultai_chat: KurultaiChatService | None = None
     kurultai_knowledge: KurultaiKnowledge | None = None
     realtime_tts_provider: Any = None  # голос Dmitry для Realtime-гибрида (один клиент на сервер)
+    voice_credits: Any = (
+        None  # остаток ElevenLabs для вкладки робота (app/kurultai/voice_credits.py)
+    )
     if settings.kurultai_enabled():
         if quryltai is None:
             quryltai = QuryltaiSync(
@@ -293,8 +297,13 @@ def create_app(
         except Exception:
             logger.exception("kurultai_materials_recover_failed")
         # знания для Realtime через поиск (app/kurultai/rag): свой индекс kurultai_chunks, эмбеддинги — те же;
-        # у старой цепочки (pipeline) поиска нет — индекс и эмбеддинги зря не считаем
-        if settings.kurultai_rag and settings.kurultai_live_engine == "realtime":
+        # без ключа OpenAI Realtime невозможен — индекс и эмбеддинги зря не считаем. Движок переключается во
+        # вкладке робота без перезапуска (app.state.kurultai_runtime), поэтому готовим всё, когда ключ есть
+        realtime_possible = (
+            bool(secret_text(settings.kurultai_openai_api_key))
+            or settings.kurultai_live_engine == "realtime"
+        )
+        if settings.kurultai_rag and realtime_possible:
             k_embedder = kurultai_embedder if kurultai_embedder is not None else embedder
             if k_embedder is None and settings.resolved_embedding_provider() != "off":
                 k_embedder = build_embedder(settings)
@@ -308,10 +317,7 @@ def create_app(
             kurultai_materials.on_change = (
                 kurultai_knowledge.request_reindex
             )  # публикация → в поиск сразу
-        if (
-            settings.kurultai_live_engine == "realtime"
-            and settings.kurultai_realtime_output == "text"
-        ):
+        if realtime_possible and settings.kurultai_realtime_output == "text":
             # один HTTP-клиент ElevenLabs на сервер, а не на каждое подключение робота (закрывается в lifespan)
             from app.kurultai.realtime.bridge import elevenlabs_provider
 
@@ -389,6 +395,7 @@ def create_app(
                 quryltai,
                 embedder,
                 realtime_tts_provider,
+                voice_credits,
             )
             await asyncio.to_thread(log_writer.close, 3.0)
             engine.dispose()
@@ -414,14 +421,21 @@ def create_app(
     app.state.realtime_health = RealtimeHealth(
         settings.kurultai_realtime_retry_s, settings.kurultai_realtime_retry_max_s
     )
+    app.state.kurultai_runtime = None  # переключатели вкладки робота (только профиль kurultai)
+    app.state.kurultai_voice_credits = None
     if settings.kurultai_enabled():
         # навигация Realtime (docs/kurultai/navigation.md): точки карты и общий на процесс интервал предложений
         from app.kurultai.offers import OfferPolicy
         from app.kurultai.places import FILE_NAME as PLACES_FILE
         from app.kurultai.places import load_places
+        from app.kurultai.runtime_settings import RuntimeSettings
+        from app.kurultai.voice_credits import VoiceCredits
 
         app.state.kurultai_places = load_places(settings.knowledge_dir / PLACES_FILE)
         app.state.kurultai_offers = OfferPolicy()
+        # движок и режим зала из БД (docs/kurultai/robot-settings.md), .env — умолчание
+        app.state.kurultai_runtime = RuntimeSettings(engine, settings)
+        app.state.kurultai_voice_credits = voice_credits = VoiceCredits(settings)
     if realtime_tts_provider is not None:
         app.state.realtime_tts = realtime_tts_provider.tts_stream
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_min)
@@ -461,6 +475,9 @@ def create_app(
     app.include_router(
         kurultai_diag_router
     )  # /v1/robot/diag — диагностика робота Курултая в журнал
+    app.include_router(
+        kurultai_settings_router
+    )  # /v1/robot/settings — переключатели вкладки робота
     # Порядок: RequestContext (внешний, request_id) → Guard (токен и лимит тела) → FastAPI
     app.add_middleware(GuardMiddleware, settings=settings)
     app.add_middleware(

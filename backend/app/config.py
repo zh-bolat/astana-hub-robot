@@ -265,6 +265,10 @@ class Settings(BaseSettings):
     # realtime — OpenAI Realtime «голос в голос» (app/kurultai/realtime/bridge.py), протокол робота тот же.
     # Без ключа OpenAI или при ошибке подключения — pipeline.
     kurultai_live_engine: Literal["pipeline", "realtime"] = "pipeline"
+    # Режим зала (docs/kurultai/robot-settings.md): noisy — перебить можно только «стоп», детектор речи грубее
+    # (server_vad 0.7 / 600 мс), ответ — только когда перед роботом стоит человек (hello/state person_present).
+    # Оба значения — умолчания: выбранные во вкладке робота хранятся в БД (app/kurultai/runtime_settings.py).
+    kurultai_noise_mode: Literal["normal", "noisy"] = "normal"
     kurultai_openai_api_key: SecretStr = Field(default=SecretStr(""))
     kurultai_realtime_url: str = "wss://api.openai.com/v1/realtime"
     kurultai_realtime_model: str = "gpt-realtime-2.1"

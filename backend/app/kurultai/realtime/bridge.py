@@ -113,6 +113,9 @@ _CLAUSE = re.compile(
     r"(.{25,}?[,;:—])(\s+)", re.S
 )  # первая фраза ответа: режем по запятой — голос раньше
 
+# Детектор речи в режиме noisy (docs/kurultai/robot-settings.md): стартовые пороги, подбирать по логам шумного дня
+NOISY_VAD = {"threshold": 0.7, "prefix_padding_ms": 300, "silence_duration_ms": 600}
+
 Connector = Callable[..., Awaitable[Any]]
 TtsStream = Callable[[str, Lang], AsyncIterator[bytes]]
 
@@ -174,9 +177,17 @@ class RealtimeBridge:
         offers: OfferPolicy | None = None,
         health: Any = None,
         clock: Callable[[], float] = time.monotonic,
+        noise_mode: str = "normal",
     ) -> None:
         self.ws = ws
         self.settings = settings
+        # режим зала (docs/kurultai/robot-settings.md): noisy — перебивание только «стоп», server_vad грубее,
+        # ответ только при человеке перед роботом (hello/state person_present; None — старое приложение: есть)
+        self.noise_mode = noise_mode
+        self._stop_only = (
+            settings.kurultai_realtime_barge_in == "stop_only" or noise_mode == "noisy"
+        )
+        self._person_present: bool | None = None
         # предохранитель (app/kurultai/realtime/health.py): отказ OpenAI → сессии идут старой цепочкой
         self.health = health
         self.connect_error = ""  # почему не подключились (код OpenAI / тип исключения) — для health
@@ -439,9 +450,17 @@ class RealtimeBridge:
     def _turn_detection(self) -> dict:
         """Конец реплики — у OpenAI; ответ сам не создаётся и речь его не обрывает: решает сервер."""
         st = self.settings
-        if st.kurultai_realtime_turn_detection == "semantic_vad":
+        if self.noise_mode == "noisy":
+            # шумный зал: грубый детектор — короткие всплески и дальняя речь концом реплики не считаются
+            td: dict = {
+                "type": "server_vad",
+                "threshold": NOISY_VAD["threshold"],
+                "prefix_padding_ms": NOISY_VAD["prefix_padding_ms"],
+                "silence_duration_ms": NOISY_VAD["silence_duration_ms"],
+            }
+        elif st.kurultai_realtime_turn_detection == "semantic_vad":
             # по смыслу: пауза «э-э…» посреди фразы не считается концом реплики
-            td: dict = {"type": "semantic_vad", "eagerness": st.kurultai_realtime_eagerness}
+            td = {"type": "semantic_vad", "eagerness": st.kurultai_realtime_eagerness}
         else:
             td = {
                 "type": "server_vad",
@@ -566,6 +585,8 @@ class RealtimeBridge:
         if kind == "hello":
             if isinstance(cmd.get("aec"), bool):
                 self._robot_aec = cmd["aec"]
+            if isinstance(cmd.get("person_present"), bool):
+                self._person_present = cmd["person_present"]
             lang = normalize_lang(cmd.get("lang"))
             if lang in ("ru", "kk") and lang != self.lang:
                 self.lang = lang
@@ -659,7 +680,10 @@ class RealtimeBridge:
         await self._robot_json(event("action", type_="stop_navigation"))
 
     async def _on_state(self, cmd: dict) -> None:
-        """Кадр state робота: поездка началась / закончилась (directions и прочие поля — не наше)."""
+        """Кадр state робота: человек перед роботом (person_present), поездка началась / закончилась
+        (directions и прочие поля — не наше)."""
+        if isinstance(cmd.get("person_present"), bool):
+            self._person_present = cmd["person_present"]
         nav = cmd.get("navigating")
         if not isinstance(nav, bool):
             return
@@ -857,6 +881,18 @@ class RealtimeBridge:
             return True
         return False
 
+    def _no_person(self) -> bool:
+        """Режим noisy и приложение сообщило, что перед роботом никого: реплики не отвечаем (кроме «стоп»)."""
+        return self.noise_mode == "noisy" and self._person_present is False
+
+    async def _ignore_no_person(self, item_id: str, text: str) -> None:
+        await self._delete(item_id)
+        if has_letters(text):
+            await self._robot_json(event("user_final", text=text, lang=self.lang))
+        logger.info("live_ignored_no_person", extra={"chars": len(text), "engine": "realtime"})
+        await self._robot_json(event("ignored", reason="no_person"))
+        await self._robot_json(event("listening"))
+
     async def _delete(self, item_id: str) -> None:
         if item_id:
             await self._oa_send({"type": "conversation.item.delete", "item_id": item_id})
@@ -864,7 +900,7 @@ class RealtimeBridge:
     async def _on_committed(self, item_id: str) -> None:
         """Конец фразы. Робот молчит → ответ начинается сразу, не дожидаясь расшифровки (−0,3…0,8 с):
         в окне разговора — как обычно; вне окна — «ставка»: фразы держатся до подтверждения обращения."""
-        if not item_id or self._bot_busy() or self._navigating:
+        if not item_id or self._bot_busy() or self._navigating or self._no_person():
             return
         engaged = self._engaged()
         st = self.settings
@@ -904,12 +940,12 @@ class RealtimeBridge:
         if item_id and item_id == self._early_item:  # ответ уже сочиняется — решаем по расшифровке
             self._early_item = None
             gated = self._gated
-            addressed = (
-                has_letters(text)
-                and not is_stop_command(text)
-                and not self._is_noise(text)
-                and (not gated or self.chat.addressed(text))
-            )
+            speech = has_letters(text) and not is_stop_command(text) and not self._is_noise(text)
+            if speech and self._no_person():  # человек ушёл, пока фраза расшифровывалась
+                await self._cancel("no_person")
+                await self._ignore_no_person(item_id, text)
+                return
+            addressed = speech and (not gated or self.chat.addressed(text))
             if not addressed:
                 await self._cancel("not_addressed" if gated else ("stop" if text else "noise"))
                 await self._delete(item_id)
@@ -944,7 +980,7 @@ class RealtimeBridge:
                 await self._delete(item_id)
                 await self._cancel("stop")
                 return
-            if self.settings.kurultai_realtime_barge_in != "speech" or not self._real_speech(text):
+            if self._stop_only or not self._real_speech(text):
                 await self._delete(item_id)
                 return
             await self._cancel("barge_in")
@@ -954,6 +990,9 @@ class RealtimeBridge:
             await self._robot_json(event("thinking"))
             await self._refresh_instructions()
             await self._create_response(self._answer_extra())
+            return
+        if self._no_person() and not is_stop_command(text):
+            await self._ignore_no_person(item_id, text)
             return
         stt_ms = self._since_speech_end()
         await self._robot_json(event("user_final", text=text, lang=self.lang))
@@ -1310,8 +1349,8 @@ class RealtimeBridge:
         if had_audio or reason in ("stop", "client"):
             await self._robot_json(event("interrupted", turn_id=turn_id))
         await self._robot_json(event("listening"))
-        if reason in ("not_addressed", "noise"):  # «ставка» не сыграла — робот ничего не говорил
-            return
+        if reason in ("not_addressed", "noise") or (reason == "no_person" and not had_audio):
+            return  # «ставка» не сыграла — робот ничего не говорил
         logger.info("realtime_interrupted", extra={"reason": reason})
         if was_open:
             self._record(ok=True, interrupted=True)

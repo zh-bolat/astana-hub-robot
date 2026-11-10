@@ -237,6 +237,7 @@ class LiveConversation(FrameProcessor):
         warmup: Callable[[Lang], Awaitable[None]] | None = None,
         pronunciations: Path | None = None,
         tts_text: Callable[[str, Lang], str] | None = None,
+        noise_mode: str = "normal",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -246,6 +247,10 @@ class LiveConversation(FrameProcessor):
         self.lang: Lang = lang
         self.place_id: str | None = None
         self.navigating = False
+        # режим зала Курултая (docs/kurultai/robot-settings.md): noisy — отвечать, только когда перед роботом
+        # человек (hello/state person_present; None — старое приложение, считаем, что есть); «стоп» работает всегда
+        self.noise_mode = noise_mode
+        self.person_present: bool | None = None
         # последний набор state.directions и когда пришёл (time.monotonic())
         self._directions: dict[str, dict[str, str]] = {}
         self._directions_at: float | None = None
@@ -648,6 +653,16 @@ class LiveConversation(FrameProcessor):
         else:
             lang = utterance_lang(text, stt_lang, self.lang)
         await self.send_now(event("user_final", text=text, lang=lang))
+        if (
+            self.noise_mode == "noisy"
+            and self.person_present is False
+            and not is_stop_command(text)
+        ):
+            self.stats.ignored += 1
+            logger.info("live_ignored_no_person", extra={"chars": len(text)})
+            await self.send_now(event("ignored", reason="no_person"))
+            await self.send_now(event("listening"))
+            return
         if not self._addressed(text):
             # Курултай: к роботу не обращались и разговора нет — модель не зовём, робот слушает дальше
             self.stats.ignored += 1
@@ -957,6 +972,8 @@ class LiveConversation(FrameProcessor):
             self._set_place(msg.get("place_id"))
             if isinstance(msg.get("aec"), bool):
                 self.echo_gate.aec = msg["aec"]
+            if isinstance(msg.get("person_present"), bool):
+                self.person_present = msg["person_present"]
         elif kind == "visitor_arrived":
             await self.greet()
         elif kind == "interrupt":
@@ -966,6 +983,8 @@ class LiveConversation(FrameProcessor):
             await self._on_playback_done(str(msg.get("turn_id") or ""))
         elif kind == "state":  # поля независимы: каждое — только если пришло
             self._set_place(msg.get("place_id"))
+            if isinstance(msg.get("person_present"), bool):
+                self.person_present = msg["person_present"]
             if isinstance(msg.get("navigating"), bool):
                 self.navigating = msg["navigating"]
             directions = parse_directions(msg.get("directions"))
