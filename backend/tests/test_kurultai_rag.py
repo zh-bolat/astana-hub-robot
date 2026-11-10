@@ -136,3 +136,27 @@ def test_request_reindex_wakes_loop_and_material_chunks(db, monkeypatch):
             await task
 
     asyncio.run(run())
+
+
+def test_summary_keeps_todays_briefs_when_there_are_many_materials(db):
+    """83 материала (10.11.2026): заголовки не должны вытеснять справки сегодняшнего заседания; новая версия
+    повестки — раньше старой; остальное — заголовками и числом."""
+    today = date.today()
+    _material(
+        db,
+        title="Повестка (старая версия)",
+        brief="Докладчик по энергетике — Годунова.",
+        event_date=today,
+    )
+    for i in range(90):
+        _material(db, title=f"Документ номер {i} с довольно длинным официальным названием и уточнениями",
+                  kind="reference", brief="Текст справки. " * 40, event_date=today if i % 2 else None)  # fmt: skip
+    _material(db, title="Заседание сегодня — главное (актуальная версия)", kind="agenda",
+              brief="Докладчик по энергетике — министр энергетики Аккенженов. " * 30, event_date=today)  # fmt: skip
+    text = KurultaiKnowledge(db, None, Q(fixture_data())).summary()
+    assert "Аккенженов" in text and "Годунова" in text
+    assert text.index("Аккенженов") < text.index(
+        "Докладчик по энергетике — Годунова"
+    )  # новая версия выше старой
+    assert "и ещё" in text and "через search_kurultai" in text
+    assert len(text) <= 12000 + 200

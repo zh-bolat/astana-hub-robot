@@ -34,18 +34,22 @@ ANSWER_TIMEOUT_S = 25.0
 PAUSE_AFTER_S = 1.5  # тишина после ответа, прежде чем задать следующий вопрос
 
 QUESTIONS = [
-    ("ru", "Сколько комитетов в Курултае?"),
-    ("ru", "Кто докладывает по закону об альтернативной энергетике на пленарном заседании?"),
-    ("ru", "Что будет на пленарном заседании 11 ноября?"),
-    ("ru", "Что такое Правительственный час?"),
-    ("ru", "Какие законопроекты сейчас на рассмотрении?"),
-    ("ru", "Как гражданину подать обращение в Курултай?"),
-    ("ru", "Кто председатель комитета по международным делам?"),
-    ("ru", "Какая сегодня погода в Астане?"),
-    ("kk", "Құрылтайда неше комитет бар?"),
-    ("kk", "Он бірінші қарашадағы пленарлық отырыста не қаралады?"),
-    ("kk", "Қазір қандай заң жобалары қаралып жатыр?"),
-    ("kk", "Азамат Құрылтайға өтінішті қалай береді?"),
+    # пленарное заседание 11.11.2026 — эталон: повестка («1. Повестка дня 11.11.2026.doc»), хронометраж, анонс
+    ("ru", "Во сколько сегодня начинается заседание Курултая и сколько пунктов в повестке?"),
+    ("ru", "Кто докладывает по избранию судьи Верховного Суда Ескендирова?"),
+    ("ru", "Кто выступит с отчётом Высшей аудиторской палаты и кто содокладчик?"),
+    ("ru", "Сколько времени отведено на вопросы и ответы по отчёту ВАП?"),
+    ("ru", "Кто докладывает по законопроекту об альтернативных источниках энергии?"),
+    ("ru", "Что сегодня рассмотрят про Молодёжный совет и кто докладчик?"),
+    ("ru", "Когда примерно закончится заседание?"),
+    ("ru", "Где можно посмотреть трансляцию заседания?"),
+    ("ru", "Будет ли брифинг после заседания и кто спикеры?"),
+    ("ru", "Что Курултай рекомендует Правительству по итогам отчёта ВАП?"),
+    ("ru", "Кто ты?"),
+    ("ru", "Абырвалг тыкдык пырмше."),
+    ("ru", "Проводи меня в музей."),
+    ("kk", "Бүгінгі отырыс сағат нешеде басталады және күн тәртібінде не бар?"),
+    ("kk", "Жастар кеңесі туралы мәселені кім баяндайды?"),
 ]
 
 
@@ -83,6 +87,8 @@ class Turn:
         self.turn_end_ms: int | None = None
         self.answer: list[str] = []
         self.ignored = ""
+        self.emotion = ""
+        self.action = ""
         self.error = ""
         self.done = asyncio.Event()
 
@@ -130,12 +136,18 @@ class Robot:
                 t.final_ms, t.final_text = t.since(), ev.get("text", "")
             elif kind == "phrase":
                 t.answer.append(ev.get("text", ""))
+            elif kind == "emotion":
+                t.emotion = ev.get("name", "")
+            elif kind == "action":
+                t.action = f"{ev.get('type_')} → {ev.get('place_id')} ({ev.get('map_name')})"
             elif kind == "ignored":
                 t.ignored = ev.get("reason", "ignored")
                 t.done.set()
             elif kind == "turn_end":
                 t.turn_end_ms = t.since()
                 t.done.set()
+                # робот «доиграл» ответ — по этому кадру сервер шлёт отложенное действие (guide_to)
+                await ws.send(json.dumps({"type": "playback_done", "turn_id": ev.get("turn_id")}))
             elif kind == "error":
                 t.error = json.dumps(ev.get("error"), ensure_ascii=False)
                 t.done.set()
@@ -172,8 +184,8 @@ async def run_session(ws, lang: str, texts: list[str], clips: dict[str, bytes]) 
         if not t.done.is_set():
             t.error = t.error or f"нет turn_end за {ANSWER_TIMEOUT_S:.0f} с"
         turns.append(t)
-        print(fmt(t), flush=True)
         await _silence(ws, PAUSE_AFTER_S)
+        print(fmt(t), flush=True)
         robot.current = None
     reader_task.cancel()
     return turns
@@ -187,9 +199,13 @@ def fmt(t: Turn) -> str:
     if t.error and t.first_audio_ms is None:
         return head + f"\n    ОШИБКА: {t.error}"
     answer = " ".join(" ".join(t.answer).split())
+    extra = (f" · эмоция: {t.emotion}" if t.emotion else " · эмоция: —") + (
+        f" · действие: {t.action}" if t.action else ""
+    )
     return (
         head
-        + f"\n    первый звук {ms(t.first_audio_ms)}, конец {ms(t.turn_end_ms)}\n    ответ: {answer}"
+        + f"\n    первый звук {ms(t.first_audio_ms)}, конец {ms(t.turn_end_ms)}, знаков {len(answer)}{extra}"
+        + f"\n    ответ: {answer}"
     )
 
 

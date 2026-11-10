@@ -16,8 +16,12 @@ from app.db.models import KurultaiMaterialRow
 from app.kurultai.materials import structure as st
 from app.kurultai.quryltai import ASTANA_TZ, _int, _list, _one_line, _text, format_time, status_name
 
-SUMMARY_CHARS = 9000
+SUMMARY_CHARS = 12000
 UPCOMING_DAYS = 7
+BRIEFS_SHARE = (
+    0.65  # доля бюджета материалов под полные справки ближайших событий; остальное — заголовки
+)
+TITLE_CHARS = 90
 
 
 def _chair(committee: dict) -> str:
@@ -63,26 +67,59 @@ def snapshot_summary(data: dict | None) -> str:
 
 
 def materials_summary(rows: list[KurultaiMaterialRow], now: datetime, budget: int) -> str:
+    """Материалы для промпта. Сначала — ПОЛНЫЕ справки ближайших событий (сегодняшнее заседание отвечается сразу,
+    без поиска): ближайшее событие первым, у одного события — повестки раньше прочего, новая версия раньше старой.
+    Потом — заголовки остальных документов, сколько влезет (10.11.2026: 83 материала, список заголовков съедал
+    весь бюджет, и ни одна справка в промпт не попадала — робот искал даже время начала заседания)."""
     if not rows:
         return ""
     today = now.astimezone(ASTANA_TZ).date()
-    soon = [r for r in rows if r.event_date and today - timedelta(days=1) <= r.event_date <= today + timedelta(
-        days=UPCOMING_DAYS)]  # fmt: skip
-    soon.sort(key=lambda r: (r.event_date, r.kind != "agenda", r.id))
-    head = [
-        "Материалы аппарата Курултая (главный источник о заседаниях; подробности — через search_kurultai):"
+    soon = [
+        r
+        for r in rows
+        if r.event_date
+        and today - timedelta(days=1) <= r.event_date <= today + timedelta(days=UPCOMING_DAYS)
+        and (r.brief or "").strip()
     ]
-    for r in sorted(rows, key=lambda r: (r.event_date or today, r.id)):
-        date = f" — {r.event_date.strftime('%d.%m.%Y')}" if r.event_date else ""
-        head.append(f"- {r.title}{date} ({st.KIND_NAMES.get(r.kind, r.kind)})")
-    parts = ["\n".join(head)]
-    used = len(parts[0])
-    for r in soon:  # полные справки ближайших событий — пока влезают
+    soon.sort(key=lambda r: (abs((r.event_date - today).days), r.kind != "agenda", -(r.id or 0)))
+    intro = (
+        "Материалы аппарата Курултая — главный источник о заседаниях. Ниже полные справки ближайших событий: по "
+        "ним отвечай сразу, без поиска. Если версии расходятся — верь той, что выше (она новее)."
+    )
+    parts = [intro]
+    used = len(intro)
+    full: set[int] = set()
+    cap = int(budget * BRIEFS_SHARE)
+    for r in soon:
         part = f"=== {r.title} ===\n{(r.brief or '').strip()}"
-        if used + len(part) > budget:
+        if used + len(part) > cap:
             continue
         parts.append(part)
-        used += len(part)
+        used += len(part) + 2
+        full.add(r.id)
+    rest = [r for r in rows if r.id not in full]
+    rest.sort(
+        key=lambda r: (
+            r.event_date is None,
+            abs((r.event_date - today).days) if r.event_date else 0,
+            -(r.id or 0),
+        )
+    )
+    lines = ["Остальные документы (их содержание — через search_kurultai):"]
+    used += len(lines[0]) + 2
+    shown = 0
+    for r in rest:
+        date = f" — {r.event_date.strftime('%d.%m.%Y')}" if r.event_date else ""
+        line = f"- {_one_line(r.title)[:TITLE_CHARS]}{date} ({st.KIND_NAMES.get(r.kind, r.kind)})"
+        if used + len(line) + 1 > budget - 80:
+            break
+        lines.append(line)
+        used += len(line) + 1
+        shown += 1
+    if shown < len(rest):
+        lines.append(f"… и ещё {len(rest) - shown} документов — тоже через search_kurultai.")
+    if len(lines) > 1:
+        parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
 
