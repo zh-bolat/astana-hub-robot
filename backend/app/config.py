@@ -289,7 +289,7 @@ class Settings(BaseSettings):
     # по kurultai_chunks (векторы + слова). false — как раньше: весь снимок и справки в промпт.
     kurultai_rag: bool = True
     kurultai_rag_reindex_s: float = Field(300.0, ge=30.0)
-    kurultai_rag_results: int = Field(5, ge=1, le=10)
+    kurultai_rag_results: int = Field(8, ge=1, le=12)
     # расшифровка речи посетителя — для фильтра «Ақылтай / робот», «стоп», журнала и субтитров
     kurultai_realtime_transcribe_model: str = "gpt-4o-transcribe"
     kurultai_realtime_vad_threshold: float = Field(0.6, ge=0.1, le=0.95)
@@ -337,7 +337,7 @@ class Settings(BaseSettings):
     kurultai_admin_cookie_secure: bool = True
     kurultai_materials_model: str = "google/gemini-3.5-flash"
     kurultai_materials_timeout_s: float = 240.0
-    kurultai_materials_max_chars: int = Field(60_000, ge=1_000, le=400_000)
+    kurultai_materials_max_chars: int = Field(150_000, ge=1_000, le=400_000)
     kurultai_materials_upload_mb: int = Field(20, ge=1, le=50)
     kurultai_app_dir: Path = Path("/apk")
     kurultai_app_link_ttl_s: int = Field(1800, ge=60, le=86_400)

@@ -26,7 +26,9 @@ from app.knowledge.search import (
 from app.llm.embeddings import Embedder
 from app.logging_setup import logger
 
-RESULT_CHARS = 3200  # всё, что уходит модели, на один вызов
+RESULT_CHARS = (
+    6000  # всё, что уходит модели, на один вызов (глубокие ответы по документам пленарки)
+)
 
 
 @dataclass(frozen=True)
