@@ -300,7 +300,9 @@ class Settings(BaseSettings):
     kurultai_realtime_turn_detection: Literal["semantic_vad", "server_vad"] = "semantic_vad"
     kurultai_realtime_eagerness: Literal["auto", "low", "medium", "high"] = "auto"
     # Перебить робота: speech — любой осмысленной фразой (кроме эха его голоса); stop_only — только «стоп»
-    kurultai_realtime_barge_in: Literal["speech", "stop_only"] = "speech"
+    # stop_only (с 11.11.2026, «без прерываний»): ответ робота обрывает только «стоп / тоқта» или касание круга,
+    # чужая речь рядом и эхо — нет; speech — прежнее: осмысленная фраза перебивает и становится новым вопросом
+    kurultai_realtime_barge_in: Literal["speech", "stop_only"] = "stop_only"
     kurultai_realtime_connect_timeout_s: float = 8.0
     # После подключения ждём первое событие OpenAI (session.created) столько секунд: ошибка/закрытие вместо
     # него (нет денег, квота, ключ) → сессия сразу идёт старой цепочкой; молчание — считаем, что всё в порядке

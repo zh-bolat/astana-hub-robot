@@ -2403,7 +2403,7 @@ def test_realtime_emotion_tag_goes_to_face_not_voice(live_server):
 
 def test_realtime_barge_in_by_speech_answers_new_question(live_server):
     fake = FakeRealtime()
-    url, app, _, model = _realtime_server(live_server, fake)
+    url, app, _, model = _realtime_server(live_server, fake, kurultai_realtime_barge_in="speech")
 
     async def scenario() -> None:
         async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
@@ -2607,3 +2607,44 @@ def test_realtime_billing_failure_answers_then_hands_robot_to_pipeline(live_serv
     run(scenario())
     assert len(calls) == 1
     assert len(model.requests) == 1
+
+
+def test_foreign_gibberish_is_noise():
+    from app.kurultai.realtime.bridge import RealtimeBridge, foreign_gibberish
+
+    for junk in (
+        "Akutė išskašai pirmše.",
+        "Agus briseadh.",
+        "Prihajam se.",
+        "Թիլմ է։",
+        "Konul tay əmtiəə.",
+    ):
+        assert foreign_gibberish(junk) and RealtimeBridge._is_noise(junk), junk
+    for speech in (
+        "Кто докладчик по энергетике?",
+        "Жастар кеңесі туралы кім баяндайды?",
+        "Where is the museum?",
+        "Hello, can you help me?",
+        "Расскажи про Astana Hub",
+    ):
+        assert not foreign_gibberish(speech), speech
+
+
+def test_realtime_default_does_not_interrupt_on_speech_but_stops_on_stop(live_server):
+    """По умолчанию (stop_only): чужая фраза во время ответа ничего не обрывает и не становится вопросом,
+    «стоп» — останавливает."""
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")  # робот ещё говорит (playback_done нет)
+            fake.utterance("item_2", "Пойдём лучше кофе попьём с тобой")
+            await asyncio.sleep(0.4)
+            assert "interrupted" not in c.kinds() and len(fake.creates()) == 1
+            fake.utterance("item_3", "Стоп")
+            await c.wait("interrupted")
+
+    run(scenario())
+    assert len(fake.creates()) == 1

@@ -168,6 +168,22 @@ async def first_message(conn: Any) -> Any:
     return await conn.__anext__()
 
 
+_CYRILLIC = re.compile(r"[\u0400-\u04FF]")
+_ENGLISH_HINT = re.compile(
+    r"\b(what|where|who|when|how|why|is|are|the|can|could|you|please|hello|hi|thanks|thank|tell|show|do|does|"
+    r"kurultai|quryltai|museum|toilet|restroom|stop)\b",
+    re.I,
+)
+
+
+def foreign_gibberish(text: str) -> bool:
+    """Расшифровка без единой кириллической буквы и не похожая на английский вопрос — шум, а не обращение:
+    посетители говорят по-русски и по-казахски (обе письменности кириллические), иностранный гость — по-английски."""
+    if not any(ch.isalpha() for ch in text) or _CYRILLIC.search(text):
+        return False
+    return not (text.isascii() and _ENGLISH_HINT.search(text))
+
+
 class RealtimeBridge:
     def __init__(
         self,
@@ -1018,7 +1034,11 @@ class RealtimeBridge:
 
     @staticmethod
     def _is_noise(text: str) -> bool:
-        """Обрывок вместо реплики: одно слово, не из коротких осмысленных («да», «привет», «рахмет»…)."""
+        """Не реплика: обрывок в одно слово (не из коротких осмысленных — «да», «привет», «рахмет»…) или «чужой
+        язык» — распознавание приняло шум либо невнятную речь за литовский, ирландский, армянский и т. п.
+        (10.11.2026: «Akutė išskašai pirmše», «Agus briseadh», «Թիլմ է» — робот отвечал на них заготовками)."""
+        if foreign_gibberish(text):
+            return True
         words = [w.lower() for w in _WORDS.findall(text)]
         return len(words) <= 1 and not (words and words[0] in SHORT_OK)
 

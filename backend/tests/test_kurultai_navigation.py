@@ -247,6 +247,9 @@ def test_navigation_ignores_speech_stops_on_command_and_speaks_result(live_serve
             end = await c.wait("turn_end")
             assert [e["text"] for e in c.events("phrase")] == ["Мы на месте, это Музей Курултая."]
             await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            # робот договорил фразу прибытия (по умолчанию ответ перебивает только «стоп»)
+            await c.send({"type": "playback_done", "turn_id": end["turn_id"]})
+            await asyncio.sleep(0.1)
             fake.utterance("item_3", "А что там есть?")  # окно разговора открыто — без имени
             await c.wait("turn_end", count=2)
 
