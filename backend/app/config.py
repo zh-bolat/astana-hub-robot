@@ -302,6 +302,10 @@ class Settings(BaseSettings):
     # Перебить робота: speech — любой осмысленной фразой (кроме эха его голоса); stop_only — только «стоп»
     kurultai_realtime_barge_in: Literal["speech", "stop_only"] = "speech"
     kurultai_realtime_connect_timeout_s: float = 8.0
+    # Страховка длины ответа (режим text): дошли до стольких знаков — договариваем текущую фразу и обрываем
+    # генерацию (тег эмоции не затрагивается); «подробнее / толығырақ» в вопросе — второй порог. 0 — без ограничения.
+    kurultai_realtime_max_answer_chars: int = 320
+    kurultai_realtime_max_detailed_chars: int = 800
     # После подключения ждём первое событие OpenAI (session.created) столько секунд: ошибка/закрытие вместо
     # него (нет денег, квота, ключ) → сессия сразу идёт старой цепочкой; молчание — считаем, что всё в порядке
     kurultai_realtime_hello_timeout_s: float = 3.0

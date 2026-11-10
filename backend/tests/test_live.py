@@ -2607,3 +2607,45 @@ def test_realtime_billing_failure_answers_then_hands_robot_to_pipeline(live_serv
     run(scenario())
     assert len(calls) == 1
     assert len(model.requests) == 1
+
+
+LONG_ANSWER = "[neutral] " + " ".join(
+    f"Это предложение номер {i} длинного ответа про Курултай и его работу." for i in range(1, 16)
+)
+
+
+def test_realtime_long_answer_is_capped_at_sentence_without_fallback(live_server):
+    """Модель разговорилась: после ~320 знаков робот договаривает фразу и замолкает — ход заканчивается обычно
+    (turn_end, без «interrupted»), отменённая генерация не запускает запасную цепочку; тег эмоции на месте."""
+    fake = FakeRealtime(answer=LONG_ANSWER)
+    url, _app, _, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, что такое Курултай?")
+            await c.wait("turn_end")
+            await asyncio.sleep(0.3)
+            phrases = [e["text"] for e in c.events("phrase")]
+            said = " ".join(phrases)
+            assert 250 <= len(said) <= 420, len(said)
+            assert said.endswith(".")
+            assert "interrupted" not in c.kinds()
+            assert [e["name"] for e in c.events("emotion")] == ["neutral"]
+
+    run(scenario())
+    assert model.requests == []
+    assert fake.of("response.cancel")
+
+
+def test_realtime_detailed_request_gets_longer_answer(live_server):
+    fake = FakeRealtime(answer=LONG_ANSWER)
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, расскажи подробнее про Курултай")
+            await c.wait("turn_end")
+            said = " ".join(e["text"] for e in c.events("phrase"))
+            assert len(said) > 600, len(said)
+
+    run(scenario())

@@ -104,6 +104,7 @@ SHORT_OK = frozenset(
     ]
 )
 _SENTENCE = re.compile(r"(.+?[.!?…])(\s+|$)", re.S)
+_DETAILED = re.compile(r"подробн|детальн|расскажи вс|расскажите вс|толығырақ|егжей|толық айт", re.I)
 _EMOTION = re.compile(r"^\s*\[(\w+)\]\s*")
 EMOTIONS = frozenset(
     {"neutral", "happy", "thinking", "surprised", "sad", "excited"}
@@ -245,7 +246,8 @@ class RealtimeBridge:
         self._turn_open = False
         self._response_active = False
         self._response_id = ""  # текущий ответ OpenAI (response.created)
-        self._cancelled: set[str] = set()  # ответы, которые отменили мы: их response.done — не сбой
+        self._cancelled: set[str] = set()
+        self._capped = False  # ответ дорос до предела длины (_cap_answer) — остаток не озвучиваем  # ответы, которые отменили мы: их response.done — не сбой
         self._dropping = False  # ответ отменён: остаток не озвучиваем и не шлём
         self._playing_turn: str | None = None
         self._playing_until = (
@@ -1042,6 +1044,7 @@ class RealtimeBridge:
         self._request_id = new_request_id()
         self._turn_open = True
         self._turn_kind = kind
+        self._capped = False
         self._turn_extra = None
         self._dropping = False
         self._question, self._answer, self._phrase_buf = question, "", ""
@@ -1121,16 +1124,45 @@ class RealtimeBridge:
             await self._phrase(self._phrase_buf.strip())
             self._phrase_buf = ""
 
+    def _answer_limit(self) -> int:
+        st = self.settings
+        if _DETAILED.search(self._question or ""):
+            return st.kurultai_realtime_max_detailed_chars
+        return st.kurultai_realtime_max_answer_chars
+
+    async def _cap_answer(self) -> None:
+        """Ответ дорос до предела: эта фраза — последняя; генерацию OpenAI обрываем (её response.done — не сбой),
+        ход заканчивается после последней фразы, как обычно (не «перебили»)."""
+        self._capped = True
+        logger.info(
+            "realtime_answer_capped",
+            extra={"chars": len(self._answer), "limit": self._answer_limit()},
+        )
+        if self._response_active and self._response_id:
+            self._cancelled.add(self._response_id)
+            await self._oa_send({"type": "response.cancel"})
+        if self._gated:
+            self._held_done = True  # конец — после подтверждения обращения (_release)
+        elif self._text_mode and self._speech is not None:
+            self._speech.put_nowait(None)
+
     async def _phrase(self, phrase: str) -> None:
+        if self._capped:
+            return  # предел длины уже достигнут — остаток не озвучиваем
         self._phrases_in_turn += 1
         self._answer = f"{self._answer} {phrase}".strip()
+        limit = self._answer_limit() if self._turn_kind == "answer" else 0
         if self._gated:
             self._held.append(phrase)  # «ставка»: прозвучит после подтверждения обращения
+            if limit and self._text_mode and len(self._answer) >= limit:
+                await self._cap_answer()
             return
         if self._text_mode and self._speech is not None:
             self._speech.put_nowait(phrase)  # субтитр уйдёт вместе с её звуком
         else:
             await self._robot_json(event("phrase", text=phrase))
+        if limit and self._text_mode and len(self._answer) >= limit:
+            await self._cap_answer()
 
     async def _release(self) -> None:
         """Обращение подтверждено: «ставка» становится обычным ответом — держанные фразы в озвучку."""
@@ -1191,6 +1223,8 @@ class RealtimeBridge:
         if rid and rid in self._cancelled:
             # ответ, который мы отменили (response.cancel): новый ход мог уже начаться — его не трогаем
             self._cancelled.discard(rid)
+            if rid == self._response_id:
+                self._response_active = False
             if not self._turn_open:
                 self._dropping = False
             return
