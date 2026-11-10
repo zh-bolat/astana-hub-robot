@@ -408,6 +408,12 @@ def create_app(
     app.state.engine = engine
     app.state.kurultai_materials = kurultai_materials  # None — профиль kurultai выключен
     app.state.kurultai_knowledge = kurultai_knowledge  # поиск Realtime Курултая (None — выключен)
+    from app.kurultai.realtime.health import RealtimeHealth
+
+    # предохранитель Realtime: OpenAI отказал → сессии робота идут старой цепочкой, пока не истечёт пауза
+    app.state.realtime_health = RealtimeHealth(
+        settings.kurultai_realtime_retry_s, settings.kurultai_realtime_retry_max_s
+    )
     if settings.kurultai_enabled():
         # навигация Realtime (docs/kurultai/navigation.md): точки карты и общий на процесс интервал предложений
         from app.kurultai.offers import OfferPolicy

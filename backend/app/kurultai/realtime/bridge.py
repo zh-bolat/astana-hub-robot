@@ -50,6 +50,7 @@ from app.kurultai.places import KurultaiPlaces
 from app.kurultai.quryltai import ASTANA_TZ
 from app.kurultai.rag.knowledge import TOOL as SEARCH_TOOL
 from app.kurultai.realtime import websearch
+from app.kurultai.realtime.health import FATAL_CODES
 from app.kurultai.realtime.instructions import (
     GUIDE_TOOL,
     greeting_addition,
@@ -171,10 +172,16 @@ class RealtimeBridge:
         knowledge: Any = None,
         places: KurultaiPlaces | None = None,
         offers: OfferPolicy | None = None,
+        health: Any = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ws = ws
         self.settings = settings
+        # предохранитель (app/kurultai/realtime/health.py): отказ OpenAI → сессии идут старой цепочкой
+        self.health = health
+        self.connect_error = ""  # почему не подключились (код OpenAI / тип исключения) — для health
+        self._prefetched: list[dict] = []  # первое событие OpenAI, прочитанное в connect()
+        self._handoff = ""  # Realtime бесполезен (нет денег, обрывы): отдать робота старой цепочке
         self.session_id = session_id
         self.lang: Lang = lang if lang in ("ru", "kk") else "ru"
         self.chat = chat
@@ -278,9 +285,42 @@ class RealtimeBridge:
                 self.settings.kurultai_realtime_connect_timeout_s,
             )
         except Exception as exc:
-            logger.warning("realtime_connect_failed", extra={"error": type(exc).__name__})
+            self.connect_error = type(exc).__name__
+            logger.warning("realtime_connect_failed", extra={"error": self.connect_error})
             return False
-        return True
+        # Первое событие OpenAI — session.created. Вместо него ошибка или закрытие (кончились деньги, квота,
+        # ключ) → подключение не считается: сессия пойдёт старой цепочкой. Молчание — не повод отказываться.
+        try:
+            first = await asyncio.wait_for(
+                self.oa.__anext__(), self.settings.kurultai_realtime_hello_timeout_s
+            )
+        except TimeoutError:
+            return True
+        except StopAsyncIteration:
+            first = None
+        except Exception as exc:
+            first = exc
+        msg: Any = None
+        if isinstance(first, str | bytes):
+            with contextlib.suppress(TypeError, ValueError):
+                msg = json.loads(first)
+        if isinstance(msg, dict) and msg.get("type") != "error":
+            self._prefetched.append(msg)
+            if self.health is not None:
+                self.health.mark_up()
+            return True
+        err = (msg or {}).get("error") or {} if isinstance(msg, dict) else {}
+        self.connect_error = str(
+            err.get("code") or (type(first).__name__ if first is not None else "closed")
+        )
+        logger.warning(
+            "realtime_connect_rejected",
+            extra={"error": self.connect_error, "detail": str(err.get("message") or "")[:200]},
+        )
+        with contextlib.suppress(Exception):
+            await self.oa.close()
+        self.oa = None
+        return False
 
     async def run(self) -> None:
         """Сессия робота целиком: настройка Realtime, ready, два потока (робот → OpenAI, OpenAI → робот)."""
@@ -322,8 +362,12 @@ class RealtimeBridge:
         if self._closed:
             return
         self._closed = True
+        me = asyncio.current_task()
         for t in [*self._tasks, *([self._speaker] if self._speaker else [])]:
-            t.cancel()
+            if (
+                t is not me
+            ):  # закрытие из своей же задачи (_hand_off) — её не отменяем, иначе сокет не закроется
+                t.cancel()
         if self.oa is not None:
             with contextlib.suppress(Exception):
                 await self.oa.close()
@@ -674,11 +718,17 @@ class RealtimeBridge:
                 reason = "closed"
             except Exception as exc:
                 reason = type(exc).__name__
+                if not isinstance(exc, websockets.exceptions.ConnectionClosed):
+                    logger.warning("realtime_openai_loop_error", exc_info=True)
             if self._closed:
                 return
             logger.warning("realtime_openai_lost", extra={"reason": reason, "failures": failures})
             if self._turn_open or self._playing_turn is not None:
                 await self._cancel("openai_lost")
+            if self._handoff:
+                return await self._hand_off()
+            if self.health is not None and self.health.note_loss():
+                return await self._hand_off("reconnect_loop")
             for delay in (1, 2, 5, 10, 10)[failures:]:
                 await asyncio.sleep(delay)
                 failures += 1
@@ -689,9 +739,24 @@ class RealtimeBridge:
                     break
             else:
                 logger.warning("realtime_openai_gave_up")
-                return
+                if self.health is not None:
+                    self.health.mark_down(self.connect_error or "gave_up")
+                return await self._hand_off("gave_up")
+
+    async def _hand_off(self, reason: str = "") -> None:
+        """Realtime сейчас бесполезен: закрыть сокет робота — приложение переподключится через 2–10 с, а новая
+        сессия (health.is_down) пойдёт старой цепочкой OpenRouter + Dmitry. Ждём, пока доиграет текущий ответ."""
+        reason = reason or self._handoff or "unavailable"
+        for _ in range(100):  # ≤ 20 с: запасной ответ этой реплики ещё может звучать
+            if not self._bot_busy():
+                break
+            await asyncio.sleep(0.2)
+        logger.warning("realtime_handoff_pipeline", extra={"reason": reason})
+        await self.close(1012, "realtime_unavailable")
 
     async def _openai_loop(self) -> None:
+        while self._prefetched:
+            await self._on_openai(self._prefetched.pop(0))
         async for raw in self.oa:
             try:
                 msg = json.loads(raw)
@@ -766,7 +831,7 @@ class RealtimeBridge:
             code = str(err.get("code") or "")
             if code not in ("response_cancel_not_active", "item_delete_invalid_item_id"):
                 logger.warning(
-                    "realtime_error", extra={"code": code, "message": str(err.get("message"))[:200]}
+                    "realtime_error", extra={"code": code, "detail": str(err.get("message"))[:200]}
                 )
 
     # ---------- решения сервера ----------
@@ -1107,6 +1172,12 @@ class RealtimeBridge:
             logger.warning(
                 "realtime_response_failed", extra={"status": response.get("status"), "code": code}
             )
+            if code in FATAL_CODES and not self._handoff:
+                # нет денег / квоты / ключ: эту реплику ответит старая цепочка, дальше — робота ей и отдаём
+                self._handoff = code
+                if self.health is not None:
+                    self.health.mark_down(code)
+                self._spawn(self._hand_off(code), "realtime_handoff")
         if self._text_mode and self._speech is not None:
             await self._on_text("", final=True)
             if not ok and self._phrases_in_turn == 0:

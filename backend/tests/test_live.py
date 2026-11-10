@@ -1870,9 +1870,13 @@ class FakeRealtime:
     """Поддельная сессия OpenAI Realtime: записывает, что прислал сервер; отвечает на response.create."""
 
     def __init__(
-        self, answer: str = "В Курултае восемь комитетов.", tool_first: bool = False
+        self,
+        answer: str = "В Курултае восемь комитетов.",
+        tool_first: bool = False,
+        reject: str | None = None,
     ) -> None:
         self.fail_first = False
+        self.fail_code = "rate_limit_exceeded"  # код первого отказа (fail_first)
         self.rid = 0
         self.cur = ""
         self.sent: list[dict] = []
@@ -1881,6 +1885,11 @@ class FakeRealtime:
         self.tool_first = tool_first
         self.closed = False
         self.url = ""
+        # как настоящий OpenAI: первым событием — session.created; reject — вместо него ошибка (нет денег и т. п.)
+        if reject:
+            self.push({"type": "error", "error": {"code": reject, "message": "test"}})
+        else:
+            self.push({"type": "session.created", "session": {"id": "sess_test"}})
 
     def push(self, msg: dict | None) -> None:
         self.q.put_nowait(msg)
@@ -1971,7 +1980,7 @@ class FakeRealtime:
                         "status": "failed",
                         "status_details": {
                             "type": "failed",
-                            "error": {"code": "rate_limit_exceeded"},
+                            "error": {"code": self.fail_code},
                         },
                         "output": [],
                     },
@@ -2553,3 +2562,48 @@ def test_realtime_rag_compact_prompt_and_search_tool(live_server):
     assert kn.queries == ["докладчик по энергетике"]
     out = fake.of("conversation.item.create")[0]["item"]
     assert out["call_id"] == "c1" and "Годунова" in out["output"]
+
+
+def test_realtime_rejected_at_connect_goes_pipeline_and_trips_breaker(live_server):
+    """OpenAI отвечает ошибкой вместо session.created (нет денег/квоты): сессия сразу идёт старой цепочкой,
+    предохранитель включается — следующая сессия Realtime даже не пробует."""
+    fake = FakeRealtime(reject="insufficient_quota")
+    url, app, calls, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            c.speak(0.6)
+            await c.wait("turn_end")
+        assert app.state.realtime_health.is_down()
+        assert app.state.realtime_health.reason == "insufficient_quota"
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await c.wait(
+                "ready"
+            )  # вторая сессия открылась пайплайном (в тесте реплика в script одна)
+
+    run(scenario())
+    assert len(calls) == 1  # второй раз к OpenAI не ходили
+    assert len(model.requests) == 1  # реплику ответил старый пайплайн
+
+
+def test_realtime_billing_failure_answers_then_hands_robot_to_pipeline(live_server):
+    """Деньги кончились посреди сессии: эту реплику отвечает старая цепочка, затем сервер закрывает сокет (1012),
+    робот переподключается — и новая сессия идёт пайплайном без Realtime."""
+    fake = FakeRealtime()
+    fake.fail_first, fake.fail_code = True, "credit_balance_exhausted"
+    url, app, calls, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")
+            assert [e["text"] for e in c.events("phrase")] == ["Ответ пайплайна."]
+            closed = await c.wait_closed(timeout=8)
+            assert closed.rcvd is not None and closed.rcvd.code == 1012
+        assert app.state.realtime_health.is_down()
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            await c.wait("ready")  # робот переподключился — сессия пайплайна, без OpenAI
+
+    run(scenario())
+    assert len(calls) == 1
+    assert len(model.requests) == 1

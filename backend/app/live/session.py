@@ -365,6 +365,14 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
         return False
     from app.kurultai.realtime.bridge import RealtimeBridge
 
+    health = getattr(app.state, "realtime_health", None)
+    if health is not None and health.is_down():
+        logger.warning(
+            "realtime_down_fallback_pipeline",
+            extra={"session_id": session.session_id, "reason": health.reason,
+                   "retry_in_s": health.seconds_left()},
+        )  # fmt: skip
+        return False
     bridge = RealtimeBridge(
         ws,
         settings=settings,
@@ -377,11 +385,14 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
         knowledge=getattr(app.state, "kurultai_knowledge", None),
         places=getattr(app.state, "kurultai_places", None),
         offers=getattr(app.state, "kurultai_offers", None),
+        health=health,
     )
     if not await bridge.connect():
         logger.warning(
             "realtime_unavailable_fallback_pipeline", extra={"session_id": session.session_id}
         )
+        if health is not None:
+            health.mark_down(bridge.connect_error or "connect_failed")
         return False
     session.bridge = bridge
     await ws.accept()
