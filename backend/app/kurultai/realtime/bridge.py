@@ -1026,9 +1026,10 @@ class RealtimeBridge:
             # неё (KURULTAI_REALTIME_BARGE_IN=speech); эхо и обрывки в разговор не идут
             stop, rest = stop_request(text)
             if stop:
+                if not rest:
+                    await self._delete(item_id)  # команда в разговор не идёт
                 await self._cancel("stop")
                 if not rest:
-                    await self._delete(item_id)
                     return
                 # «Стоп, а где туалет?» — замолчал и сразу отвечает на остальное
                 logger.info("realtime_stop_then_question", extra={"chars": len(text)})
