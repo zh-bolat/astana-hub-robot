@@ -95,3 +95,31 @@ def is_stop_command(text: str) -> bool:
             return False
         i += 1
     return command
+
+
+# «Стоп» в начале реплики (решение владельца 11.11.2026): услышал это слово среди первых трёх — замолчать сразу,
+# даже если дальше идёт вопрос («Стоп, а где туалет?», «Акылтай, стоп»). Только однозначные слова: «подожди»,
+# «достаточно», «тыңда» остаются командами лишь целой фразой (is_stop_command) — в обычной речи они часты.
+_HARD = _vocab(
+    "стоп стой стойте хватит замолчи замолчите тоқта тоқтаңыз тоқташы тоқтаңызшы тохта stop"
+)
+HEAD_WORDS = 3
+
+
+def stop_request(text: str) -> tuple[bool, str]:
+    """(просят ли замолчать, вопрос после команды). Вопрос — остаток реплики, если в нём есть хотя бы два
+    содержательных слова: «Стоп, а где туалет?» → (True, «а где туалет?»); «Стоп, спасибо» → (True, «»)."""
+    if is_stop_command(text):
+        return True, ""
+    clean = _BRACKETS.sub(" ", text or "")
+    tokens = list(_WORDS.finditer(clean))
+    for i, m in enumerate(tokens[:HEAD_WORDS]):
+        if not _is(_norm(m.group()), _HARD):
+            continue
+        j = i + 1
+        while j < len(tokens) and _is(_norm(tokens[j].group()), _COMMANDS):
+            j += 1  # «стоп-стоп», «стоп, хватит»
+        rest = clean[tokens[j].start() :].strip() if j < len(tokens) else ""
+        meaningful = [w for w in _WORDS.findall(rest) if not _is(_norm(w), _FILLERS | _COMMANDS)]
+        return True, (rest if len(meaningful) >= 2 else "")
+    return False, ""

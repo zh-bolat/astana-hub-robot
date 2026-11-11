@@ -2648,3 +2648,70 @@ def test_realtime_default_does_not_interrupt_on_speech_but_stops_on_stop(live_se
 
     run(scenario())
     assert len(fake.creates()) == 1
+
+
+def test_stop_request_head_word_and_question():
+    from app.live.stop import stop_request
+
+    assert stop_request("Стоп") == (True, "")
+    assert stop_request("Стоп, спасибо, понял") == (True, "")
+    assert stop_request("Акылтай, стоп") == (True, "")
+    assert stop_request("Стоп, а где туалет?") == (True, "а где туалет?")
+    assert stop_request("Тоқта, Жастар кеңесі туралы айтшы")[0] is True
+    assert stop_request("Стоп-стоп, расскажи про музей")[1] == "расскажи про музей"
+    for speech in (
+        "Где находится стойка регистрации?",
+        "Я не могу остановиться",
+        "Подожди меня у входа завтра",
+    ):
+        assert stop_request(speech) == (False, ""), speech
+
+
+def test_realtime_stop_then_question_interrupts_and_answers(live_server):
+    """«Стоп, а где туалет?» во время ответа: робот замолкает и сразу отвечает на остальное."""
+    fake = FakeRealtime()
+    url, _, _, model = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")  # робот ещё говорит
+            fake.utterance("item_2", "Стоп, а где туалет?")
+            await c.wait("interrupted")
+            await c.wait("turn_end", count=2)
+            assert c.events("user_final")[-1]["text"] == "Стоп, а где туалет?"
+
+    run(scenario())
+    assert len(fake.creates()) == 2 and model.requests == []
+
+
+def test_realtime_stop_is_heard_in_first_words_before_transcript_ends(live_server):
+    """«Стоп» в первых кусочках расшифровки — interrupted сразу; итоговая расшифровка «Стоп.» ответа не запускает."""
+    fake = FakeRealtime()
+    url, _, _, _ = _realtime_server(live_server, fake)
+
+    async def scenario() -> None:
+        async with session(url, token=KURULTAI_LIVE_TOKEN) as c:
+            fake.utterance("item_1", "Акылтай, сколько комитетов?")
+            await c.wait("turn_end")
+            fake.push({"type": "input_audio_buffer.speech_started"})
+            fake.push({"type": "input_audio_buffer.speech_stopped"})
+            fake.push({"type": "input_audio_buffer.committed", "item_id": "item_2"})
+            delta = "conversation.item.input_audio_transcription.delta"
+            fake.push({"type": delta, "item_id": "item_2", "delta": "Сто"})
+            await asyncio.sleep(0.15)
+            assert "interrupted" not in c.kinds()  # слово ещё не закончено
+            fake.push({"type": delta, "item_id": "item_2", "delta": "п."})
+            await c.wait("interrupted")  # итоговой расшифровки ещё нет
+            fake.push(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "item_2",
+                    "transcript": "Стоп.",
+                }
+            )
+            await c.wait("ignored")
+            await asyncio.sleep(0.2)
+
+    run(scenario())
+    assert len(fake.creates()) == 1

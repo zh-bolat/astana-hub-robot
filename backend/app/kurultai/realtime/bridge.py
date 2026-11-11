@@ -61,7 +61,7 @@ from app.kurultai.realtime.instructions import (
 )
 from app.lang import Lang, normalize_lang
 from app.live.protocol import AUDIO_FORMAT, MAX_AUDIO_FRAME, MAX_TEXT_FRAME, event, new_turn_id
-from app.live.stop import is_stop_command
+from app.live.stop import is_stop_command, stop_request
 from app.logging_setup import logger, new_request_id
 from app.speech.base import has_letters
 from app.tts_text import normalize_for_tts
@@ -168,6 +168,7 @@ async def first_message(conn: Any) -> Any:
     return await conn.__anext__()
 
 
+_WORD_END = re.compile(r"[^\w]\s*$")
 _CYRILLIC = re.compile(r"[\u0400-\u04FF]")
 _ENGLISH_HINT = re.compile(
     r"\b(what|where|who|when|how|why|is|are|the|can|could|you|please|hello|hi|thanks|thank|tell|show|do|does|"
@@ -261,7 +262,10 @@ class RealtimeBridge:
         self._turn_open = False
         self._response_active = False
         self._response_id = ""  # текущий ответ OpenAI (response.created)
-        self._cancelled: set[str] = set()  # ответы, которые отменили мы: их response.done — не сбой
+        self._cancelled: set[str] = set()
+        self._partial: dict[
+            str, str
+        ] = {}  # расшифровка текущей фразы по кусочкам (ранний «стоп»)  # ответы, которые отменили мы: их response.done — не сбой
         self._dropping = False  # ответ отменён: остаток не озвучиваем и не шлём
         self._playing_turn: str | None = None
         self._playing_until = (
@@ -844,7 +848,12 @@ class RealtimeBridge:
             self._speech_end_at = self._clock()
         elif kind == "input_audio_buffer.committed":
             await self._on_committed(str(msg.get("item_id") or ""))
+        elif kind == "conversation.item.input_audio_transcription.delta":
+            await self._on_transcript_delta(
+                str(msg.get("item_id") or ""), str(msg.get("delta") or "")
+            )
         elif kind == "conversation.item.input_audio_transcription.completed":
+            self._partial.pop(str(msg.get("item_id") or ""), None)
             await self._on_utterance(
                 str(msg.get("item_id") or ""), str(msg.get("transcript") or "")
             )
@@ -942,6 +951,17 @@ class RealtimeBridge:
         # предложение — только в подтверждённом окне разговора («ставка» может и не прозвучать)
         await self._create_response(None if self._gated else self._answer_extra())
 
+    async def _on_transcript_delta(self, item_id: str, delta: str) -> None:
+        """Расшифровка приходит по кусочкам: «стоп» в первых словах — замолчать сразу, не дожидаясь конца фразы
+        (выигрыш — время расшифровки остатка). Слово должно быть закончено: за ним пробел или знак («Стойка…»)."""
+        if not item_id or not delta or self._navigating or self._gated or not self._bot_busy():
+            return
+        text = self._partial.get(item_id, "") + delta
+        self._partial = {item_id: text}
+        if _WORD_END.search(text) and stop_request(text)[0]:
+            logger.info("realtime_stop_early", extra={"chars": len(text)})
+            await self._cancel("stop")
+
     async def _on_utterance(self, item_id: str, text: str) -> None:
         text = text.strip()
         if self._navigating:
@@ -965,7 +985,10 @@ class RealtimeBridge:
         if item_id and item_id == self._early_item:  # ответ уже сочиняется — решаем по расшифровке
             self._early_item = None
             gated = self._gated
-            speech = has_letters(text) and not is_stop_command(text) and not self._is_noise(text)
+            stop, rest = stop_request(
+                text
+            )  # «стоп» без вопроса — не реплика; «стоп, а где…» — вопрос
+            speech = has_letters(text) and not (stop and not rest) and not self._is_noise(text)
             if speech and self._no_person():  # человек ушёл, пока фраза расшифровывалась
                 await self._cancel("no_person")
                 await self._ignore_no_person(item_id, text)
@@ -1001,9 +1024,19 @@ class RealtimeBridge:
         if self._bot_busy():
             # робот говорит: «стоп» — замолчать; осмысленная фраза (не эхо его голоса) — перебить и ответить на
             # неё (KURULTAI_REALTIME_BARGE_IN=speech); эхо и обрывки в разговор не идут
-            if is_stop_command(text):
-                await self._delete(item_id)
+            stop, rest = stop_request(text)
+            if stop:
                 await self._cancel("stop")
+                if not rest:
+                    await self._delete(item_id)
+                    return
+                # «Стоп, а где туалет?» — замолчал и сразу отвечает на остальное
+                logger.info("realtime_stop_then_question", extra={"chars": len(text)})
+                self._start_turn(text, self._since_speech_end())
+                await self._robot_json(event("user_final", text=text, lang=self.lang))
+                await self._robot_json(event("thinking"))
+                await self._refresh_instructions()
+                await self._create_response(self._answer_extra())
                 return
             if self._stop_only or not self._real_speech(text):
                 await self._delete(item_id)
@@ -1021,7 +1054,10 @@ class RealtimeBridge:
             return
         stt_ms = self._since_speech_end()
         await self._robot_json(event("user_final", text=text, lang=self.lang))
-        if is_stop_command(text) or not self._addressed(text):
+        stop, rest = stop_request(
+            text
+        )  # робот уже замолчал (по первым словам) или молчал: «стоп» — не вопрос
+        if (stop and not rest) or not self._addressed(text):
             await self._delete(item_id)
             logger.info("live_not_addressed", extra={"chars": len(text), "engine": "realtime"})
             await self._robot_json(event("ignored", reason="not_addressed"))
