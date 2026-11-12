@@ -308,8 +308,8 @@ class Settings(BaseSettings):
     # него (нет денег, квота, ключ) → сессия сразу идёт старой цепочкой; молчание — считаем, что всё в порядке
     kurultai_realtime_hello_timeout_s: float = 3.0
     # Предохранитель: после отказа OpenAI новые сессии идут старой цепочкой столько секунд (растёт ×2 до max)
-    kurultai_realtime_retry_s: float = 120.0
-    kurultai_realtime_retry_max_s: float = 600.0
+    kurultai_realtime_retry_s: float = 60.0
+    kurultai_realtime_retry_max_s: float = 300.0
     # Навигация Realtime (docs/kurultai/navigation.md): guide_to уходит роботу после playback_done хода, а если
     # его нет — через столько секунд после turn_end
     kurultai_guide_playback_timeout_s: float = Field(8.0, ge=0.1, le=60.0)

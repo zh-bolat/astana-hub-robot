@@ -384,6 +384,9 @@ def create_app(
             await _cancel(index_task)
             await _cancel(quryltai_task)
             await _cancel(rag_task)
+            _health = getattr(app.state, "realtime_health", None)
+            if _health is not None:
+                await _health.stop()  # фоновая проверка OpenAI
             await close_resources(
                 sheet_client,
                 text_llm,
@@ -421,6 +424,14 @@ def create_app(
     app.state.realtime_health = RealtimeHealth(
         settings.kurultai_realtime_retry_s, settings.kurultai_realtime_retry_max_s
     )
+
+    async def _probe_realtime() -> str | None:
+        from app.kurultai.realtime.bridge import probe_openai
+
+        return await probe_openai(settings, getattr(app.state, "realtime_connector", None))
+
+    # OpenAI лежит → робот сразу на старой цепочке, а оживление OpenAI проверяется фоном, не на его подключении
+    app.state.realtime_health.prober = _probe_realtime
     app.state.kurultai_runtime = None  # переключатели вкладки робота (только профиль kurultai)
     app.state.kurultai_voice_credits = None
     if settings.kurultai_enabled():

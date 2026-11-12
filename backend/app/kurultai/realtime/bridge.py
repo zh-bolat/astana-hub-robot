@@ -185,6 +185,59 @@ def foreign_gibberish(text: str) -> bool:
     return not (text.isascii() and _ENGLISH_HINT.search(text))
 
 
+_closing: set[asyncio.Task] = set()
+
+
+def close_later(conn: Any) -> None:
+    """Закрыть соединение с OpenAI фоном: ждать ответного закрытия незачем, а роботу это задержка."""
+
+    async def _close() -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(conn.close(), 5)
+
+    task = asyncio.ensure_future(_close())
+    _closing.add(task)
+    task.add_done_callback(_closing.discard)
+
+
+async def probe_openai(settings: Settings, connector: Connector | None = None) -> str | None:
+    """Жив ли OpenAI Realtime: подключиться и прочитать первое событие. None — отвечает (session.created или
+    тишина), иначе код ошибки («credit_balance_exhausted», тип исключения). Токены не тратит.
+    Для фоновой проверки предохранителя (app/kurultai/realtime/health.py)."""
+    key = secret_text(settings.kurultai_openai_api_key)
+    if not key:
+        return "no_openai_key"
+    url = f"{settings.kurultai_realtime_url}?model={settings.kurultai_realtime_model}"
+    try:
+        conn = await asyncio.wait_for(
+            (connector or websockets.connect)(
+                url, additional_headers={"Authorization": f"Bearer {key}"}, max_size=None
+            ),
+            settings.kurultai_realtime_connect_timeout_s,
+        )
+    except Exception as exc:
+        return type(exc).__name__
+    try:
+        first = await asyncio.wait_for(
+            first_message(conn), settings.kurultai_realtime_hello_timeout_s
+        )
+    except TimeoutError:
+        return None
+    except StopAsyncIteration:
+        return "closed"
+    except Exception as exc:
+        return type(exc).__name__
+    finally:
+        close_later(conn)
+    msg: Any = None
+    if isinstance(first, str | bytes):
+        with contextlib.suppress(TypeError, ValueError):
+            msg = json.loads(first)
+    if isinstance(msg, dict) and msg.get("type") == "error":
+        return str((msg.get("error") or {}).get("code") or "error")
+    return None
+
+
 class RealtimeBridge:
     def __init__(
         self,
@@ -357,8 +410,7 @@ class RealtimeBridge:
             "realtime_connect_rejected",
             extra={"error": self.connect_error, "detail": str(err.get("message") or "")[:200]},
         )
-        with contextlib.suppress(Exception):
-            await self.oa.close()
+        close_later(self.oa)  # не ждём рукопожатия закрытия (это стоило роботу лишних 2 с)
         self.oa = None
         return False
 

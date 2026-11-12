@@ -66,3 +66,33 @@ def test_first_message_works_with_async_generator_connections():
 
     assert asyncio.run(first_message(WsLike())) == '{"type": "session.created"}'
     assert asyncio.run(first_message(FakeLike())) == '{"type": "session.created"}'
+
+
+def test_background_probe_keeps_realtime_off_until_openai_answers():
+    """Пока OpenAI лежит, is_down() держится (сессии робота идут старой цепочкой без ожидания), а фоновая
+    проверка сама возвращает Realtime, когда OpenAI ответил."""
+    import asyncio
+
+    answers: list[str | None] = ["credit_balance_exhausted", None]
+    calls: list[int] = []
+
+    async def prober() -> str | None:
+        calls.append(1)
+        return answers[len(calls) - 1]
+
+    async def scenario() -> None:
+        h = RealtimeHealth()
+        h.retry_s = h.max_retry_s = h._penalty = 0.05  # в тесте — быстрые паузы
+        h.prober = prober
+        h.mark_down("credit_balance_exhausted")
+        assert h.is_down()
+        await asyncio.sleep(0.09)  # первая проверка: денег всё ещё нет
+        assert h.is_down() and calls == [1] and h.reason == "credit_balance_exhausted"
+        for _ in range(100):
+            if not h.is_down():
+                break
+            await asyncio.sleep(0.02)
+        assert not h.is_down() and len(calls) == 2 and h.reason == ""
+        await h.stop()
+
+    asyncio.run(scenario())

@@ -2715,3 +2715,56 @@ def test_realtime_stop_is_heard_in_first_words_before_transcript_ends(live_serve
 
     run(scenario())
     assert len(fake.creates()) == 1
+
+
+def test_probe_openai_reports_error_code_or_ok(settings):
+    from app.kurultai.realtime.bridge import probe_openai
+
+    s = settings.model_copy(update={"kurultai_openai_api_key": SecretStr("sk-test")})
+
+    async def probe(fake: FakeRealtime) -> str | None:
+        async def connector(url, additional_headers=None, max_size=None):
+            return fake
+
+        return await probe_openai(s, connector)
+
+    assert (
+        asyncio.run(probe(FakeRealtime(reject="credit_balance_exhausted")))
+        == "credit_balance_exhausted"
+    )
+    assert asyncio.run(probe(FakeRealtime())) is None
+    assert asyncio.run(
+        probe_openai(settings.model_copy(update={"kurultai_openai_api_key": None}))
+    ) == ("no_openai_key")
+
+
+def test_kurultai_new_connection_replaces_older_sessions_instead_of_rate_limit(live_server):
+    """Один робот на токен: новое подключение вытесняет прежние (зависшие) и не получает «rate_limited»;
+    пробник (session_id «probe-…») робота не вытесняет."""
+    url, app, _ = live_server(
+        kurultai_model=FakeModel(say("Ответ.")),
+        script=["Акылтай, вопрос"],
+        segmented_delay=0.2,
+        kurultai_robot_token=KURULTAI_LIVE_TOKEN,
+        kurultai_web_search_always=False,
+        live_max_sessions=2,
+    )
+
+    async def scenario() -> None:
+        async with (
+            session(url, session_id="old-1", token=KURULTAI_LIVE_TOKEN) as old1,
+            session(url, session_id="old-2", token=KURULTAI_LIVE_TOKEN) as old2,
+        ):
+            await old2.wait("ready")  # old-2 вытеснил old-1
+            await old1.wait_closed()
+            async with session(url, session_id="new", token=KURULTAI_LIVE_TOKEN) as new:
+                await new.wait("ready")  # не rate_limited
+                await old2.wait_closed()
+                assert [s.session_id for s in app.state.live_registry.all()] == ["new"]
+                async with session(url, session_id="probe-1", token=KURULTAI_LIVE_TOKEN) as probe:
+                    await probe.wait("ready")
+                    await asyncio.sleep(0.2)
+                    assert new.closed is None  # пробник робота не вытеснил
+                    assert len(app.state.live_registry) == 2
+
+    run(scenario())

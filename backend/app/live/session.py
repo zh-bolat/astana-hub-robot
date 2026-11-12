@@ -430,6 +430,31 @@ async def _run_realtime(ws: WebSocket, app, session: LiveSession) -> bool:
     return True
 
 
+PROBE_PREFIX = (
+    "probe-"  # сессии пробника (scripts/live_probe.py): робота не вытесняют и сами не вытесняются
+)
+_stopping: set[asyncio.Task] = set()
+
+
+def _stop_in_background(session: LiveSession) -> None:
+    """Закрыть вытесненную сессию, не задерживая новое подключение: зависшая может закрываться долго или никогда."""
+
+    async def _stop() -> None:
+        try:
+            await asyncio.wait_for(session.stop("replaced"), 10)
+        except Exception as exc:
+            logger.warning(
+                "live_session_stop_failed",
+                extra={"session_id": session.session_id, "error": type(exc).__name__},
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(session.ws.close(1012, "replaced"), 2)
+
+    task = asyncio.ensure_future(_stop())
+    _stopping.add(task)
+    task.add_done_callback(_stopping.discard)
+
+
 @router.websocket("/live")
 async def live(
     ws: WebSocket,
@@ -459,6 +484,19 @@ async def live(
     ):  # робот переподключился: старое соединение — закрыть
         registry.remove(previous)
         await previous.stop("replaced")
+    if robot_profile(ws) == KURULTAI and not session_id.startswith(PROBE_PREFIX):
+        # У Курултая один робот на токен и один разговор: новое подключение вытесняет все прежние. Зависшая
+        # сессия (обрыв сети, застрявший пайплайн) не должна занять лимит и оставить робота «без связи с
+        # сервером» — 12.11.2026 две зависшие сессии запасной цепочки заблокировали робота на 7 минут.
+        for old in [
+            s for s in registry.all() if s.key == key and not s.session_id.startswith(PROBE_PREFIX)
+        ]:
+            registry.remove(old)
+            logger.warning(
+                "live_session_replaced",
+                extra={"session_id": old.session_id, "by": session_id, **old._profile_extra()},
+            )
+            _stop_in_background(old)
     if registry.count(key) >= settings.live_max_sessions:
         await _reject(
             ws, "rate_limited", f"Too many live sessions (max {settings.live_max_sessions})", 1013
