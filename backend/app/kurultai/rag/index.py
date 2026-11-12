@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.db.models import KurultaiChunkRow, KurultaiMaterialRow
 from app.knowledge.chunks import chunk_document
@@ -109,12 +109,25 @@ def material_chunks(rows: list[KurultaiMaterialRow]) -> list[Chunk]:
     return out
 
 
-def live_materials(engine: Engine, now: datetime | None = None) -> list[KurultaiMaterialRow]:
-    """Опубликованные и не истёкшие материалы (как в промпте у агента Курултая)."""
+def live_materials(
+    engine: Engine, now: datetime | None = None, with_text: bool = True
+) -> list[KurultaiMaterialRow]:
+    """Опубликованные и не истёкшие материалы (как в промпте у агента Курултая).
+
+    Исходные файлы (file_bytes) не грузим никогда, полный текст (source_text) — только индексу (with_text):
+    12.11.2026 при 82 материалах запрос тянул 36 МБ файлов и после холодного старта базы упирался в
+    statement_timeout 2 с — сводка не собиралась, робот не мог ответить."""
     now = now or datetime.now(UTC)
+    skip = [defer(KurultaiMaterialRow.file_bytes)]
+    if not with_text:
+        skip.append(defer(KurultaiMaterialRow.source_text))
     with Session(engine) as s:
         rows = list(
-            s.scalars(select(KurultaiMaterialRow).where(KurultaiMaterialRow.status == "published"))
+            s.scalars(
+                select(KurultaiMaterialRow)
+                .where(KurultaiMaterialRow.status == "published")
+                .options(*skip)
+            )
         )
         for r in rows:
             s.expunge(r)

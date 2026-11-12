@@ -21,7 +21,7 @@ import httpx
 from openai import AsyncOpenAI
 from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.config import Settings
 from app.db.models import KurultaiMaterialEventRow, KurultaiMaterialRow
@@ -408,7 +408,13 @@ class MaterialsStore:
         with Session(self.engine) as s:
             rows = list(
                 s.scalars(
-                    select(KurultaiMaterialRow).where(KurultaiMaterialRow.status == "published")
+                    select(KurultaiMaterialRow)
+                    .where(KurultaiMaterialRow.status == "published")
+                    # для промпта нужны справки, а не исходные файлы и полные тексты (десятки МБ)
+                    .options(
+                        defer(KurultaiMaterialRow.file_bytes),
+                        defer(KurultaiMaterialRow.source_text),
+                    )
                 ).all()
             )
             for r in rows:

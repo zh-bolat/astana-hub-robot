@@ -88,7 +88,7 @@ class KurultaiKnowledge:
 
     def _build_summary(self) -> str:
         data = getattr(self.quryltai, "data", None)
-        return build_summary(data, live_materials(self.engine), datetime.now(UTC))
+        return build_summary(data, live_materials(self.engine, with_text=False), datetime.now(UTC))
 
     async def _refresh_summary(self) -> None:
         if self._refreshing:

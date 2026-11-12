@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import KurultaiChunkRow, KurultaiMaterialRow
-from app.kurultai.rag.index import KurultaiIndexer, material_chunks, snapshot_chunks
+from app.kurultai.rag.index import KurultaiIndexer, live_materials, material_chunks, snapshot_chunks
 from app.kurultai.rag.knowledge import KurultaiKnowledge
 from app.kurultai.rag.search import format_hits
 from app.kurultai.rag.summary import build_summary
@@ -160,3 +160,27 @@ def test_summary_keeps_todays_briefs_when_there_are_many_materials(db):
     )  # новая версия выше старой
     assert "и ещё" in text and "через search_kurultai" in text
     assert len(text) <= 12000 + 200
+
+
+def test_live_materials_never_loads_file_blobs(db):
+    """Сводке и индексу не нужны исходные файлы: колонка file_bytes не должна попадать в запрос (36 МБ на 82
+    материала → statement_timeout после холодного старта базы, 12.11.2026)."""
+    from sqlalchemy import event, inspect
+
+    _material(db, file_bytes=b"x" * 1000)
+    seen: list[str] = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    event.listen(db, "before_cursor_execute", capture)
+    try:
+        for_summary = live_materials(db, with_text=False)
+        for_index = live_materials(db)
+    finally:
+        event.remove(db, "before_cursor_execute", capture)
+    selects = [q for q in seen if "FROM kurultai_materials" in q]
+    assert len(selects) == 2 and all("file_bytes" not in q for q in selects)
+    assert "source_text" not in selects[0] and "source_text" in selects[1]
+    assert "source_text" in inspect(for_summary[0]).unloaded
+    assert for_index[0].source_text and for_summary[0].brief
